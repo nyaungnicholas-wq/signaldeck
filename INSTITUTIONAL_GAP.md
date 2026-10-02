@@ -115,9 +115,9 @@ Generated from `data/accuracy_registry.json` (grade of 2026-10-01T14:05:18) by `
 
 | Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
 |---|---|---|---|---|---|---|---|
-| directional-ensemble (1d) | all | 1,052 | 50.5% | 59.3% | -8.8pp | 5 | withheld |
-| prequential-majority (1d) | all | 1,052 | 64.6% | 59.3% | +5.3pp | 5 | withheld |
-| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 95 | 46.3% | 62.6% | -16.3pp | 3 | withheld |
+| directional-ensemble (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| prequential-majority (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 95 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 3 | withheld (SD-30) |
 | filingsdrift21 | all | 195 | withheld — no null | — | — | 24 | withheld |
 | liquidity21 | all | 11,874 | 69.7% | 70.6% | -0.9pp | 27 | withheld |
 | liquidity21#persist | all | 11,586 | withheld — no null | — | — | 26 | withheld |
@@ -130,13 +130,12 @@ Generated from `data/accuracy_registry.json` (grade of 2026-10-01T14:05:18) by `
 | vol21 | all | 11,966 | 49.2% | 47.5% | +1.7pp | 27 | withheld |
 | vol21#persist | all | 11,675 | withheld — no null | — | — | 26 | withheld |
 
+**Directional 1d/1w figures withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision.** These rows are scored against a label that is mostly realised when the call is issued, so their accuracy, null, skill, interval and verdict are not published; n and distinct days describe the sample only.
+
 Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
 
 Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
 
-- `directional-ensemble (1d)` — INSUFFICIENT DAYS (3/10 credible days of 5, 2 degenerate) — no interval, so no verdict
-- `prequential-majority (1d)` — INSUFFICIENT DAYS (3/10 credible days of 5, 2 degenerate) — no interval, so no verdict
-- `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (3/10 credible days of 3) — no interval, so no verdict
 - `filingsdrift21` — NO BASELINE — naive-persistence null not frozen for these calls
 - `liquidity21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `liquidity21#persist` — BENCHMARK — the frozen naive-persistence null itself

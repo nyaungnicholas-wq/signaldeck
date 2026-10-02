@@ -19,6 +19,7 @@ import (
 // invisible.
 
 func TestFleetEdgeSkillIgnoresRowsBeforeGradingEpoch(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	epochDay := store.GradingEpoch / 86400

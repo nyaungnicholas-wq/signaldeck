@@ -71,6 +71,7 @@ func seedClusteredRecord(t *testing.T, st *store.Store, days, symsPerDay int) {
 // must publish the interval for 15 bets, report the MEASURED design effect and
 // the effective N beside the raw one, and never let the raw count set the width.
 func TestTrackRecord_ClusterCorrectedInterval(t *testing.T) {
+	sd30Off(t) // the ungated math is what the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	st, err := store.Open(filepath.Join(t.TempDir(), "cluster.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +168,7 @@ func TestTrackRecord_ClusterCorrectedInterval(t *testing.T) {
 // number beats a wrong number, and the wrong number here is the one that made
 // "no demonstrated edge" look ten times better established than it is.
 func TestTrackRecord_ClusterRefusesRatherThanNarrows(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	st, err := store.Open(filepath.Join(t.TempDir(), "refuse.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -22,6 +22,8 @@ Run: python3 -m unittest discover -s tools -p 'test_*.py'
 """
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -218,6 +220,11 @@ class TestGenerator(unittest.TestCase):
              "distinct_days": 1, "null_prequential": None, "skill": None,
              "verdict": "NO BASELINE — naive-persistence null not frozen",
              "retire": False})
+        fixture["rows"].append(
+            {"predictor": "vol21", "family": "structure", "band": "all",
+             "live_n": 300, "live_acc": 0.492, "ci": None,
+             "distinct_days": 3, "null_prequential": 0.475, "skill": 0.017,
+             "retire": False})
         with TmpRepo() as t:
             with open(t.registry, "w", encoding="utf-8") as f:
                 json.dump(fixture, f)
@@ -227,8 +234,8 @@ class TestGenerator(unittest.TestCase):
                     self.assertIn("withheld — no null", line)
                     self.assertNotIn("78.5%", line,
                                      "accuracy published with no baseline: %r" % line)
-                if line.startswith("| directional-ensemble (1d) "):
-                    self.assertIn("46.3%", line,
+                if line.startswith("| vol21 "):
+                    self.assertIn("49.2%", line,
                                   "a row WITH a null must keep its accuracy: %r" % line)
 
     def test_partial_is_delimited_by_include_markers(self):
@@ -263,7 +270,8 @@ class TestInject(unittest.TestCase):
             r = t.gen("--inject", doc)
             self.assertEqual(r.returncode, 0, r.stderr)
             got = t.read(doc)
-            self.assertIn("46.3%", got)
+            # 73.1% is trend21's backtested claim: present whatever SD-30 withholds.
+            self.assertIn("73.1%", got)
             self.assertNotIn("old junk", got)
             self.assertIn("intro", got)
             self.assertIn("tail", got)
@@ -304,7 +312,7 @@ class TestCheckIncludesRunsWithoutARegistry(unittest.TestCase):
             with open(doc, encoding="utf-8") as f:
                 text = f.read()
             with open(doc, "w", encoding="utf-8") as f:
-                f.write(text.replace("46.3%", "48.1%"))
+                f.write(text.replace("73.1%", "48.1%"))
             os.remove(t.registry)
             r = run("--out", t.partial, "--check-includes", doc)
             self.assertEqual(r.returncode, 1,
@@ -356,6 +364,115 @@ class TestSupersededScan(unittest.TestCase):
         with TmpRepo() as t:
             doc = t.doc("CLAIMS.md", "46.7% over 8,191 independent symbol-days\n")
             self.assertEqual(t.gen("--scan", doc).returncode, 1)
+
+
+
+# SD-30: the switch is Go's publication.SD30Withheld, read from the file next to
+# the script. These build a throwaway tree with their own copy of that file, so
+# they hold whatever the committed default is and never touch the repo.
+SD30_GO = os.path.join(REPO, "daemon", "internal", "publication", "withhold.go")
+
+
+def sd30_tree(tmp, flag):
+    """Write <tmp>/daemon/internal/publication/withhold.go from the real file with
+    the flag set (None: no file at all). Returns the real reason sentence."""
+    with open(SD30_GO, encoding="utf-8") as f:
+        go = f.read()
+    reason = re.search(r'^const SD30Reason = "([^"]+)"', go, re.M).group(1)
+    if flag is not None:
+        pub = os.path.join(tmp, "daemon", "internal", "publication")
+        os.makedirs(pub)
+        with open(os.path.join(pub, "withhold.go"), "w", encoding="utf-8") as f:
+            f.write(re.sub(r"^var SD30Withheld = (true|false)",
+                           "var SD30Withheld = %s" % str(flag).lower(), go, flags=re.M))
+    return reason
+
+
+class TestSD30Withholding(unittest.TestCase):
+    def _render(self, flag):
+        with tempfile.TemporaryDirectory() as tmp:
+            for d in ("tools", "data", "partials"):
+                os.makedirs(os.path.join(tmp, d))
+            script = os.path.join(tmp, "tools", "live_accuracy.py")
+            shutil.copy(SCRIPT, script)
+            self.reason = sd30_tree(tmp, flag)
+            registry = os.path.join(tmp, "data", "accuracy_registry.json")
+            with open(registry, "w", encoding="utf-8") as f:
+                json.dump(FIXTURE_OK, f)
+            out = os.path.join(tmp, "partials", "live_accuracy.md")
+            p = subprocess.run([sys.executable, script, "--registry", registry, "--out", out, "--write"],
+                               capture_output=True, text=True, encoding="utf-8")
+            text = ""
+            if os.path.exists(out):
+                with open(out, encoding="utf-8") as f:
+                    text = f.read()
+            return p, text
+
+    def test_flag_on_withholds_directional_figures(self):
+        p, out = self._render(True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for banned in ("46.3%", "52.9%", "-6.6pp", "55.5%", "51.1%", "INSUFFICIENT DAYS (6/10"):
+            self.assertNotIn(banned, out, "withheld figure %r published: %s" % (banned, out))
+        self.assertIn(self.reason, out)
+        for kept in ("2,257", "1,644", "73.1%"):  # sample sizes and the backtested claim stay
+            self.assertIn(kept, out)
+        rows = [ln for ln in out.splitlines() if ln.startswith("| directional-ensemble (1d) ")]
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("withheld (SD-30)", rows[0])
+
+    def test_flag_off_restores_figures(self):
+        p, out = self._render(False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for back in ("46.3%", "-6.6pp", "INSUFFICIENT DAYS (6/10"):
+            self.assertIn(back, out)
+        self.assertNotIn("SD-30", out)
+
+    def test_unreadable_flag_fails_closed(self):
+        p, _ = self._render(None)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("SD-30", p.stderr)
+
+
+class TestSD30ReadmeRenderer(unittest.TestCase):
+    """README.md's block has its own renderer, inline in ops/accuracy-registry.sh."""
+
+    def _render(self, flag):
+        with open(os.path.join(REPO, "ops", "accuracy-registry.sh"), encoding="utf-8") as f:
+            sh = f.read().replace("\r\n", "\n")
+        start = sh.index('# Regenerate the "Live accuracy (auto-updated)" section of README.md')
+        start = sh.index("<<'PY'", start)
+        body = sh[sh.index("\n", start) + 1:sh.index("\nPY\n", start)]
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "tools"))
+            os.makedirs(os.path.join(tmp, "data"))
+            shutil.copy(SCRIPT, os.path.join(tmp, "tools", "live_accuracy.py"))
+            self.reason = sd30_tree(tmp, flag)
+            with open(os.path.join(tmp, "data", "accuracy_registry.json"), "w", encoding="utf-8") as f:
+                json.dump(FIXTURE_OK, f)
+            readme = os.path.join(tmp, "README.md")
+            with open(readme, "w", encoding="utf-8") as f:
+                f.write("# x\n\n<!-- LIVE-ACCURACY:BEGIN -->\nold\n<!-- LIVE-ACCURACY:END -->\n")
+            p = subprocess.run([sys.executable, "-", tmp], input=body, capture_output=True, text=True,
+                               encoding="utf-8", env=dict(os.environ, PYTHONUTF8="1"))
+            with open(readme, encoding="utf-8") as f:
+                return p, f.read()
+
+    def test_flag_on_withholds_the_directional_row(self):
+        p, md = self._render(True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = [ln for ln in md.splitlines() if ln.startswith("| directional-ensemble (1d) ")]
+        self.assertEqual(len(row), 1, md)
+        self.assertIn(self.reason, row[0])
+        for banned in ("46.3%", "52.9%", "-6.6pp"):
+            self.assertNotIn(banned, row[0])
+
+    def test_flag_off_restores_the_directional_row(self):
+        p, md = self._render(False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = [ln for ln in md.splitlines() if ln.startswith("| directional-ensemble (1d) ")]
+        self.assertEqual(len(row), 1, md)
+        self.assertIn("46.3%", row[0])
+        self.assertNotIn("SD-30", md)
 
 
 if __name__ == "__main__":

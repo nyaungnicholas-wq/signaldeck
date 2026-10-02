@@ -6,6 +6,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 // predictions returns the latest calibrated ensemble prediction per horizon
@@ -144,6 +145,17 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		out["baseRate"] = nil
 		out["brierRef"] = nil
 		out["brierNote"] = "brier skill not gradable: no resolved history, or every outcome resolved the same way (the base-rate reference has zero variance)"
+	}
+	// SD-30: every number above is scored against a label mostly realised at
+	// issue. Sample sizes stay; the win rate, Brier, skill and bins do not.
+	if why, ok := publication.DirectionalWithheld(string(h)); ok {
+		out["liveRecord"] = map[string]any{"independentN": liveN, "winRate": nil}
+		out["trackLabel"] = why
+		out["bins"] = []any{}
+		out["brier"], out["reliability"] = nil, nil
+		out["brierSkill"], out["baseRate"], out["brierRef"] = nil, nil, nil
+		out["brierNote"] = why
+		out["withheld"] = why
 	}
 	writeJSON(w, out)
 }

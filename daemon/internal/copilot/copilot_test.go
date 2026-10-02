@@ -474,6 +474,7 @@ func TestMemberCatalogIsImpersonal(t *testing.T) {
 // the window is withheld (datalicense.go: a narrowable aggregate of realized
 // outcomes is derived only over >= 10 rows).
 func TestTrackRecordFloor(t *testing.T) {
+	sd30Off(t) // the member query as the SD-30 flag restores it; sd30_test.go covers the flag on
 	st, db := openStore(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "Aaa Inc")
@@ -574,6 +575,7 @@ func TestTruncatedResultsAreMarked(t *testing.T) {
 }
 
 func TestTrackRecordDaysIsAMenu(t *testing.T) {
+	sd30Off(t) // the member query as the SD-30 flag restores it; sd30_test.go covers the flag on
 	for _, bad := range []any{90.0, "60", "7", "", "90 OR 1=1"} {
 		if _, _, err := Validate(TierMember, "directional_track_record", map[string]any{"days": bad}); err == nil {
 			t.Errorf("days %v accepted", bad)

@@ -106,6 +106,38 @@ SUPERSEDED_LITERALS = [
 # a live claim, so its numbers are history and the scan leaves it alone.
 HISTORICAL_MARKER = "SUPERSEDED-SNAPSHOT"
 
+# SD-30 WITHHOLDING. The 1d/1w directional label is mostly realised when the call
+# is issued, so those rows' accuracy, null, skill, interval and verdict are not
+# published until a corrected label is preregistered. The ONE switch is Go's
+# publication.SD30Withheld; it is read from that file rather than restated here,
+# so /api/accuracy and these documents cannot disagree about it. Flip it there.
+SD30_GO = os.path.join(REPO, "daemon", "internal", "publication", "withhold.go")
+SD30_CELL = "withheld (SD-30)"
+_SD30_HORIZON = re.compile(r"\((1d|1w)\b")
+
+
+def sd30_flag():
+    """(withheld, reason) from the Go declarations. Unreadable is exit 2, never 'publish'."""
+    try:
+        with open(SD30_GO, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        die("SD-30 flag unreadable: %s: %s" % (SD30_GO, e))
+    flag = re.search(r"^var SD30Withheld = (true|false)\s*$", text, re.M)
+    reason = re.search(r'^const SD30Reason = "([^"\\]+)"\s*$', text, re.M)
+    if not flag or not reason:
+        die("SD-30 flag or reason not found in %s" % SD30_GO)
+    return flag.group(1) == "true", reason.group(1)
+
+
+def sd30_reason(row, flag):
+    """The withholding reason for a directional 1d/1w row, else None."""
+    withheld, reason = flag
+    if withheld and row.get("family") in ("direction", "benchmark") \
+            and _SD30_HORIZON.search(row.get("predictor") or ""):
+        return reason
+    return None
+
 
 def die(msg):
     print(msg, file=sys.stderr)
@@ -198,6 +230,8 @@ def render(snapshot, banner, registry_path):
             "", END]) + "\n"
 
     live = [r for r in snapshot.get("rows", []) if is_live(r)]
+    sd30 = sd30_flag()
+    withheld = {r.get("predictor"): sd30_reason(r, sd30) for r in live if sd30_reason(r, sd30)}
     out.append("### Live record")
     out.append("")
     out.append("| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |")
@@ -214,17 +248,21 @@ def render(snapshot, banner, registry_path):
         acc = r.get("live_acc")
         acc_cell = "withheld — no null" if (acc is not None and null is None) \
             else pct(acc)
+        cells = [acc_cell, pct(null), pp(r.get("skill")), r.get("distinct_days", 0), interval(r)]
+        if r.get("predictor") in withheld:
+            cells = [SD30_CELL, SD30_CELL, SD30_CELL, r.get("distinct_days", 0), SD30_CELL]
         out.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
             cell(r.get("predictor", "?")),
             cell(r.get("band", "all")),
             "{:,}".format(r.get("live_n", 0)),
-            acc_cell,
-            pct(null),
-            pp(r.get("skill")),
-            r.get("distinct_days", 0),
-            interval(r),
-        ))
+            *cells))
     out.append("")
+    if withheld:
+        out.append("**Directional 1d/1w figures %s.** These rows are scored against a label "
+                   "that is mostly realised when the call is issued, so their accuracy, null, "
+                   "skill, interval and verdict are not published; n and distinct days describe "
+                   "the sample only." % sd30[1])
+        out.append("")
 
     if live and all(r.get("ci") is None for r in live):
         out.append("Intervals are withheld this cycle, so **no pass/fail verdict is "
@@ -233,7 +271,10 @@ def render(snapshot, banner, registry_path):
         out.append("")
 
     byname = {r.get("predictor"): r for r in live}
-    notices = [(r.get("predictor", "?"), r["verdict"]) for r in live if r.get("verdict")]
+    # An SD-30 row's verdict is a verdict over the withheld label; the paragraph
+    # above already says why it is absent.
+    notices = [(r.get("predictor", "?"), r["verdict"]) for r in live
+               if r.get("verdict") and r.get("predictor") not in withheld]
     if notices:
         out.append("Sample-size notices carried by the registry itself (statements about "
                    "the sample, not verdicts about skill):")

@@ -194,6 +194,9 @@ type Evidence struct {
 	// is only meaningful if it was measured; pass CalibrationKnown accordingly.
 	CalibrationErr   float64
 	CalibrationKnown bool
+	// WithheldReason, when set, withholds confidence and uncertainty whatever
+	// the record says (the caller's publication decision, e.g. SD-30).
+	WithheldReason string
 }
 
 // Lift is Accuracy - BaseRate: the honest edge. At or below zero the model did
@@ -279,6 +282,8 @@ func Assess(prob float64, ev Evidence, expected ConditionalReturn, ex Excursion)
 	// for is the same defect wearing a different number.
 	measured := ev.EffectiveN > 0 && ev.Accuracy >= 0 && ev.Accuracy <= 1 && !math.IsNaN(ev.Accuracy)
 	switch {
+	case ev.WithheldReason != "":
+		a.Withheld = append(a.Withheld, "confidence: "+ev.WithheldReason, "uncertainty: "+ev.WithheldReason)
 	case !measured:
 		reason := "no day-clustered effective sample size was measured for this record, " +
 			"and a judgement over raw rows would assert independence the observations do not have"

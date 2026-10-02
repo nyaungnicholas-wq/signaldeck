@@ -302,3 +302,20 @@ func TestUncertaintyReadsEffectiveNOrWithholds(t *testing.T) {
 		}
 	}
 }
+
+// A caller's withholding (SD-30) outranks a record that would otherwise grade:
+// no confidence, no uncertainty, no edge sentence, and the reason named.
+func TestAssessHonoursWithheldReason(t *testing.T) {
+	ev := Evidence{N: 500, EffectiveN: 500, Accuracy: 0.65, BaseRate: 0.55, CalibrationErr: 0.01, CalibrationKnown: true}
+	ev.WithheldReason = "withheld: label partly realised at issue (SD-30)"
+	a := Assess(0.9, ev, ConditionalReturn{}, Excursion{})
+	if a.Confidence != nil || a.Uncertainty != nil {
+		t.Fatalf("withheld evidence still scored: confidence %v uncertainty %v", a.Confidence, a.Uncertainty)
+	}
+	if w := strings.Join(a.Withheld, " | "); !strings.Contains(w, "confidence: "+ev.WithheldReason) || !strings.Contains(w, "uncertainty: "+ev.WithheldReason) {
+		t.Fatalf("both fields must name the reason: %s", w)
+	}
+	if r := strings.Join(a.Reasons, " | "); strings.Contains(r, "edge over the base rate") {
+		t.Fatalf("an edge sentence leaked past the withholding: %s", r)
+	}
+}

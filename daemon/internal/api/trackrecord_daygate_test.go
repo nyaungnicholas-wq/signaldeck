@@ -17,6 +17,7 @@ import (
 // stay GATED until >= trackMinDistinctDays distinct days exist, no matter how
 // many symbols resolved (regression for the 995-obs-over-3-days ungating).
 func TestTrackRecord_DayClusterGate(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "daygate.db"))
 	if err != nil {

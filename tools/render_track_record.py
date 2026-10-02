@@ -11,7 +11,11 @@ historical grade without reproducing any numbers.
 """
 
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from live_accuracy import SD30_CELL, sd30_flag, sd30_reason  # noqa: E402
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -97,6 +101,7 @@ def main():
     out.append("| Predictor | Family | Band | n | Accuracy | 95% CI | Prequential null | Verdict | Note |")
     out.append("|---|---|---|--:|--:|---|--:|---|---|")
 
+    sd30 = sd30_flag()
     for row in rows:
         predictor = esc(row.get("predictor"))
         family = esc(row.get("family") or "—")
@@ -107,6 +112,10 @@ def main():
         null_prequential = pct(row.get("null_prequential"))
         verdict = esc(row.get("verdict"))
         note = esc(row.get("note") or "")
+        why = sd30_reason(row, sd30)
+        if why:  # the same switch /api/accuracy reads (tools/live_accuracy.py)
+            live_acc = ci = null_prequential = SD30_CELL
+            verdict = esc(why)
         out.append(f"| {predictor} | {family} | {band} | {live_n} | {live_acc} | {ci} | {null_prequential} | {verdict} | {note} |")
 
     _write_verification_footer(out)

@@ -91,3 +91,19 @@ export function unapprovedLabels(
   }
   return out;
 }
+
+/**
+ * Horizons whose figures the daemon withholds (SD-30: a label mostly realised
+ * at issue). The page renders figures from the registry FILE, so anything
+ * keyed by horizon there — the reliability bins — must be dropped for these.
+ */
+export function withheldHorizons(
+  publishedRows: ReadonlyArray<{ horizon?: string; figures_withheld?: string }>,
+  envelope: ReadonlyArray<string> = [],
+): Set<string> {
+  // The envelope list comes from the switch itself, so a horizon with bins in
+  // the file but no row in this grade is still dropped.
+  const out = new Set(envelope);
+  for (const r of publishedRows) if (r.figures_withheld && r.horizon) out.add(r.horizon);
+  return out;
+}

@@ -125,6 +125,7 @@ func seedCompositeClusteredRecordFrom(t *testing.T, st *store.Store, startDay in
 // design effect on the same rows is ~33x — effective N ~36, floor ~44% — which
 // does not clear the baseline. The honest verdict is NOT proven.
 func TestFleetEdgeSkill_RawWilsonFloorCannotUnlockProvenEdge(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 12, 100)
@@ -151,6 +152,7 @@ func TestFleetEdgeSkill_RawWilsonFloorCannotUnlockProvenEdge(t *testing.T) {
 // rule: raw N alone is never a sample size, so the grade must carry the measured
 // design effect, the effective N it implies, and the distinct-day count.
 func TestFleetEdgeGrade_PublishesMeasuredClustering(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 12, 100)
@@ -182,6 +184,7 @@ func TestFleetEdgeGrade_PublishesMeasuredClustering(t *testing.T) {
 // say which floor was missed rather than defaulting to "no measured edge", which
 // is a claim this sample cannot support either.
 func TestFleetEdgeSkill_WithheldBelowDayFloor(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 4, 100) // 400 obs, 4 days — clears N, misses days

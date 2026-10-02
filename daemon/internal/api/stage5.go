@@ -15,6 +15,7 @@ import (
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
 
@@ -73,6 +74,11 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 		}
 		trackLabel = fmt.Sprintf("LIVE forward record: win rate %.1f%% over %d independent symbol-days — %s", liveWin*100, liveN, verdict)
 	}
+	// SD-30: the win rate is scored on a label mostly realised at issue.
+	var winRate any = liveWin
+	if why, ok := publication.DirectionalWithheld(string(h)); ok {
+		winRate, trackLabel = nil, why
+	}
 
 	// Model-health gate (2026-07-24). A model the live record has condemned
 	// must stop presenting itself as a forecast — the failure this closes is
@@ -102,7 +108,7 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 		"live":         liveN >= minIndependentN,
 		"modelEmitting": emitting,
 		"modelVerdict":  hVerdict,
-		"liveRecord":   map[string]any{"independentN": liveN, "winRate": liveWin},
+		"liveRecord":   map[string]any{"independentN": liveN, "winRate": winRate},
 		"trackLabel":   trackLabel,
 		// Stage 2 (verdict cards): each row's tier/nSamples measures against
 		// this personal-model graduation gate ("still learning 12/40 …").

@@ -512,7 +512,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		// default, so the refusal is served. ask_test.go drives POST against this
 		// store with the flag on and an echoing fake model.
 		"/api/ask": get("/api/ask", `"available":false`),
-		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"N":%d`, n)),
+		// "n" (resolved pairs), not a bin's "N": SD-30 withholds the bins.
+		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"n":%d`, n)),
 		"/api/canary":             get("/api/canary", "SNTL_CANARY_MODEL"),
 		"/api/companies":          get("/api/companies?q=SNTL", "Sentinel Corp"),
 		"/api/company/profile":    get("/api/company/profile?symbol=SNTL", "Sentinel Capital"),
