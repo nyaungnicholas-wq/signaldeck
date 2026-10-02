@@ -390,8 +390,11 @@ func (d Deps) authMe(w http.ResponseWriter, r *http.Request) {
 	}
 	// member is the daemon's own verdict (isMember), not something the web could
 	// derive from isAdmin: on a private deployment every signed-in account is
-	// the operator, admin or not.
-	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin, "member": d.isMember(r)})
+	// the operator, admin or not. memberFinra tells the member pages whether the
+	// FINRA short panels are open to members (memberFINRARoutes), so they never
+	// fetch a route the gate refuses.
+	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin, "member": d.isMember(r),
+		"memberFinra": d.Cfg.MemberFINRA})
 }
 
 func (d Deps) registerAuth(mux *http.ServeMux) {

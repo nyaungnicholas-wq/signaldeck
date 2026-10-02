@@ -173,6 +173,11 @@ type Config struct {
 	// data" (POST /api/ask) to member accounts. Off, members get 403 and only
 	// the operator can ask; every ask spends LLM budget.
 	MemberCopilot bool
+	// MemberFINRA (SIGNALDECK_MEMBER_FINRA, default false) opens the FINRA
+	// short-data routes (/api/shorts, /api/short-interest) to member accounts.
+	// Off, they are operator-only: FINRA's terms may not permit passing its
+	// data on to members (owner's call, 2026-10-02).
+	MemberFINRA bool
 
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
@@ -306,6 +311,7 @@ func Load() Config {
 		RateRPS:        atoiOr("SIGNALDECK_RATE_RPS", os.Getenv("SIGNALDECK_RATE_RPS"), 0),
 		RateBurst:      atoiOr("SIGNALDECK_RATE_BURST", os.Getenv("SIGNALDECK_RATE_BURST"), 0),
 		MemberCopilot: boolEnv("SIGNALDECK_MEMBER_COPILOT", false), // ask the data, for members
+		MemberFINRA:   boolEnv("SIGNALDECK_MEMBER_FINRA", false),   // FINRA short data, for members
 		// The MCP server never inherits an "open on loopback" default the way
 		// PublicReads does. Exposing an interface built for someone else's AI
 		// agent is a decision with compliance implications, so it is made once,

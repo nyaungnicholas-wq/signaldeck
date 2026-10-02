@@ -67,9 +67,9 @@ var memberRoutes = map[string]bool{
 	"/api/regimes": true, "/api/vol-regime": true, "/api/market-regimes": true,
 	"/api/symbol-agent": true,
 	// Public-domain intel: SEC EDGAR filings, Form 4, 13F and XBRL fundamentals,
-	// FINRA short data, STOCK Act disclosures. FINRA's API terms allow passing
-	// its data to end users only while they are not charged for it: a paid
-	// member tier must drop /api/shorts and /api/short-interest first.
+	// FINRA short data, STOCK Act disclosures. The two FINRA routes are listed
+	// so every member-surface test scans them, but the gate keeps them
+	// operator-only unless SIGNALDECK_MEMBER_FINRA=1 (memberFINRARoutes).
 	"/api/company/profile": true, "/api/filings": true, "/api/insiders": true,
 	"/api/institutions": true, "/api/dilution": true, "/api/fundamentals": true,
 	"/api/short-interest": true, "/api/shorts": true, "/api/congress": true,
@@ -79,7 +79,7 @@ var memberRoutes = map[string]bool{
 	"/api/alert-prefs/telegram-unlink": true,
 	// The member's own call journal (plan step 8): their calls and their
 	// grade, never a price or return, never an input to SignalDeck's forecasts.
-	"/api/journal": true, "/api/journal/withdraw": true,
+	"/api/journal": true, "/api/journal/withdraw": true, "/api/journal/symbols": true,
 	// Ask the data (plan step 10): gated INSIDE the handler (403 until
 	// SIGNALDECK_MEMBER_COPILOT=1), member catalog entries only, so this one
 	// does spend LLM budget, capped per member per day (ask.go).
@@ -238,6 +238,17 @@ func acctKey(key string) string {
 func memberAllowed(path string) bool {
 	return alwaysOpen(path) || publicRoutes[path] || memberRoutes[path] ||
 		strings.HasPrefix(path, "/api/evidence/")
+}
+
+// memberFINRARoutes serve FINRA short data, whose terms may not permit passing
+// it on to members (owner's call, 2026-10-02: close to members). They stay in
+// memberRoutes, so the member-surface tests scan them, and the member gate
+// (security.go 6b) refuses them unless SIGNALDECK_MEMBER_FINRA=1.
+var memberFINRARoutes = map[string]bool{"/api/shorts": true, "/api/short-interest": true}
+
+// memberMay is the member gate's answer for path on this deployment.
+func (d Deps) memberMay(path string) bool {
+	return memberAllowed(path) && (d.Cfg.MemberFINRA || !memberFINRARoutes[path])
 }
 
 // ── public URL (email links + dynamic origin) ──────────────────────────────

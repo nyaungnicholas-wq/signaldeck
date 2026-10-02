@@ -54,7 +54,7 @@ export const LICENCE_REFUSAL_TEXT =
   "redistributed, so this deployment does not serve them. Every derived signal " +
   "here — regimes, forecasts, risk — is computed from them and is unaffected.";
 
-import type { CallDirection, Journal } from "@/lib/journal";
+import type { CallDirection, Journal, JournalPick } from "@/lib/journal";
 import type { AskAnswer, AskStatus } from "@/lib/ask";
 
 export type Market = "crypto" | "stocks";
@@ -629,6 +629,10 @@ export const api = {
   journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
     post<Journal>("/api/journal", c),
   journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
+  // The journal's picker: tracked US stocks and ETFs with daily bars, exactly
+  // what POST /api/journal accepts (ETFs are not in the SEC directory).
+  journalSymbols: (q: string) =>
+    get<{ symbols: JournalPick[] }>(`/api/journal/symbols?q=${encodeURIComponent(q)}`),
   // Ask the data (plan step 10): cited answers from SignalDeck's own tables.
   askStatus: () => get<AskStatus>("/api/ask"),
   ask: (question: string) => post<AskAnswer>("/api/ask", { question }),
@@ -728,6 +732,9 @@ export interface Me {
    *  operator on a published deployment. Member pages key on THIS, never on
    *  !isAdmin — on a private deployment every account is the operator. */
   member?: boolean;
+  /** Whether the FINRA short routes are open to members (SIGNALDECK_MEMBER_FINRA);
+   *  off by default, so member pages hide the short panels instead of fetching a 403. */
+  memberFinra?: boolean;
 }
 
 /** A MEMBER's watchlist row: identity and data freshness only. The daemon

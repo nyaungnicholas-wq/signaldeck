@@ -515,6 +515,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/journal/withdraw": {method: "POST", url: "/api/journal/withdraw", body: map[string]int64{"id": fx.journalCall},
 			marker: "withdrawn only before", status: http.StatusConflict,
 			why: "the seeded call is resolved, so it is final; journal_test.go drives the 200"},
+		// The journal's picker: identity only (ticker and name), never a close.
+		"/api/journal/symbols": get("/api/journal/symbols?q=SNTL", `"symbol":"SNTL"`),
 		"/api/institutions":   get("/api/institutions?symbol=SNTL", "Sentinel Capital"),
 		"/api/ledger":         get("/api/ledger?symbol=SNTL&market=stocks", `"count":1`),
 		"/api/ledger/anchors": get("/api/ledger/anchors", `"mode":"stored"`), // per request, uncached
@@ -658,7 +660,14 @@ func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 
 func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config), variant int) {
 	ctx := context.Background()
-	srv, st, mb, d := newProductionServer(t, mutate, writeRegistry(t, thinWindowRegistry))
+	// The widest member surface: the FINRA routes open too (memberFINRARoutes;
+	// finra_member_test.go drives their default refusal).
+	srv, st, mb, d := newProductionServer(t, func(c *config.Config) {
+		c.MemberFINRA = true
+		if mutate != nil {
+			mutate(c)
+		}
+	}, writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
 	// The dashboard's global sections are ONE process-wide entry, not keyed by
 	// store: a warm pass from an earlier test (or an earlier -count iteration)

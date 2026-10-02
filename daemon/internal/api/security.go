@@ -131,7 +131,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// 6b. MEMBER TIER. On a published deployment a non-admin account reaches
 		// the public surface plus memberRoutes and nothing else. Without this,
 		// open sign-up hands any stranger the operator's console (accounts.go).
-		if uid != 0 && d.published() && !memberAllowed(r.URL.Path) && !d.isAdminUID(r.Context(), uid) {
+		if uid != 0 && d.published() && !d.memberMay(r.URL.Path) && !d.isAdminUID(r.Context(), uid) {
 			httpErr(w, http.StatusForbidden, "not available to member accounts")
 			return
 		}

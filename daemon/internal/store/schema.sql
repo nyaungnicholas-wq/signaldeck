@@ -305,6 +305,19 @@ CREATE TABLE IF NOT EXISTS member_alert_prefs (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_member_alert_prefs_code
   ON member_alert_prefs (telegram_link_code) WHERE telegram_link_code IS NOT NULL;
 
+-- Member digest tries (2026-10-02): per member, ET day and channel, the tries
+-- spent and whether the read was delivered, so a daemon restart neither
+-- re-sends a delivered channel nor grants fresh tries past the cap
+-- (memberdigest.maxTries). The worker prunes days before the current one.
+CREATE TABLE IF NOT EXISTS member_digest_tries (
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  day       TEXT NOT NULL,
+  channel   TEXT NOT NULL CHECK (channel IN ('email','telegram')),
+  tries     INTEGER NOT NULL DEFAULT 0,
+  delivered INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, channel)
+);
+
 -- Member call journal (2026-10-01, plan step 8): a member's OWN direction calls,
 -- graded close-to-close by member-call-resolver (internal/memberjournal). No
 -- price or return is stored: the grade is all a member is shown (licence,
