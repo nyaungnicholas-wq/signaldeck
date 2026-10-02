@@ -238,8 +238,8 @@ func TestCheckCitations(t *testing.T) {
 		"AAPL is in an uptrend with conviction 0.82 [q1:r1].",
 		"The hit rate is 0.61 [q1:r1, q2:r1]. It beat the baseline [q1:r2].",
 		"No row answers that [q1:r1].",
-		"AAPL is calm [q1:r1]. The rows do not answer the rest.",
-		"AAPL is calm [q1:r1]! I could not find MSFT.",
+		"AAPL is calm [q1:r1]. " + CantAnswer,
+		"AAPL is calm [q1:r1]!\n" + CantAnswer + "\n",
 	}
 	for _, s := range good {
 		if _, ok := CheckCitations(s, rows); !ok {
@@ -259,6 +259,12 @@ func TestCheckCitations(t *testing.T) {
 		"cannot-answer first":      "I could not find MSFT. AAPL is calm [q1:r1].",
 		"facts as a cannot-answer": "AAPL is calm [q1:r1]. The rows do not cover MSFT, but MSFT is in a downtrend.",
 		"long cannot-answer":       "AAPL is calm [q1:r1]. The rows do not say so but every other stock here is in an uptrend now.",
+		// H-5: under ten words, no digit or comma, opens like a refusal; the
+		// old pattern exempted it, and it is a forecast.
+		"claim after a refusal opening": "AAPL is calm [q1:r1]. The rows don't say more but AAPL will surely double.",
+		"paraphrased cannot-answer":     "AAPL is calm [q1:r1]. The rows do not answer the rest.",
+		"cannot-find variant":           "AAPL is calm [q1:r1]! I could not find MSFT.",
+		"prescribed sentence not last":  "AAPL is calm [q1:r1]. " + CantAnswer + " MSFT is in a downtrend.",
 	}
 	// An id glued into a word is not a citation (the web's \b...\b agrees).
 	if _, ok := CheckCitations("AAPL is calm xq1:r1.", rows); ok {
