@@ -20,5 +20,6 @@ a54a95553baa23debe36f0e584a0ae29ab281023a29fde886a42ecd5025e7300
 
 # Historical: signed the first two anchors on 2026-07-26 (ledger seq 238683 and
 # 243172), before the current key. Pinned from the live ledger_anchors table on
-# 2026-10-01; no external publication of those two digests was found locally.
+# 2026-10-01 and confirmed legitimate by Nicholas the same day (no external
+# publication of those two digests was found locally).
 2a5aca8d2d69ecea42eff75206e4a45c91d37f13c1b095e6a86645487436de3e
