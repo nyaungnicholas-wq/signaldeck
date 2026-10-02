@@ -1,6 +1,9 @@
 package modelhealth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The single most important test in this package: the real directional
 // ensemble, with its real measured numbers, must be RETIRED. If this ever goes
@@ -82,7 +85,7 @@ func TestDecayingModelIsFlagged(t *testing.T) {
 	})
 	var found bool
 	for _, r := range s.Reasons {
-		if r == "recent accuracy has decayed materially vs its own record" {
+		if r == "recent accuracy has decayed materially vs its own lifetime record" {
 			found = true
 		}
 	}
@@ -150,5 +153,35 @@ func TestNoRecentWindowScoresDriftNeutral(t *testing.T) {
 	if s.Components["drift"] != 0.5 {
 		t.Fatalf("drift with a too-thin recent window should be neutral, got %.3f",
 			s.Components["drift"])
+	}
+}
+
+// SD-31: both callers grade the LIFETIME ledger on purpose -- the lifetime
+// record retires, the post-epoch shadow readmits, and
+// TestModelHealthWorkerPersistsReadmission pins that. So every reason that
+// characterises the record must name which record it read; a bare "accuracy is
+// BELOW the naive baseline" reads as today's accuracy.
+func TestRecordReasonsSayLifetime(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   Inputs
+		want int
+	}{
+		{"below baseline + negative Brier", Inputs{Observations: 500, Accuracy: 0.48, BaselineAcc: 0.54,
+			BrierSkill: -0.1, FeatureDriftPct: Ptr(0)}, 2},
+		{"decay vs its record", Inputs{Observations: 2000, Accuracy: 0.62, BaselineAcc: 0.55,
+			RecentAcc: 0.52, RecentN: 400, BrierSkill: 0.05, FeatureDriftPct: Ptr(0)}, 1},
+		{"thin record", Inputs{Observations: 5, Accuracy: 0.6, BaselineAcc: 0.5, FeatureDriftPct: Ptr(0)}, 1},
+	} {
+		reasons := Grade(c.in).Reasons
+		got := 0
+		for _, r := range reasons {
+			if strings.Contains(r, "lifetime") {
+				got++
+			}
+		}
+		if got != c.want || len(reasons) != c.want {
+			t.Errorf("%s: %d of %d reasons say lifetime, want %d of %d: %q", c.name, got, len(reasons), c.want, c.want, reasons)
+		}
 	}
 }

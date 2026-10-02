@@ -327,25 +327,41 @@ func (s *Store) resolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 // probability, and prob here is the map's own previous output, so fitting on
 // it is both a coordinate error and a recursion (2026-07-26 review, C3). Use
 // ResolvedRawPredictionPairs to fit; use this to grade.
-func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
+//
+// ONE PAIR PER (SYMBOL, SETTLED TRADING DAY), over the grader's own population
+// (gradeableDedupSQL: the graded window, settlement quarantine, stale-feed
+// exclusion), newest first, so len(probs) is the same independent N that
+// LiveDirectionalRecord counts. It used to return every raw resolved row: the
+// runner re-scores a symbol many times a day and every one of those rows
+// resolves against the same forward move, so /api/calibration published
+// "n": 10,000 rows as its sample. days[i] is pair i's settled trading-day
+// index, so a caller can count distinct days. A negative limit reads them all.
+func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs, ups []float64, days []int64, err error) {
+	applicable, err := s.SettlementApplicable(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	rows, qerr := s.db.QueryContext(ctx, `
-		SELECT prob, up FROM prediction_outcomes
-		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
+		SELECT prob, up, `+settleDayFold("settle_ts", "ts")+`
+		FROM (`+gradeableDedupSQL(applicable)+`)
+		WHERE rn = 1 AND horizon = ? ORDER BY ts DESC LIMIT ?`,
 		string(h), limit)
 	if qerr != nil {
-		return nil, nil, qerr
+		return nil, nil, nil, qerr
 	}
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var p float64
 		var u int
-		if err := rows.Scan(&p, &u); err != nil {
-			return nil, nil, err
+		var d int64
+		if err := rows.Scan(&p, &u, &d); err != nil {
+			return nil, nil, nil, err
 		}
 		probs = append(probs, p)
 		ups = append(ups, float64(u))
+		days = append(days, d)
 	}
-	return probs, ups, rows.Err()
+	return probs, ups, days, rows.Err()
 }
 
 // ResolvedRawPredictionPairs returns (RAW blend prob, realized up, UTC day)

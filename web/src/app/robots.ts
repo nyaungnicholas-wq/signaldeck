@@ -15,6 +15,7 @@ import { siteUrl } from "@/lib/site";
 // src/proxy.ts refuses the same agents with a 403.
 
 export default function robots(): MetadataRoute.Robots {
+  const site = siteUrl();
   return {
     rules: [
       {
@@ -58,6 +59,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/"],
       },
     ],
-    sitemap: `${siteUrl()}/sitemap.xml`,
+    // No site URL, no Sitemap line: it must be absolute (see lib/site.ts).
+    ...(site ? { sitemap: `${site}/sitemap.xml` } : {}),
   };
 }

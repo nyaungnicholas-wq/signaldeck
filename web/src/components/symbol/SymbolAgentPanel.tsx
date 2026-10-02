@@ -80,9 +80,14 @@ function SkillBar({ label, hitRate, hasHR, ic, hasIC, n }: {
 export default function SymbolAgentPanel({
   symbol,
   market,
+  memberView = false,
 }: {
   symbol: string;
   market: Market;
+  // Members never see the per-signal hit rates (H-4, 2026-10-02): the daemon
+  // emits a row from n=1 with no base-rate comparison, and the bars colour
+  // 58% green as "edge over a coin flip". Not evidence to show a member.
+  memberView?: boolean;
 }) {
   const [horizon, setHorizon] = useState<AgentHorizon>("1d");
   const [retryTick, setRetryTick] = useState(0);
@@ -193,8 +198,8 @@ export default function SymbolAgentPanel({
             </div>
           )}
 
-          {/* Per-signal skill bars — the measured edge, whatever the tier. */}
-          {(data.skill ?? []).length > 0 ? (
+          {/* Per-signal skill bars — operator only (see memberView). */}
+          {memberView ? null : (data.skill ?? []).length > 0 ? (
             <div className="flex flex-col gap-3">
               <div className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
                 per-signal skill (this symbol&rsquo;s own history)

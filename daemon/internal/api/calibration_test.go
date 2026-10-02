@@ -53,7 +53,7 @@ func TestCalibrationPayloadCarriesBrierSkill(t *testing.T) {
 		if up {
 			prob, fwd = 0.2, 1.0
 		}
-		ts := int64(1_700_000_000 + i*86400)
+		ts := int64(store.GradingEpochTS + 14*3600 + i*86400) // one per day, inside the graded window
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 			RawProb: prob, CalProb: prob, NUsed: 3, Components: "{}",
@@ -127,7 +127,7 @@ func TestCalibrationWithholdsSkillOnDegenerateOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 40; i++ {
-		ts := int64(1_700_000_000 + i*86400)
+		ts := int64(store.GradingEpochTS + 14*3600 + i*86400) // one per day, inside the graded window
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 			RawProb: 0.55, CalProb: 0.55, NUsed: 3, Components: "{}",

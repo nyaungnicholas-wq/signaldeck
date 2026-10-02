@@ -49,7 +49,7 @@ func TestResolvedPairs_PublishedVsRawViews(t *testing.T) {
 		t.Fatalf("upsert prediction: %v", err)
 	}
 
-	probs, ups, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
+	probs, ups, _, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
 	if err != nil || len(probs) != 2 || len(ups) != 2 {
 		t.Fatalf("published pairs = %d/%d, %v; want 2/2", len(probs), len(ups), err)
 	}

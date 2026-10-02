@@ -134,14 +134,18 @@ type RVRecord struct {
 	Ungradable   int
 }
 
-// RVLiveRecord aggregates resolved forecasts.
+// RVLiveRecord aggregates the resolved forecasts frozen STRICTLY AFTER
+// createdAfter (unix seconds): the registered start rule, the same bound
+// RVGradeRows applies, so these pooled counts and means describe the live
+// window the verdict is graded on and never a row frozen at or before the
+// registration. createdAfter 0 reads every row.
 //
 // It reports DistinctDays beside N because they are not the same evidence.
 // Forecasts resolving on one day share a market shock, so the day count is the
 // number of independent observations and N is not. Returning only N would
 // invite exactly the inflation this platform has already retired predictors
 // for.
-func (s *Store) RVLiveRecord(ctx context.Context, horizon int) (RVRecord, error) {
+func (s *Store) RVLiveRecord(ctx context.Context, horizon int, createdAfter int64) (RVRecord, error) {
 	r := RVRecord{Horizon: horizon}
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*),
@@ -150,14 +154,14 @@ func (s *Store) RVLiveRecord(ctx context.Context, horizon int) (RVRecord, error)
 		       COALESCE(AVG(actual/null_rw   - LN(actual/null_rw)   - 1), 0),
 		       COALESCE(AVG(actual/null_ewma - LN(actual/null_ewma) - 1), 0)
 		  FROM rv_forecasts
-		 WHERE horizon=? AND actual IS NOT NULL AND actual > 0`, horizon).
+		 WHERE horizon=? AND actual IS NOT NULL AND actual > 0 AND created_ts > ?`, horizon, createdAfter).
 		Scan(&r.N, &r.DistinctDays, &r.MeanQLIKEHAR, &r.MeanQLIKERW, &r.MeanQLIKEEW)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM rv_forecasts WHERE horizon=? AND ungradable IS NOT NULL`,
-		horizon).Scan(&r.Ungradable); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT COUNT(*) FROM rv_forecasts WHERE horizon=? AND ungradable IS NOT NULL AND created_ts > ?`,
+		horizon, createdAfter).Scan(&r.Ungradable); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
 	return r, nil
@@ -171,6 +175,7 @@ func (s *Store) CountResolvedRV(ctx context.Context) (int, error) {
 		`SELECT COUNT(*) FROM rv_forecasts WHERE actual IS NOT NULL`).Scan(&n)
 	return n, err
 }
+
 // LatestRV is one current forecast as a member may read it: the symbol, the
 // horizon, the call bar and the forecast level. No null, coefficient or
 // outcome travels with it.

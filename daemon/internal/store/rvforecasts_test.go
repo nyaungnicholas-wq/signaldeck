@@ -136,7 +136,7 @@ func TestRVForecastUpsertNeverRewritesEvidence(t *testing.T) {
 	if err := st.UpsertRVForecast(ctx, f, now); err != nil {
 		t.Fatalf("post-resolution upsert errored: %v", err)
 	}
-	rec, err := st.RVLiveRecord(ctx, 1)
+	rec, err := st.RVLiveRecord(ctx, 1, 0)
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestRVUngradableRequiresAReason(t *testing.T) {
 	if err := st.MarkRVUngradable(ctx, sid, 1000, 1, "bars went stale", now); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
-	rec, _ := st.RVLiveRecord(ctx, 1)
+	rec, _ := st.RVLiveRecord(ctx, 1, 0)
 	if rec.Ungradable != 1 {
 		t.Errorf("ungradable count = %d, want 1", rec.Ungradable)
 	}
@@ -206,7 +206,7 @@ func TestRVLiveRecordSeparatesRowsFromDays(t *testing.T) {
 			}
 		}
 	}
-	rec, err := st.RVLiveRecord(ctx, 1)
+	rec, err := st.RVLiveRecord(ctx, 1, 0)
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}

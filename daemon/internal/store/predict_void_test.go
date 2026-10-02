@@ -21,22 +21,24 @@ func TestResolvedPredictionPairsSkipsVoidedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := st.SeedBenchmarkOutcome(ctx, sym.ID, md.H1d, 1_700_000_000, 0.6); err != nil {
+	// Inside the graded window: ResolvedPredictionPairs reads the grader's population.
+	voidTs := int64(GradingEpochTS) + 14*3600
+	if err := st.SeedBenchmarkOutcome(ctx, sym.ID, md.H1d, voidTs, 0.6); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SeedBenchmarkOutcome(ctx, sym.ID, md.H1d, 1_700_000_060, 0.6); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 1_700_000_000, 0.01); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := st.DB().ExecContext(ctx, `UPDATE prediction_outcomes SET resolved_at = ? WHERE symbol_id = ? AND ts = ?`, 1_700_100_000, sym.ID, 1_700_000_060); err != nil {
+	if err := st.SeedBenchmarkOutcome(ctx, sym.ID, md.H1d, voidTs+60, 0.6); err != nil {
 		t.Fatal(err)
 	}
 
-	probs, ups, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
+	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, voidTs, 0.01); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.DB().ExecContext(ctx, `UPDATE prediction_outcomes SET resolved_at = ? WHERE symbol_id = ? AND ts = ?`, 1_700_100_000, sym.ID, voidTs+60); err != nil {
+		t.Fatal(err)
+	}
+
+	probs, ups, _, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

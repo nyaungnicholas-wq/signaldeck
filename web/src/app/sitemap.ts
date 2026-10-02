@@ -16,6 +16,9 @@ import { siteUrl } from "@/lib/site";
  */
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = siteUrl();
+  // <loc> must be absolute, and the only absolute URL a build with no site URL
+  // could write is a loopback one: list nothing rather than localhost.
+  if (!base) return [];
   // /health is public but robots.ts does not allow it; listing a URL the
   // crawler is told to skip is "Submitted URL blocked by robots.txt".
   return PUBLIC_ROUTES.filter((r) => r !== "/login" && r !== "/health").map((route) => ({

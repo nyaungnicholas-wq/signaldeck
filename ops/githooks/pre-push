@@ -7,16 +7,19 @@
 # noticed because nothing had to: a push to main lands whatever it carries, and
 # a merge lands whether the checks passed or not.
 #
-# WHAT THIS IS NOT. This is not branch protection. GitHub refuses both classic
-# protection and rulesets on a private repository on the Free plan, so the
-# remote will accept anything it is sent. This hook only stops the accident on
+# WHAT THIS IS NOT. This is not branch protection. The repository is PUBLIC
+# (nyaungnicholas-wq/signaldeck), so GitHub now offers classic protection and
+# rulesets on the Free plan, but none is configured (checked 2026-10-02: main
+# unprotected, no rulesets), so the remote still accepts anything it is sent.
+# This hook only stops the accident on
 # a machine that has core.hooksPath set — the same limit ledger-provenance
 # already documents: "hooks are local config: a fresh clone has none until
 # someone sets core.hooksPath, and nothing stops a force-push from a machine
 # that never did."
 #
-# Real enforcement needs required status checks on the remote, which needs
-# GitHub Pro or a public repository. Until then this is a seatbelt, not a lock.
+# Real enforcement needs required status checks on the remote: a protection
+# rule or ruleset on main, an owner step that the public repository now allows.
+# Until one exists this is a seatbelt, not a lock.
 #
 # INSTALL:  git config core.hooksPath ops/githooks
 # OVERRIDE: SIGNALDECK_ALLOW_DIRECT_MAIN_PUSH=1 git push origin main

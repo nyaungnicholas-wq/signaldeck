@@ -353,11 +353,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		resp["winRate"] = nil
 		resp["brier"] = nil
 		resp["ic"] = nil
-		note := notSignificant(indepN, trackMinIndependentN)
-		if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
-			note = "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
-				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
-		}
+		note := independenceGateNote(indepN, distinctDays)
 		// A collapse outranks the sample-size note: the sample is large enough
 		// and is still not evidence, which is a different statement and the one
 		// a reader needs. Same reason string /api/accuracy refuses with, so the
@@ -778,6 +774,17 @@ func div(a float64, b int) float64 {
 
 func notSignificant(n, min int) string {
 	return "not yet significant — " + strconv.Itoa(n) + "/" + strconv.Itoa(min) + " independent resolutions"
+}
+
+// independenceGateNote names the floor that holds a record gated on both
+// trackMinIndependentN and trackMinDistinctDays (/api/track-record and
+// /api/calibration share it, so the two cannot word one gate differently).
+func independenceGateNote(indepN, distinctDays int) string {
+	if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
+		return "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
+			strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
+	}
+	return notSignificant(indepN, trackMinIndependentN)
 }
 
 // registerTrackRecord wires the Stage-7 live track-record read route (cached).

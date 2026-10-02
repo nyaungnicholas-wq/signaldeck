@@ -152,7 +152,7 @@ grep -qi "cannot source" "$work/out" && ok "  refusal names the library" || bad 
 mv "$work/lib-portable.away" "$repo/ops/lib-portable.sh"
 
 # 8. FAIL CLOSED on an unset site URL. The web bundle inlines it at build time,
-# so an image built without it serves localhost robots/sitemap/og forever.
+# so an image built without it serves an empty sitemap and no og: card forever.
 check "unset NEXT_PUBLIC_SITE_URL is refused" "$(env -u SIGNALDECK_ALLOW_LOCALHOST_SITE_URL bash ops/docker-build.sh >"$work/out" 2>&1; echo $?)" "1"
 grep -qi "NEXT_PUBLIC_SITE_URL is unset" "$work/out" && ok "  refusal names the variable" || bad "  refusal names the variable"
 check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_PUBLIC_SIGNALDECK_PUBLIC=1 run)" "0"

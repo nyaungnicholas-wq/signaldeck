@@ -1,7 +1,15 @@
 import { ImageResponse } from "next/og";
+import { OG_IMAGE } from "@/lib/site";
 
 /**
- * The social card.
+ * The social card, served at /og-image.
+ *
+ * A plain route, not the opengraph-image file convention, since 2026-10-02
+ * (B6): the convention attaches og:image to every page whatever the build
+ * knows, and Next makes it absolute against http://localhost:$PORT when no
+ * metadataBase is set, so a build without NEXT_PUBLIC_SITE_URL shipped
+ * localhost in og:image and twitter:image. layout.tsx now attaches this card
+ * only when the site has a name (lib/site.ts).
  *
  * Written against
  * node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/
@@ -19,13 +27,10 @@ import { ImageResponse } from "next/og";
  * stale silently, which is the exact defect that put three different accuracy
  * values into circulation at once.
  */
-export const alt = "SignalDeck - a market instrument that grades itself in public";
+// Rendered once at build, as the file convention was.
+export const dynamic = "force-static";
 
-export const size = { width: 1200, height: 630 };
-
-export const contentType = "image/png";
-
-export default function Image() {
+export function GET() {
   return new ImageResponse(
     (
       <div
@@ -77,6 +82,6 @@ export default function Image() {
         </div>
       </div>
     ),
-    { ...size },
+    { width: OG_IMAGE.width, height: OG_IMAGE.height },
   );
 }
