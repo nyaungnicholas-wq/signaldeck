@@ -1851,9 +1851,12 @@ func memberDigestWorkers(st *store.Store, remote *notify.Notifier, cfg config.Co
 	}
 	out := []workers.Worker{&memberdigest.Worker{
 		St:        st,
-		Base:      api.Deps{Cfg: cfg}.PublicBase,
+		// The CONFIGURED public URL only, never the quick-tunnel fallback that
+		// publicBase() uses: a trycloudflare origin changes on every restart,
+		// so a link emailed with it dies with the tunnel.
+		Base:      func() string { return cfg.PublicURL },
 		MailReady: remote.MailReady,
-		Mail:      remote.SendEmail,
+		Mail:      remote.SendEmailWithHeaders,
 		Telegram:  tg,
 	}}
 	if tg != nil {

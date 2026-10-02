@@ -107,7 +107,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// webhook is exempt — TradingView's servers cannot send the header;
 		// that endpoint is authenticated by its own shared secret instead.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) {
+			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) && !csrfExemptUnsubscribe(r) {
 			if r.Header.Get(csrfHeader) == "" {
 				httpErr(w, http.StatusForbidden, "missing "+csrfHeader+" header — every non-GET "+
 					"request must carry it; this is the CSRF guard, not a credential problem")
@@ -324,6 +324,14 @@ var publicRoutes = map[string]bool{
 	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
 	// the new forecast and is useless if a visitor cannot read it.
 	"/api/vol-forecast/record": true,
+}
+
+// csrfExemptUnsubscribe: the digest unsubscribe POST, by exact path and
+// method only. Its senders (the confirm page's plain form, a mail client's
+// RFC 8058 one-click POST) cannot set the CSRF header, and the emailed token
+// is the credential; a forged POST without it changes nothing.
+func csrfExemptUnsubscribe(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/alerts/unsubscribe"
 }
 
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or

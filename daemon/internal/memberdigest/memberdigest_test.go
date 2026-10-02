@@ -35,10 +35,10 @@ func testFacts() Facts {
 			rf("XBT/USD", "crypto", "trend21-crypto", "uptrend", "high", 0.8),
 		},
 		Calls: []store.RegimeWeekCall{
-			{Symbol: "AAA", Kind: structregime.KindTrend21, Ts: 1, Regime: "downtrend"}, // earliest: flipped
-			{Symbol: "AAA", Kind: structregime.KindTrend21, Ts: 2, Regime: "uptrend"},
-			{Symbol: "AAA", Kind: structregime.KindLiquidity21, Ts: 1, Regime: "quiet"}, // unchanged
-			{Symbol: "BBB", Kind: structregime.KindTrend21, Ts: 1, Regime: "downtrend"},
+			{Symbol: "AAA", Market: "stocks", Kind: structregime.KindTrend21, Ts: 1, Regime: "downtrend"}, // earliest: flipped
+			{Symbol: "AAA", Market: "stocks", Kind: structregime.KindTrend21, Ts: 2, Regime: "uptrend"},
+			{Symbol: "AAA", Market: "stocks", Kind: structregime.KindLiquidity21, Ts: 1, Regime: "quiet"}, // unchanged
+			{Symbol: "BBB", Market: "stocks", Kind: structregime.KindTrend21, Ts: 1, Regime: "downtrend"},
 		},
 		Vol: []store.VolForecast{{Symbol: "AAA", Market: "stocks",
 			Forecast: volregime.Forecast{Regime: "elevated", Tier: "high", HistoricalAccuracy: 0.743}}},
@@ -157,7 +157,10 @@ func TestParseLinkCode(t *testing.T) {
 
 // ── worker ──────────────────────────────────────────────────────────────────
 
-type sent struct{ to, subject, body string }
+type sent struct {
+	to, subject, body string
+	headers           map[string]string
+}
 
 type fakeMail struct {
 	mu   sync.Mutex
@@ -165,13 +168,13 @@ type fakeMail struct {
 	fail bool
 }
 
-func (f *fakeMail) send(_ context.Context, to, subject, body string) error {
+func (f *fakeMail) send(_ context.Context, to, subject, body string, headers map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail {
 		return errors.New("smtp down")
 	}
-	f.msgs = append(f.msgs, sent{to, subject, body})
+	f.msgs = append(f.msgs, sent{to, subject, body, headers})
 	return nil
 }
 
@@ -180,6 +183,7 @@ func (f *fakeMail) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.
 // fakeTelegram serves the Bot API methods the package calls.
 type fakeTelegram struct {
 	mu      sync.Mutex
+	forbid  bool // sendMessage answers 403 (bot blocked)
 	sends   []map[string]any
 	updates string // JSON array for getUpdates
 	offsets []float64
@@ -193,6 +197,9 @@ func (f *fakeTelegram) server(t *testing.T) *httptest.Server {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendMessage") && f.forbid:
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"Forbidden: bot was blocked by the user"}`))
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			f.sends = append(f.sends, p)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
@@ -474,7 +481,7 @@ func TestLinkWorker(t *testing.T) {
 		t.Errorf("link worker %q %v", lw.Name(), lw.Interval())
 	}
 	detail, err := lw.Run(ctx)
-	if err != nil || detail != "updates=3 linked=1 unmatched=1" {
+	if err != nil || detail != "updates=3 linked=1 unmatched=1 stopped=0" {
 		t.Fatalf("link run: %q %v", detail, err)
 	}
 	if p, _ := f.st.AlertPrefs(ctx, f.bob); p.TelegramChatID != "777" {

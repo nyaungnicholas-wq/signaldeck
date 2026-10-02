@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -142,9 +146,6 @@ func TestUnsubscribeLinkIsAnonymousAndTokened(t *testing.T) {
 			if resp := postJSON(t, anon, base+"/api/alert-prefs/telegram-unlink", map[string]string{}); resp.StatusCode != 401 {
 				t.Errorf("anonymous unlink: %d, want 401", resp.StatusCode)
 			}
-			if code, body := getAs(t, anon, base+"/api/alerts/unsubscribe?token=nope"); code != 400 || !strings.Contains(body, "invalid") {
-				t.Errorf("bogus token: %d %s", code, body)
-			}
 			mira, _, err := st.GetUserByName(ctx, "mira")
 			if err != nil {
 				t.Fatal(err)
@@ -153,13 +154,106 @@ func TestUnsubscribeLinkIsAnonymousAndTokened(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			code, body := getAs(t, anon, base+"/api/alerts/unsubscribe?token="+tok)
-			if code != 200 || !strings.Contains(body, "unsubscribed") {
-				t.Fatalf("unsubscribe: %d %s", code, body)
+			// A plain form POST, as a browser or mail client sends it: no CSRF
+			// header, no session.
+			post := func(url string, form url.Values) (int, string) {
+				t.Helper()
+				resp, err := anon.PostForm(url, form)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp.StatusCode, drain(t, resp)
 			}
-			if v := prefsOf(t, member, base); v.EmailDigest {
-				t.Fatal("unsubscribe link left the digest on")
+			on := func() bool { t.Helper(); return prefsOf(t, member, base).EmailDigest }
+
+			// GET (what a link scanner does) only shows the confirm form.
+			code, body := getAs(t, anon, base+"/api/alerts/unsubscribe?token="+tok)
+			if code != 200 || !strings.Contains(body, `<form method="post" action="/api/alerts/unsubscribe">`) ||
+				!strings.Contains(body, `name="token" value="`+tok+`"`) {
+				t.Fatalf("confirm page: %d %s", code, body)
+			}
+			if !on() {
+				t.Fatal("a GET of the unsubscribe link turned the digest off")
+			}
+			// The token is escaped into the page, never echoed raw.
+			if _, body := getAs(t, anon, base+"/api/alerts/unsubscribe?token=%22%3E%3Cscript%3E"); strings.Contains(body, "<script>") {
+				t.Errorf("token reflected unescaped: %s", body)
+			}
+			// POST without a token, or with a bad one, changes nothing.
+			if code, body := post(base+"/api/alerts/unsubscribe", url.Values{}); code != 400 || !strings.Contains(body, "invalid") || !on() {
+				t.Errorf("POST without token: %d %s", code, body)
+			}
+			if code, _ := post(base+"/api/alerts/unsubscribe", url.Values{"token": {"nope"}}); code != 400 || !on() {
+				t.Errorf("POST bad token: %d", code)
+			}
+			// The confirm form's POST redeems.
+			if code, body := post(base+"/api/alerts/unsubscribe", url.Values{"token": {tok}}); code != 200 || !strings.Contains(body, "unsubscribed") {
+				t.Fatalf("form POST: %d %s", code, body)
+			}
+			if on() {
+				t.Fatal("the confirmed POST left the digest on")
+			}
+			// RFC 8058 one-click: token in the URL, body List-Unsubscribe=One-Click.
+			if resp := postJSON(t, member, base+"/api/alert-prefs", map[string]bool{"emailDigest": true}); resp.StatusCode != 200 {
+				t.Fatalf("opt back in: %d", resp.StatusCode)
+			}
+			if code, _ := post(base+"/api/alerts/unsubscribe?token="+tok,
+				url.Values{"List-Unsubscribe": {"One-Click"}}); code != 200 || on() {
+				t.Errorf("one-click POST: %d, on=%v", code, on())
+			}
+			// The CSRF exemption is that exact path: a header-less form POST to a
+			// neighbour is still refused.
+			for _, p := range []string{"/api/alerts/unsubscribe/x", "/api/alerts/seen", "/api/alert-prefs"} {
+				if code, body := post(base+p, url.Values{"token": {tok}}); code != 403 || !strings.Contains(body, csrfHeader) {
+					t.Errorf("header-less POST %s: %d %s, want the CSRF refusal", p, code, body)
+				}
 			}
 		})
 	}
+}
+
+func TestCSRFExemptionIsExactPathAndMethod(t *testing.T) {
+	for _, c := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"POST", "/api/alerts/unsubscribe", true},
+		{"GET", "/api/alerts/unsubscribe", false},
+		{"PUT", "/api/alerts/unsubscribe", false},
+		{"POST", "/api/alerts/unsubscribe/", false},
+		{"POST", "/api/alerts/seen", false},
+		{"POST", "/api/alert-prefs", false},
+	} {
+		if got := csrfExemptUnsubscribe(httptest.NewRequest(c.method, c.path, nil)); got != c.want {
+			t.Errorf("%s %s exempt=%v, want %v", c.method, c.path, got, c.want)
+		}
+	}
+}
+
+// B: the daily email needs SIGNALDECK_PUBLIC_URL. A quick-tunnel origin
+// (publicBase's fallback) rotates on restart, so links mailed with it die.
+func TestDigestMailNeedsConfiguredPublicURL(t *testing.T) {
+	oldReady := mailReady
+	mailReady = func(Deps) bool { return true }
+	t.Cleanup(func() { mailReady = oldReady })
+	log := filepath.Join(t.TempDir(), "tunnel.log")
+	if err := os.WriteFile(log, []byte("|  https://abc-def.trycloudflare.com  |\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publicURLMemo.mu.Lock()
+	publicURLMemo.at = time.Time{}
+	publicURLMemo.mu.Unlock()
+	tunnel := Deps{Cfg: config.Config{TunnelLog: log}}
+	if tunnel.publicBase() == "" {
+		t.Fatal("fixture: the tunnel log yields no public base")
+	}
+	if tunnel.digestMailAvailable() {
+		t.Error("daily email offered on a quick-tunnel origin")
+	}
+	if !(Deps{Cfg: config.Config{PublicURL: "https://sd.example"}}).digestMailAvailable() {
+		t.Error("daily email unavailable with a configured public URL")
+	}
+	publicURLMemo.mu.Lock()
+	publicURLMemo.at = time.Time{}
+	publicURLMemo.mu.Unlock()
 }

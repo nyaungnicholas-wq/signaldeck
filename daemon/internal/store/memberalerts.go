@@ -82,6 +82,18 @@ func (s *Store) UnlinkTelegram(ctx context.Context, uid int64) error {
 	return err
 }
 
+// UnlinkTelegramChat forgets a chat by its id ("/stop" sent from it); ok is
+// false when no user had it linked.
+func (s *Store) UnlinkTelegramChat(ctx context.Context, chatID string) (bool, error) {
+	res, err := s.authW().ExecContext(ctx,
+		`UPDATE member_alert_prefs SET telegram_chat_id=NULL WHERE telegram_chat_id=?`, chatID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // LinkTelegramByCode binds chatID to the user holding the unexpired code and
 // spends the code. ok is false for an unknown or expired code.
 func (s *Store) LinkTelegramByCode(ctx context.Context, code, chatID string, now time.Time) (uid int64, ok bool, err error) {

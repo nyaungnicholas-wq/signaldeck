@@ -8,6 +8,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"html"
 	"net/http"
 	"os"
@@ -49,8 +50,15 @@ func (d Deps) writeAlertPrefs(w http.ResponseWriter, r *http.Request) {
 		EmailVerified:     verified,
 		TelegramLinked:    p.TelegramChatID != "",
 		TelegramAvailable: d.telegramAvailable(),
-		MailAvailable:     mailReady(d) && d.publicBase() != "",
+		MailAvailable:     d.digestMailAvailable(),
 	})
+}
+
+// digestMailAvailable gates the daily email on SIGNALDECK_PUBLIC_URL, not on
+// publicBase(): its quick-tunnel fallback changes on every restart, and a
+// digest's links (unsubscribe included) must outlive the tunnel that sent it.
+func (d Deps) digestMailAvailable() bool {
+	return mailReady(d) && d.Cfg.PublicURL != ""
 }
 
 func (d Deps) alertPrefsGet(w http.ResponseWriter, r *http.Request) { d.writeAlertPrefs(w, r) }
@@ -113,24 +121,57 @@ func (d Deps) alertPrefsTelegramUnlink(w http.ResponseWriter, r *http.Request) {
 	d.writeAlertPrefs(w, r)
 }
 
-// alertsUnsubscribe is the one-click link in every digest email. Anonymous by
-// design (the mail client has no session); the token is the authority, and
-// all it can do is turn that one user's email digest off.
-func (d Deps) alertsUnsubscribe(w http.ResponseWriter, r *http.Request) {
+const maxUnsubTokenLen = 128
+
+func unsubPage(w http.ResponseWriter, status int, inner string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	_, err := d.St.RedeemUnsubscribe(r.Context(), strings.TrimSpace(r.URL.Query().Get("token")))
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte("<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\">" +
+		"<title>SignalDeck</title>" + inner + "\n"))
+}
+
+// alertsUnsubscribeConfirm is the link in every digest email. A GET changes
+// nothing: mail scanners (Outlook Safe Links, gateways) fetch every link in a
+// message, so a GET that unsubscribed would opt members out unasked. It shows
+// one button that POSTs the same token back.
+func (d Deps) alertsUnsubscribeConfirm(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimSpace(r.URL.Query().Get("token"))
+	if tok == "" || len(tok) > maxUnsubTokenLen {
+		unsubPage(w, http.StatusBadRequest, "<p>This unsubscribe link is invalid or has expired. "+
+			"Turn the daily email off in your SignalDeck settings.</p>")
+		return
+	}
+	unsubPage(w, http.StatusOK, "<p>Stop the SignalDeck daily email to this address?</p>"+
+		`<form method="post" action="/api/alerts/unsubscribe">`+
+		`<input type="hidden" name="token" value="`+html.EscapeString(tok)+`">`+
+		`<button type="submit">Unsubscribe</button></form>`)
+}
+
+// alertsUnsubscribe redeems the token: the confirm page's form POST (token in
+// the body) or a mail client's RFC 8058 one-click POST (token in the
+// List-Unsubscribe URL, body List-Unsubscribe=One-Click). Anonymous and exempt
+// from the CSRF header by exact path (security.go): neither sender can set a
+// custom header, and the token is the credential. All it can do is turn that
+// one user's email digest off.
+func (d Deps) alertsUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimSpace(r.PostFormValue("token"))
+	if tok == "" {
+		tok = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
+	_, err := d.St.RedeemUnsubscribe(r.Context(), tok)
 	msg := "You are unsubscribed from the SignalDeck daily email. Nothing more will be sent to this address."
+	status := http.StatusOK
 	switch {
-	case err == store.ErrTokenInvalid:
-		w.WriteHeader(http.StatusBadRequest)
+	case errors.Is(err, store.ErrTokenInvalid):
+		status = http.StatusBadRequest
 		msg = "This unsubscribe link is invalid or has expired. Turn the daily email off in your SignalDeck settings."
 	case err != nil:
-		w.WriteHeader(http.StatusServiceUnavailable)
+		status = http.StatusServiceUnavailable
 		msg = "The server is busy. Open the link again in a minute; it still works."
 	}
-	_, _ = w.Write([]byte("<!doctype html><meta charset=utf-8><title>SignalDeck</title><p>" + html.EscapeString(msg) + "</p>\n"))
+	unsubPage(w, status, "<p>"+html.EscapeString(msg)+"</p>")
 }
 
 func (d Deps) registerAlertPrefs(mux *http.ServeMux) {
@@ -138,9 +179,6 @@ func (d Deps) registerAlertPrefs(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/alert-prefs", d.alertPrefsSet)
 	mux.HandleFunc("POST /api/alert-prefs/telegram-link", d.alertPrefsTelegramLink)
 	mux.HandleFunc("POST /api/alert-prefs/telegram-unlink", d.alertPrefsTelegramUnlink)
-	mux.HandleFunc("GET /api/alerts/unsubscribe", d.alertsUnsubscribe)
+	mux.HandleFunc("GET /api/alerts/unsubscribe", d.alertsUnsubscribeConfirm)
+	mux.HandleFunc("POST /api/alerts/unsubscribe", d.alertsUnsubscribe)
 }
-
-// PublicBase is the origin emailed links point at ("" = unknown), for the
-// member-digest worker outside this package.
-func (d Deps) PublicBase() string { return d.publicBase() }

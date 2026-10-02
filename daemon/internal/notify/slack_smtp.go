@@ -60,10 +60,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime"
 	"net"
 	"net/smtp"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -199,6 +202,39 @@ func (n *Notifier) SendEmail(ctx context.Context, to, subject, body string) erro
 	return n.smtpDeliverTo(ctx, []string{to}, Message{Title: subject, Body: body})
 }
 
+// headerName is an RFC 5322 field name: printable ASCII except colon.
+var headerName = regexp.MustCompile(`^[!-9;-~]+$`)
+
+// reservedHeaders are written by smtpBodyTo itself; a caller may not replace them.
+var reservedHeaders = map[string]bool{"from": true, "to": true, "subject": true, "date": true,
+	"mime-version": true, "content-type": true, "bcc": true, "cc": true}
+
+// SendEmailWithHeaders is SendEmail plus extra headers (List-Unsubscribe for
+// the member digest). Names must be valid field names and not ones this file
+// writes; a value holding CR or LF is REFUSED, never folded: a header value
+// that tries to start a new line is an injection attempt, not a typo.
+func (n *Notifier) SendEmailWithHeaders(ctx context.Context, to, subject, body string, headers map[string]string) error {
+	if !n.MailReady() {
+		return errors.New("email is not configured (SIGNALDECK_SMTP_HOST / SIGNALDECK_SMTP_FROM)")
+	}
+	if err := checkHeaders(headers); err != nil {
+		return err
+	}
+	return n.smtpDeliverTo(ctx, []string{to}, Message{Title: subject, Body: body, headers: headers})
+}
+
+func checkHeaders(headers map[string]string) error {
+	for k, v := range headers {
+		if !headerName.MatchString(k) || reservedHeaders[strings.ToLower(k)] {
+			return fmt.Errorf("email header %q is not allowed", k)
+		}
+		if strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("email header %s: value contains a line break", k)
+		}
+	}
+	return nil
+}
+
 func (n *Notifier) smtpDeliverTo(ctx context.Context, rcpts []string, m Message) error {
 	if len(rcpts) == 0 {
 		return errors.New("no recipients configured")
@@ -293,6 +329,14 @@ func (n *Notifier) smtpBodyTo(rcpts []string, m Message) []byte {
 	b.WriteString("Date: " + n.now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	keys := make([]string, 0, len(m.headers))
+	for k := range m.headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k + ": " + headerSafe(m.headers[k]) + "\r\n")
+	}
 	b.WriteString("\r\n")
 	b.WriteString(body)
 	b.WriteString("\r\n")

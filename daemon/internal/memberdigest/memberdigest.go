@@ -40,7 +40,7 @@ type Facts struct {
 
 // LoadFacts reads the current forecasts and the calls frozen in the 24h
 // before now (the weekly digest's earliest-call logic, over a day).
-func LoadFacts(ctx context.Context, st *store.Store, now time.Time) (Facts, error) {
+func LoadFacts(ctx context.Context, st Store, now time.Time) (Facts, error) {
 	var f Facts
 	var err error
 	if f.Current, err = st.RegimeForecasts(ctx); err != nil {
@@ -83,12 +83,13 @@ func Compose(f Facts, watched []md.Symbol, base, unsubURL string) (Digest, bool)
 		return syms[i].Market < syms[j].Market
 	})
 
-	// The earliest frozen call per (symbol, kind) in the window; Calls is
-	// oldest first, so keep the first seen.
-	type sk struct{ sym, kind string }
+	// The earliest frozen call per (symbol, market, kind) in the window; Calls
+	// is oldest first, so keep the first seen. Market is in the key: a stock
+	// and a futures contract can share a ticker.
+	type sk struct{ sym, market, kind string }
 	earliest := map[sk]string{}
 	for _, c := range f.Calls {
-		k := sk{c.Symbol, string(c.Kind)}
+		k := sk{c.Symbol, c.Market, string(c.Kind)}
 		if _, ok := earliest[k]; !ok {
 			earliest[k] = c.Regime
 		}
@@ -109,7 +110,7 @@ func Compose(f Facts, watched []md.Symbol, base, unsubURL string) (Digest, bool)
 		for _, r := range rows {
 			line := fmt.Sprintf("  %s: %s (conviction %s, backtest accuracy %.1f%%)",
 				r.Kind, r.Regime, r.Tier, r.HistoricalAccuracy*100)
-			if from, ok := earliest[sk{s.Symbol, string(r.Kind)}]; ok && from != r.Regime {
+			if from, ok := earliest[sk{s.Symbol, string(s.Market), string(r.Kind)}]; ok && from != r.Regime {
 				line += " - changed from " + from
 				changed = true
 			}
@@ -128,7 +129,11 @@ func Compose(f Facts, watched []md.Symbol, base, unsubURL string) (Digest, bool)
 		if changed {
 			d.Changed++
 		}
-		blocks = append(blocks, s.Symbol+"\n"+strings.Join(lines, "\n"))
+		head := s.Symbol
+		if s.Market != md.Stocks { // a futures contract may share a stock's ticker
+			head += " (" + string(s.Market) + ")"
+		}
+		blocks = append(blocks, head+"\n"+strings.Join(lines, "\n"))
 	}
 	d.Subject = fmt.Sprintf("SignalDeck daily read: %d watched, %d changed", d.Watched, d.Changed)
 	footer := []string{
@@ -162,12 +167,27 @@ func NewLinkCode() string {
 	return string(b)
 }
 
-// ParseLinkCode extracts a link code from "/start CODE" or "CODE"; "" if the
-// text is not one.
+// botCommand splits "/cmd@BotName rest" or "/cmd rest" into ("/cmd", rest).
+// Telegram appends @BotName to commands typed in groups or picked from the
+// menu, so both spellings must mean the same thing.
+func botCommand(text string) (cmd, rest string) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "/") {
+		return "", t
+	}
+	head, rest, _ := strings.Cut(t, " ")
+	head, _, _ = strings.Cut(head, "@")
+	return strings.ToLower(head), strings.TrimSpace(rest)
+}
+
+// ParseLinkCode extracts a link code from "/start CODE", "/start@Bot CODE" or
+// "CODE"; "" if the text is not one.
 func ParseLinkCode(text string) string {
 	t := strings.TrimSpace(text)
-	if rest, ok := strings.CutPrefix(t, "/start"); ok {
-		t = strings.TrimSpace(rest)
+	if cmd, rest := botCommand(t); cmd == "/start" {
+		t = rest
+	} else if cmd != "" {
+		return ""
 	}
 	t = strings.ToUpper(t)
 	if len(t) != 8 {
@@ -189,12 +209,32 @@ type Telegram struct {
 	Client  *http.Client // nil = 5s-timeout client
 }
 
+// APIError is a Bot API refusal. Status 403 means the user blocked the bot or
+// removed it from the chat: that chat will never accept a message again.
+type APIError struct {
+	Status int
+	msg    string // already redacted
+}
+
+func (e *APIError) Error() string { return e.msg }
+
+func (t *Telegram) redact(s string) string {
+	if t.Token == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, t.Token, "[redacted]")
+}
+
 func (t *Telegram) call(ctx context.Context, method string, payload, out any) error {
 	err := t.do(ctx, method, payload, out)
-	if err != nil && t.Token != "" {
-		return errors.New(strings.ReplaceAll(err.Error(), t.Token, "[redacted]"))
+	var api *APIError
+	if errors.As(err, &api) {
+		return &APIError{Status: api.Status, msg: t.redact(api.msg)}
 	}
-	return err
+	if err != nil {
+		return errors.New(t.redact(err.Error()))
+	}
+	return nil
 }
 
 func (t *Telegram) do(ctx context.Context, method string, payload, out any) error {
@@ -232,7 +272,8 @@ func (t *Telegram) do(ctx context.Context, method string, payload, out any) erro
 		return fmt.Errorf("telegram %s: HTTP %d: %w", method, res.StatusCode, err)
 	}
 	if res.StatusCode >= 300 || !env.OK {
-		return fmt.Errorf("telegram %s: HTTP %d: %s", method, res.StatusCode, env.Description)
+		return &APIError{Status: res.StatusCode,
+			msg: fmt.Sprintf("telegram %s: HTTP %d: %s", method, res.StatusCode, env.Description)}
 	}
 	if out != nil {
 		return json.Unmarshal(env.Result, out)
@@ -252,32 +293,66 @@ func (t *Telegram) Send(ctx context.Context, chatID, text string) error {
 	return t.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text}, nil)
 }
 
-// Sender delivers one email.
-type Sender func(ctx context.Context, to, subject, body string) error
+// chatGone reports a send refused because the user blocked or left the bot.
+func chatGone(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Status == http.StatusForbidden
+}
+
+// Sender delivers one email with extra headers (List-Unsubscribe).
+type Sender func(ctx context.Context, to, subject, body string, headers map[string]string) error
+
+// Store is what the digest worker reads and writes; *store.Store satisfies it.
+type Store interface {
+	DigestRecipients(ctx context.Context) ([]store.DigestRecipient, error)
+	ListMemberSymbols(ctx context.Context, uid int64) ([]md.Symbol, error)
+	ListUserSymbols(ctx context.Context, uid int64) ([]md.Symbol, error)
+	CreateAuthToken(ctx context.Context, uid int64, kind string, ttl time.Duration) (string, error)
+	MarkDigestSent(ctx context.Context, uid int64, day string) error
+	PurgeExpiredTokens(ctx context.Context, kind string, now time.Time) error
+	UnlinkTelegram(ctx context.Context, uid int64) error
+	RegimeForecasts(ctx context.Context) ([]store.RegimeForecast, error)
+	RegimeOutcomeCallsSince(ctx context.Context, since int64) ([]store.RegimeWeekCall, error)
+	VolForecasts(ctx context.Context) ([]store.VolForecast, error)
+}
 
 const (
-	defaultCap     = 500 // sends per pass; the rest follow 5 minutes later
+	defaultCap     = 500 // members per pass; the rest follow 5 minutes later
 	unsubscribeTTL = 60 * 24 * time.Hour
 	fireHourET     = 8
-	maxTries       = 2 // attempts per member per day: a dead SMTP host costs two passes, not a loop
+	lastHourET     = 16 // no sends from 16:00 ET on: a catch-up never mails at night
+	maxTries       = 2  // attempts per member per channel per day
 	retryAfter     = 30 * time.Minute
+	chEmail        = "email"
+	chTelegram     = "telegram"
 )
 
-// Worker is "member-digest": trading days from 08:00 ET, one read per member
-// per day, at most Cap sends per pass.
+type chanKey struct {
+	uid int64
+	ch  string
+}
+
+// Worker is "member-digest": trading days 08:00-16:00 ET, one read per member
+// per day on each channel they enabled.
 type Worker struct {
-	St        *store.Store
-	Base      func() string // public origin for links; "" = no email
+	St        Store
+	Base      func() string // the CONFIGURED public URL; "" = no email, no links
 	MailReady func() bool
 	Mail      Sender
 	Telegram  *Telegram // nil = no Telegram channel
 	Now       func() time.Time
 	Cap       int // 0 = defaultCap
 
-	deferred int           // members the last pass left for the next one
-	retry    int           // members whose send failed and may be tried once more today
-	day      string        // the ET date tries counts for
-	tries    map[int64]int // send attempts per member on day
+	deferred int // members the last pass left for the next one
+	retry    int // members with a channel that failed and has a try left
+
+	// Per-day memory (reset when the ET date changes). ok holds each channel
+	// delivered today, so this process never sends it twice in a day even
+	// when MarkDigestSent fails. ponytail: in memory only; a restart between a
+	// member's two tries allows up to two more, persist if that matters.
+	day   string
+	tries map[chanKey]int
+	ok    map[chanKey]bool
 }
 
 func (w *Worker) Name() string            { return "member-digest" }
@@ -286,7 +361,7 @@ func (w *Worker) Interval() time.Duration { return 24 * time.Hour }
 // NextFire is the next trading day 08:00 ET; at once when the daemon was down
 // across a slot (the scheduler never runs a worker at boot by itself); five
 // minutes out while a capped pass left members unsent; 30 minutes out while a
-// failed send has a try left.
+// failed channel has a try left.
 func (w *Worker) NextFire(last, now time.Time) time.Time {
 	switch {
 	case w.deferred > 0:
@@ -297,21 +372,29 @@ func (w *Worker) NextFire(last, now time.Time) time.Time {
 	return workers.TradingDayAtETCatchUp(last, now, fireHourET, 0)
 }
 
-func (w *Worker) Run(ctx context.Context) (string, error) {
+func (w *Worker) Run(ctx context.Context) (detail string, err error) {
 	now := time.Now()
 	if w.Now != nil {
 		now = w.Now()
 	}
+	var sent, failed, skipped, deferred, retry int
+	// Whatever path this run leaves by, the follow-up schedule matches what it
+	// actually left undone (a stale deferred count re-fired a finished pass).
+	defer func() {
+		if err != nil {
+			retry = 1 // a store error is usually transient: try again in 30 min
+		}
+		w.deferred, w.retry = deferred, retry
+	}()
 	et := now.In(marketcal.Loc())
 	// A catch-up fire can land on any day or hour; the gate, not NextFire, is
-	// what keeps a weekend restart from mailing anyone.
-	if !marketcal.IsTradingDay(et) || et.Hour() < fireHourET {
-		w.deferred, w.retry = 0, 0
-		return "waiting (fires trading days from 08:00 ET)", nil
+	// what keeps a weekend restart or a late-evening boot from mailing anyone.
+	if !marketcal.IsTradingDay(et) || et.Hour() < fireHourET || et.Hour() >= lastHourET {
+		return "waiting (sends trading days 08:00-16:00 ET)", nil
 	}
 	day := et.Format("2006-01-02")
 	if w.day != day {
-		w.day, w.tries = day, map[int64]int{}
+		w.day, w.tries, w.ok = day, map[chanKey]int{}, map[chanKey]bool{}
 	}
 	base := ""
 	if w.Base != nil {
@@ -320,7 +403,6 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	emailOK := base != "" && w.MailReady != nil && w.MailReady() && w.Mail != nil
 	tgOK := w.Telegram != nil
 	if !emailOK && !tgOK {
-		w.deferred, w.retry = 0, 0
 		return "skipped: no transport", nil
 	}
 	if err := w.St.PurgeExpiredTokens(ctx, store.TokenUnsubscribe, now); err != nil {
@@ -338,14 +420,20 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	if capN <= 0 {
 		capN = defaultCap
 	}
-	var sent, failed, skipped, deferred, retry int
 	for _, r := range recipients {
-		if r.LastDigestDay == day || w.tries[r.UserID] >= maxTries {
+		if r.LastDigestDay == day {
 			skipped++
 			continue
 		}
-		useMail, useTG := emailOK && r.Email != "", tgOK && r.ChatID != ""
-		if !useMail && !useTG {
+		var pending []string
+		for _, ch := range []string{chEmail, chTelegram} {
+			on := ch == chEmail && emailOK && r.Email != "" || ch == chTelegram && tgOK && r.ChatID != ""
+			k := chanKey{r.UserID, ch}
+			if on && !w.ok[k] && w.tries[k] < maxTries {
+				pending = append(pending, ch)
+			}
+		}
+		if len(pending) == 0 {
 			skipped++
 			continue
 		}
@@ -353,65 +441,105 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 			deferred++
 			continue
 		}
-		watched, err := w.St.ListMemberSymbols(ctx, r.UserID)
-		if err != nil {
-			return "", err
+		for _, ch := range pending {
+			w.tries[chanKey{r.UserID, ch}]++ // spent even if the store fails below: bounded
 		}
-		own, err := w.St.ListUserSymbols(ctx, r.UserID) // an operator's list
-		if err != nil {
-			return "", err
-		}
-		watched = append(watched, own...)
-		if _, ok := Compose(facts, watched, base, ""); !ok {
-			skipped++ // nothing watched: no email
+		delivered := w.deliver(ctx, r, pending, facts, base)
+		if delivered < 0 { // nothing watched: no read (the spent try bounds the rechecks)
+			skipped++
 			continue
 		}
-		w.tries[r.UserID]++
-		delivered := false
-		if useMail {
-			if tok, err := w.St.CreateAuthToken(ctx, r.UserID, store.TokenUnsubscribe, unsubscribeTTL); err != nil {
-				slog.Warn("member-digest: unsubscribe token failed", "uid", r.UserID, "err", err)
-			} else {
-				d, _ := Compose(facts, watched, base, base+"/api/alerts/unsubscribe?token="+tok)
-				if err := w.Mail(ctx, r.Email, d.Subject, d.Body); err != nil {
-					slog.Warn("member-digest: email failed", "uid", r.UserID, "err", err)
-				} else {
-					delivered = true
-				}
+		if delivered > 0 {
+			sent++
+		} else {
+			failed++
+		}
+		left := false
+		for _, ch := range pending {
+			k := chanKey{r.UserID, ch}
+			if !w.ok[k] && w.tries[k] < maxTries {
+				left = true
 			}
 		}
-		if useTG {
-			d, _ := Compose(facts, watched, base, "")
-			if err := w.Telegram.Send(ctx, r.ChatID, d.Subject+"\n\n"+d.Body); err != nil {
-				slog.Warn("member-digest: telegram failed", "uid", r.UserID, "err", err)
-			} else {
-				delivered = true
-			}
-		}
-		if !delivered {
-			failed++ // last_digest_day stays put; one more try in retryAfter
-			if w.tries[r.UserID] < maxTries {
-				retry++
-			}
+		if left {
+			retry++
 			continue
 		}
+		// Every enabled channel succeeded or spent its tries: done for today.
 		if err := w.St.MarkDigestSent(ctx, r.UserID, day); err != nil {
-			return "", err
+			slog.Warn("member-digest: could not record today's send; held in memory", "uid", r.UserID, "err", err)
 		}
-		sent++
 	}
 	if deferred > 0 {
 		slog.Warn("member-digest: per-run send cap reached; the rest go out on the next pass",
 			"cap", capN, "deferred", deferred)
 	}
-	w.deferred, w.retry = deferred, retry
 	return fmt.Sprintf("sent=%d failed=%d skipped=%d deferred=%d", sent, failed, skipped, deferred), nil
+}
+
+// deliver sends today's read on each pending channel and returns how many
+// succeeded, or -1 when the member watches no stock. Errors are logged and
+// leave the channel unsent; they never abort the pass.
+func (w *Worker) deliver(ctx context.Context, r store.DigestRecipient, pending []string, facts Facts, base string) int {
+	watched, err := w.St.ListMemberSymbols(ctx, r.UserID)
+	if err != nil {
+		slog.Warn("member-digest: watchlist read failed", "uid", r.UserID, "err", err)
+		return 0
+	}
+	own, err := w.St.ListUserSymbols(ctx, r.UserID) // an operator's list
+	if err != nil {
+		slog.Warn("member-digest: watchlist read failed", "uid", r.UserID, "err", err)
+		return 0
+	}
+	watched = append(watched, own...)
+	if _, ok := Compose(facts, watched, base, ""); !ok {
+		return -1
+	}
+	n := 0
+	for _, ch := range pending {
+		k := chanKey{r.UserID, ch}
+		switch ch {
+		case chEmail:
+			tok, err := w.St.CreateAuthToken(ctx, r.UserID, store.TokenUnsubscribe, unsubscribeTTL)
+			if err != nil {
+				slog.Warn("member-digest: unsubscribe token failed", "uid", r.UserID, "err", err)
+				continue
+			}
+			unsub := base + "/api/alerts/unsubscribe?token=" + tok
+			d, _ := Compose(facts, watched, base, unsub)
+			// RFC 8058 one-click: the mail client POSTs List-Unsubscribe=One-Click
+			// to this URL, which the daemon redeems without a session.
+			hdr := map[string]string{"List-Unsubscribe": "<" + unsub + ">",
+				"List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+			if err := w.Mail(ctx, r.Email, d.Subject, d.Body, hdr); err != nil {
+				slog.Warn("member-digest: email failed", "uid", r.UserID, "err", err)
+				continue
+			}
+		case chTelegram:
+			d, _ := Compose(facts, watched, base, "")
+			if err := w.Telegram.Send(ctx, r.ChatID, d.Subject+"\n\n"+d.Body); err != nil {
+				slog.Warn("member-digest: telegram failed", "uid", r.UserID, "err", err)
+				if chatGone(err) {
+					// Blocked or kicked: this chat will refuse forever.
+					w.tries[k] = maxTries
+					if err := w.St.UnlinkTelegram(ctx, r.UserID); err != nil {
+						slog.Warn("member-digest: unlink after 403 failed", "uid", r.UserID, "err", err)
+					}
+				}
+				continue
+			}
+		}
+		w.ok[k] = true
+		n++
+	}
+	return n
 }
 
 const metaTelegramOffset = "telegram_link_offset"
 
 // LinkWorker is "telegram-link": it polls the bot for "/start CODE" messages
-// and binds each matching chat to the member who drew the code.
+// and binds each matching chat to the member who drew the code; "/stop" from
+// a linked chat unlinks it.
 type LinkWorker struct {
 	St       *store.Store
 	Telegram *Telegram
@@ -446,7 +574,7 @@ func (lw *LinkWorker) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	next := offset
-	linked, unmatched := 0, 0
+	linked, unmatched, stopped := 0, 0, 0
 	for _, u := range updates {
 		if u.UpdateID+1 > next {
 			next = u.UpdateID + 1
@@ -454,12 +582,25 @@ func (lw *LinkWorker) Run(ctx context.Context) (string, error) {
 		if u.Message == nil {
 			continue
 		}
-		// Message text is never logged: only whether it held a code that matched.
+		// Message text is never logged: only what it matched.
+		chat := strconv.FormatInt(u.Message.Chat.ID, 10)
+		if cmd, _ := botCommand(u.Message.Text); cmd == "/stop" {
+			ok, err := lw.St.UnlinkTelegramChat(ctx, chat)
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				stopped++
+				if err := lw.Telegram.Send(ctx, chat, "Unlinked. No more SignalDeck daily reads here."); err != nil {
+					slog.Warn("telegram-link: reply failed", "err", err)
+				}
+			}
+			continue
+		}
 		code := ParseLinkCode(u.Message.Text)
 		if code == "" {
 			continue
 		}
-		chat := strconv.FormatInt(u.Message.Chat.ID, 10)
 		_, ok, err := lw.St.LinkTelegramByCode(ctx, code, chat, now)
 		if err != nil {
 			return "", err
@@ -478,5 +619,5 @@ func (lw *LinkWorker) Run(ctx context.Context) (string, error) {
 			return "", err
 		}
 	}
-	return fmt.Sprintf("updates=%d linked=%d unmatched=%d", len(updates), linked, unmatched), nil
+	return fmt.Sprintf("updates=%d linked=%d unmatched=%d stopped=%d", len(updates), linked, unmatched, stopped), nil
 }
