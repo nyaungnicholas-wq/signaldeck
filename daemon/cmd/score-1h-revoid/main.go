@@ -117,10 +117,10 @@ func run(dbPath string, apply bool, logPath string, out io.Writer) (int, error) 
 		return 0, err
 	}
 	maxGapH := maxGapSec / 3600.0
-	fmt.Fprintf(out, "%d stock 1h outcomes graded since %d scanned; %d graded across a 1m-bar hole > 3h (max %.1fh past target) -> void; %d without a base/forward bar today left untouched\n",
+	_, _ = fmt.Fprintf(out, "%d stock 1h outcomes graded since %d scanned; %d graded across a 1m-bar hole > 3h (max %.1fh past target) -> void; %d without a base/forward bar today left untouched\n",
 		scanned, deployTs, len(flagged), maxGapH, unlocatable)
 	if !apply {
-		fmt.Fprintln(out, "DRY RUN: nothing written")
+		_, _ = fmt.Fprintln(out, "DRY RUN: nothing written")
 		return len(flagged), nil
 	}
 
@@ -149,7 +149,7 @@ func run(dbPath string, apply bool, logPath string, out io.Writer) (int, error) 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	fmt.Fprintf(out, "APPLIED: %d rows voided in one transaction; old values in %s\n", wrote, logPath)
+	_, _ = fmt.Fprintf(out, "APPLIED: %d rows voided in one transaction; old values in %s\n", wrote, logPath)
 	return wrote, nil
 }
 
