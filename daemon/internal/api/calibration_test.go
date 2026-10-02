@@ -38,6 +38,7 @@ func callCalibration(t *testing.T, d Deps, horizon string) map[string]any {
 }
 
 func TestCalibrationPayloadCarriesBrierSkill(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	ctx := context.Background()
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 

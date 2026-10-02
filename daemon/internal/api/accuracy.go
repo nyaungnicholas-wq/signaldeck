@@ -131,6 +131,10 @@ type accuracyRow struct {
 	DistinctDays      *int     `json:"distinct_days"`
 	CIMethod          string   `json:"ci_method,omitempty"`
 	Note              string   `json:"note,omitempty"`
+	// FiguresWithheld is the reason this row's accuracy, null and skill are
+	// null (publication.DirectionalWithheld). The web page renders figures
+	// from the registry FILE, so it needs this to know not to.
+	FiguresWithheld string `json:"figures_withheld,omitempty"`
 }
 
 func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +344,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rows = append(rows, accuracyRow{
+		row := accuracyRow{
 			Predictor: predictor, Horizon: horizon, Variant: variant,
 			Family:            rr.Family,
 			PublicationStatus: v.PublicationStatus,
@@ -357,7 +361,20 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			DistinctDays:      rr.DistinctDays,
 			CIMethod:          rr.CIMethod,
 			Note:              rr.Note,
-		})
+		}
+		// SD-30: the directional rows (the ensemble and its benchmark) are graded
+		// on a label mostly realised at issue. The verdict above still ran and
+		// still persists; only what is served changes. Retirement stays visible,
+		// because it is a fact about the record, not a figure over this label.
+		if why, ok := publication.DirectionalWithheld(horizon); ok && (rr.Family == "direction" || rr.Family == "benchmark") {
+			row.LiveAcc, row.NullAcc, row.Skill = nil, nil, nil
+			row.FiguresWithheld = why
+			row.Reasons = append([]string{why}, row.Reasons...)
+			if !row.Retired {
+				row.PublicationStatus = "REFUSED"
+			}
+		}
+		rows = append(rows, row)
 	}
 
 	writeJSONStatus(w, http.StatusOK, accuracyResponse{

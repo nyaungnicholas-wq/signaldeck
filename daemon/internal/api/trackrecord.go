@@ -15,6 +15,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 // ── STAGE 7: LIVE OUT-OF-SAMPLE TRACK RECORD (read route) ────────────────────
@@ -199,7 +200,7 @@ func (d Deps) cachedTrackRecord(ctx context.Context, h md.Horizon) (map[string]a
 // as persisted across restarts (cachepersist.go). BUMP IT whenever that shape
 // changes (a field added, renamed or re-typed), or the first reads after the
 // deploy serve the previous build's shape.
-const trackRecordPersistFormat = 1
+const trackRecordPersistFormat = 2 // 2: SD-30 withholding; a format-1 copy would serve the unwithheld record after the restart
 
 // buildTrackRecord computes the full track-record payload for one horizon.
 // Pure build — no HTTP — so the response cache can rebuild it off-request.
@@ -286,6 +287,14 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			gateReason = "collapsed"
 			collapseReason = reason
 		}
+	}
+	// SD-30: a label mostly realised at issue is not evidence however many days
+	// it spans. Outside the registry block on purpose: an unreadable registry
+	// must not un-withhold it. The grader's own refusal and a collapse keep
+	// precedence, since each says something about the window itself.
+	withheld, sd30 := publication.DirectionalWithheld(string(h))
+	if sd30 && collapseReason == "" {
+		gated, gateReason, collapseReason = true, "refused", withheld
 	}
 
 	resp := map[string]any{
@@ -376,6 +385,14 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		resp["reliability"] = reliabilityCurve(pts)
 		resp["byRegime"] = nil
 		resp["byMarket"] = trackByMarket(pts) // descriptive only; not skill claims
+		if sd30 {
+			// The per-market hit rate and the realised frequency per bin are the
+			// withheld record by another name.
+			resp["reliability"] = []map[string]any{}
+			for _, m := range resp["byMarket"].([]map[string]any) {
+				delete(m, "dirHitRate")
+			}
+		}
 		return resp, nil
 	}
 

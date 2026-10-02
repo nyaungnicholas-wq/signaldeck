@@ -128,6 +128,7 @@ func TestAccuracy_RefutedModelReadsRetiredNotInsufficient(t *testing.T) {
 // Without the evidence claim the same thin row is merely INSUFFICIENT — which
 // confirms the RETIRED above comes from the reconciliation, not from the floors.
 func TestAccuracy_ThinWindowAloneIsInsufficient(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	_, st, d := newTestServer(t, nil)
 	d.RegistryPath = writeRegistry(t, thinWindowRegistry)
 	srv := restartWith(t, d)

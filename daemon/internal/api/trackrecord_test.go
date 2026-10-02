@@ -114,6 +114,7 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 // handler reports a winRate + Brier + IC, each with a CI, and the numbers are
 // arithmetically correct on a controlled sample.
 func TestTrackRecord_UngatedMath(t *testing.T) {
+	sd30Off(t) // the ungated math is what the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "BBB", md.Stocks, "")
@@ -193,6 +194,7 @@ func TestTrackRecord_UngatedMath(t *testing.T) {
 // earlier, already-resolved days. (A resolved row's prob is frozen; its outcome
 // is realized. There is no path for future data to re-grade a past prediction.)
 func TestTrackRecord_NoLookahead(t *testing.T) {
+	sd30Off(t) // the ungated math is what the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "CCC", md.Stocks, "")

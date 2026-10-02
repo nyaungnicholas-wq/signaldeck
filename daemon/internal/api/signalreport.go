@@ -14,6 +14,7 @@ import (
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/volregime"
@@ -177,8 +178,8 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 		out["pressure1d"] = sc
 	}
 	liveN, liveWin, err := d.St.LiveDirectionalRecord(ctx, md.H1d)
-	if err == nil && liveN >= minIndependentN {
-		out["liveDirectionalNote"] = fmtLiveNote(liveN, liveWin)
+	if note, ok := liveDirectionalNote(liveN, liveWin, err); ok {
+		out["liveDirectionalNote"] = note
 	}
 
 	// ── trade context + recent events (always) ──
@@ -192,6 +193,19 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 	}
 	out["honesty"] = "Every accuracy on this page is the measured walk-forward number for the signal's conviction band on the whole universe; the history table is THIS symbol's own record and is usually a small sample — judge it as one. An accuracy is not a return: the 2026-07-24 re-validation measured trend21's most accurate conviction band (>=0.9) at a NEGATIVE mean forward 21d return (-0.39%), because high conviction means price is already extended from its 200-day average and extended names mean-revert. Where that applies to a signal shown here it is stated in its tradeability field."
 	writeJSON(w, out)
+}
+
+// liveDirectionalNote is the platform-wide 1d line on a symbol's report: the
+// SD-30 reason while that record is withheld, else the record once it clears
+// the evidence floor, else nothing.
+func liveDirectionalNote(n int, win float64, err error) (string, bool) {
+	if why, ok := publication.DirectionalWithheld(string(md.H1d)); ok {
+		return "LIVE directional record across the platform: " + why, true
+	}
+	if err == nil && n >= minIndependentN {
+		return fmtLiveNote(n, win), true
+	}
+	return "", false
 }
 
 func fmtLiveNote(n int, win float64) string {

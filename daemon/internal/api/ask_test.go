@@ -171,6 +171,7 @@ func TestAskMemberTierAndCap(t *testing.T) {
 // fake model that echoes every row it is handed. Whatever the member entries
 // can return reaches the body, so no vendor sentinel and no crypto row may.
 func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
+	sd30Off(t) // scan the FULL member catalog, including the entry SD-30 withholds
 	fake := &echoLLM{}
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })

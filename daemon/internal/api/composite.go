@@ -23,6 +23,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/modelhealth"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -348,6 +349,13 @@ func gradeFleetEdge(rows []store.ResolvedPredictionOutcome) fleetSkill {
 	}
 	distinctDays := len(dayset)
 	cl := clusterstat.Grade(obs)
+	// SD-30 outranks the thin-record branch: more days would not make this
+	// label evidence. Sample-size facts only, exactly like a gated record.
+	if why, ok := publication.DirectionalWithheld(string(md.H1d)); ok {
+		desc := trackClusterDescriptive(cl)
+		desc.Reason = why
+		return fleetSkill{cluster: desc, note: "live edge " + why}
+	}
 	if indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays {
 		// Below the gates the record may state how much evidence it holds but not
 		// one number that reads as a skill claim, so every interval is stripped —

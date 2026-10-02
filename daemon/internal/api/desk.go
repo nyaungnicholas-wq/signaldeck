@@ -378,9 +378,18 @@ func (d Deps) deskTop(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"rows": out,
-		"note": "ranked by the composite forced-curve; decision + confidence are a relative-rank read over the platform's own calibrated predictions (measured accuracy " +
-			strconv.FormatFloat(winRate*100, 'f', 1, 64) + "%), not advice",
+		"note": "ranked by the composite forced-curve; decision + confidence are a relative-rank read over the platform's own calibrated predictions (" +
+			deskAccuracyPhrase(winRate, skillNote) + "), not advice",
 	})
+}
+
+// deskAccuracyPhrase: 0 means unknown (recommendation.Inputs.MeasuredAccuracyPct),
+// so a gated or SD-30-withheld record says why instead of "measured accuracy 0.0%".
+func deskAccuracyPhrase(winRate float64, skillNote string) string {
+	if winRate == 0 {
+		return skillNote
+	}
+	return "measured accuracy " + strconv.FormatFloat(winRate*100, 'f', 1, 64) + "%"
 }
 
 func (d Deps) registerDesk(mux *http.ServeMux) {
