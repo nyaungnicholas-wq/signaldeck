@@ -578,8 +578,10 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 				// carries): from the slackened target a pre-holiday Friday's next 1d
 				// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
 				// For stocks the NYSE calendar decides; crypto trades every day.
+				// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
+				// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
 				gap := fwd.Ts-target > 3*horizonSeconds(h)
-				if gap && marketByID[p.SymbolID] == md.Stocks {
+				if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
 					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
 				}
 				if gap {
