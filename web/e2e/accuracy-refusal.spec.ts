@@ -86,11 +86,21 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
 
   const banner = page.getByTestId("accuracy-status-banner").first();
   await expect(banner).toBeVisible();
-  await expect(banner).toHaveAttribute("data-status", /REFUSED/);
 
   // The heart of F-1: refusing must REMOVE the numbers, not decorate them. No
-  // percentage may appear anywhere on a refused page.
+  // percentage may appear anywhere on a refused page -- nor on an outage page.
   await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
+
+  // A daemon the page could not read is an OUTAGE, not a refusal (2026-10-02:
+  // timeouts rendered as REFUSED_STALE, a grader claim nobody made). It shows
+  // UNREACHABLE in the warn tone and says so; the refusal checks below are for
+  // verdicts the daemon actually returned.
+  if ((await banner.getAttribute("data-status")) === "UNREACHABLE") {
+    await expect(banner).toHaveAttribute("data-tone", "warn");
+    await expect(banner).toContainText("not a refusal by the grader");
+    return;
+  }
+  await expect(banner).toHaveAttribute("data-status", /REFUSED/);
 
   // ...and it must LOOK refused. This assertion exists because the two above
   // passed for weeks while the banner rendered
@@ -100,8 +110,9 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // that only reads the attribute cannot tell those apart. The one state this
   // page exists to shout was the one state it whispered.
   // WHICH refusal state this exercises depends on the daemon it runs against.
-  // An UNREACHABLE daemon yields REFUSED_STALE; a daemon serving a registry
-  // that is marked refused yields REFUSED. Both must be styled, and this
+  // A stale grader yields REFUSED_STALE; a daemon serving a registry that is
+  // marked refused yields REFUSED (an unreachable daemon returned above as
+  // UNREACHABLE, which is not a refusal). Both must be styled, and this
   // asserts whichever one appears -- so a green run here does NOT prove the
   // REFUSED path specifically was covered. That path is held by two other
   // things: colorMap is Record<AccuracyStatus, string>, so omitting REFUSED

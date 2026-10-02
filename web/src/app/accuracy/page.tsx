@@ -19,7 +19,7 @@ import {
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
 import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
-import { classifyPublicationFetch } from "@/lib/publicationfetch";
+import { classifyPublicationFetch, unavailableReason } from "@/lib/publicationfetch";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 export const dynamic = "force-dynamic";
@@ -350,7 +350,7 @@ async function loadPublicationStatus(): Promise<{
   refusedSince?: string;
   rows: PublishedRow[];
   withheldHorizons?: string[];
-} | null> {
+}> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   let res: Response | null = null;
   let body: unknown = null;
@@ -390,7 +390,7 @@ async function loadPublicationStatus(): Promise<{
       // them. It is NOT a refusal either: the grader never spoke, and this
       // used to render as REFUSED_STALE, telling visitors the figures had been
       // withheld when the daemon was merely slow (2026-10-02).
-      return null;
+      return { status: "UNREACHABLE", reason: unavailableReason(got), rows: [] };
     case "private":
       // A 401 carries no `reason` field, so it used to fall through to the
       // "the grading daemon is unreachable" default — naming the wrong cause
@@ -431,28 +431,11 @@ export default async function AccuracyPage() {
   const pub = await loadPublicationStatus();
 
   // Fail closed. A refusal, or a daemon that cannot be reached, ends the page —
-  // but they are different facts and are said differently.
-  if (!pub) {
-    return (
-      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
-        </header>
-        <RefusalNotice
-          status="UNREACHABLE"
-          title="Temporarily unavailable"
-          tone="warn"
-          reason="The accuracy service did not answer in time, so no figures are shown. This is a connection problem, not a refusal by the grader, and it says nothing about the record. Retry in a minute."
-          testId="accuracy-status-banner"
-        >
-          <Link href="/accuracy" className="chip w-fit">
-            Retry
-          </Link>
-        </RefusalNotice>
-      </div>
-    );
-  }
+  // but they are different facts and are said differently: an outage is a
+  // temporary connection problem (warn, Retry), a refusal is the grader's call.
   if (pub.status !== "OK") {
+    const priv = pub.status === "PRIVATE";
+    const outage = pub.status === "UNREACHABLE";
     return (
       <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
         <header className="flex flex-col gap-2">
@@ -460,28 +443,36 @@ export default async function AccuracyPage() {
         </header>
         <RefusalNotice
           status={pub.status}
-          title={pub.status === "PRIVATE" ? "Sign-in required" : "Publication refused"}
-          tone={pub.status === "PRIVATE" ? "warn" : "bad"}
+          title={priv ? "Sign-in required" : outage ? "Temporarily unavailable" : "Publication refused"}
+          tone={priv || outage ? "warn" : "bad"}
           reason={pub.reason}
           gradedAt={pub.gradedAt}
           refusedSince={pub.refusedSince}
           testId="accuracy-status-banner"
         >
-          {pub.status === "PRIVATE" ? (
+          {priv ? (
             <Link href="/login" className="chip w-fit">
               Sign in
+            </Link>
+          ) : outage ? (
+            <Link href="/accuracy" className="chip w-fit">
+              Retry
             </Link>
           ) : null}
         </RefusalNotice>
         <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          {pub.status === "PRIVATE"
+          {priv
             ? "Nothing statistical is being withheld: once signed in, the same daemon verdict renders here."
-            : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. When the refusal names collapsed cross-sections, those are historical days inside a window anchored to the survivorship epoch — the window does not roll forward, so they cannot age out and further grading alone will not clear them."}
+            : outage
+              ? "No accuracy figures are shown while the service cannot be read: an unknown about whether the numbers are current resolves to not printing them. When it answers, the daemon's own verdict renders here."
+              : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. When the refusal names collapsed cross-sections, those are historical days inside a window anchored to the survivorship epoch — the window does not roll forward, so they cannot age out and further grading alone will not clear them."}
         </p>
-        {pub.status !== "PRIVATE" ? (
+        {!priv ? (
           <section className="panel px-5 py-4" aria-label="historical record">
             <div className="mono text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--dim)" }}>
-              Historical record — unaffected by today&apos;s refusal
+              {outage
+                ? "Historical record — unaffected by this outage"
+                : "Historical record — unaffected by today’s refusal"}
             </div>
             <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
               The flagship directional model was retired on {FLAGSHIP_RETIREMENT.date} by a
