@@ -142,7 +142,9 @@ WHERE s.symbol = :symbol AND s.market = 'stocks'`,
 			"right, the hit rate, the mean accuracy CLAIMED at call time, and the naive 'nothing changes' " +
 			"baseline's hits on the same rows. A raw tally: the published accuracy figure applies further " +
 			"gates (grading epoch, quarantine) and lives on the Record page.",
-		Tier: TierMember, MaxRows: 10,
+		// Operator only: a raw live hit rate skips the publication gates, so it
+		// must not reach members while /api/accuracy refuses to publish.
+		Tier: TierOperator, MaxRows: 10,
 		Columns: []string{"kind", "graded", "correct", "hit_rate", "mean_claimed_accuracy", "naive_graded", "naive_correct"},
 		SQL: `SELECT o.kind, COUNT(*) AS graded, SUM(o.correct) AS correct, ROUND(AVG(o.correct), 3) AS hit_rate,
        ROUND(AVG(o.historical_accuracy), 3) AS mean_claimed_accuracy,
@@ -156,7 +158,8 @@ GROUP BY o.kind ORDER BY o.kind`,
 		Name: "directional_track_record",
 		Desc: "The directional (up/down) prediction track record per horizon over a lookback: resolved " +
 			"predictions, how many called the direction right (probability above 0.5 = up), the hit rate, " +
-			"and the share of outcomes that went up (the base rate to beat). Counts and rates only.",
+			"and the share of outcomes that went up (the base rate to beat). Counts and rates only; a horizon " +
+			"with fewer than 10 resolved predictions in the window is not shown.",
 		Params: []Param{pDays(90, 365)}, Tier: TierMember, MaxRows: 10,
 		Columns: []string{"horizon", "resolved", "directional_hits", "hit_rate", "base_rate_up", "first_ts", "last_ts"},
 		SQL: `SELECT o.horizon, COUNT(*) AS resolved,
@@ -166,7 +169,7 @@ GROUP BY o.kind ORDER BY o.kind`,
 FROM prediction_outcomes o JOIN symbols s ON s.id = o.symbol_id
 WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND s.market = 'stocks'
   AND o.ts >= CAST(strftime('%s', 'now') AS INTEGER) - :days * 86400
-GROUP BY o.horizon ORDER BY o.horizon`,
+GROUP BY o.horizon HAVING COUNT(*) >= 10 ORDER BY o.horizon`, // datalicense.go: a narrowable realized-outcome aggregate is derived only over >= 10 rows
 	},
 	{
 		Name:   "recent_regime_flips",

@@ -14,6 +14,8 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/copilot"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
 
@@ -192,10 +194,38 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Every member entry, every param filled toward the seeded rows; each
-	// symbol entry is also asked about the crypto sentinel's bare ticker.
+	// Rows for the member entries the base seed leaves empty: a stock and a
+	// crypto regime flip (labels only), a pre-registration record, and enough
+	// resolved stock predictions to clear directional_track_record's floor of
+	// 10. The outcomes' forward returns are not sentinels: no member entry may
+	// print one, and the sentinel ones seeded above are what the scan hunts.
+	now := time.Now().Unix()
+	for _, id := range []int64{fx.sntl.ID, fx.sntc.ID} {
+		for i, lbl := range []string{"calm", "uptrend"} {
+			if err := st.UpsertRegime(ctx, id, now-int64(2-i)*3600, lbl, 0.5, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := st.AppendPrereg(ctx, prereg.Record{Ts: now, Kind: "copilot_probe", SpecJSON: "{}",
+		SpecHash: "copilotprobe", Note: "sentinel probe"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		ts := now/86400*86400 - int64(10+i)*86400
+		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: fx.sntl.ID, Horizon: md.H1d, Ts: ts,
+			RawProb: 0.6, CalProb: 0.6, NUsed: 40, Components: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.ResolvePrediction(ctx, fx.sntl.ID, md.H1d, ts, 0.0105); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Every member entry, every param filled toward the seeded SNTL rows.
 	var calls []string
-	for _, q := range copilot.For(copilot.TierMember) {
+	member0 := copilot.For(copilot.TierMember)
+	for _, q := range member0 {
 		params := map[string]any{}
 		for _, p := range q.Params {
 			switch p.Kind {
@@ -210,22 +240,16 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"query": q.Name, "params": params})
 		calls = append(calls, string(b))
 	}
-	if len(calls) < 9 {
+	if len(calls) < 8 {
 		t.Fatalf("only %d member entries", len(calls))
 	}
 	rowsByQuery := map[string]int{}
-	sents := vendorSentinels()
+	var bodies []string
 	for i := 0; i < len(calls); i += copilot.MaxQueries {
 		fake.queue = append(fake.queue, planFor(calls[i:min(i+copilot.MaxQueries, len(calls))]...))
 		code, body := askAs(t, member, srv.URL, "tell me everything")
 		if code != 200 {
 			t.Fatalf("member ask %d: %d %s", i, code, body)
-		}
-		for _, l := range leaks(body, sents) {
-			t.Errorf("a member catalog answer leaks a vendor value (%s); see datalicense.go D1", l)
-		}
-		if strings.Contains(body, "SNTC") {
-			t.Errorf("a member catalog answer carries a crypto row: %.400s", body)
 		}
 		var res copilot.Answer
 		if err := json.Unmarshal([]byte(body), &res); err != nil {
@@ -234,13 +258,84 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 		for _, c := range res.Citations {
 			rowsByQuery[c.Query]++
 		}
+		bodies = append(bodies, body)
 	}
-	// Not a hollow pass: the entries that read the seeded tables returned rows,
-	// and the echo put them in the body.
-	for _, q := range []string{"regime_forecasts_for_symbol", "strongest_regime_calls", "vol_regime_for_symbol",
-		"directional_track_record", "vol_forecast_record", "my_journal_stats"} {
-		if rowsByQuery[q] == 0 {
-			t.Errorf("%s returned no rows from the sentinel store, so its scan proves nothing (%v)", q, rowsByQuery)
+	// A scan of nothing proves nothing: EVERY member entry must have returned
+	// rows from the sentinel store, and the echo put them in the body.
+	for _, q := range member0 {
+		if rowsByQuery[q.Name] == 0 {
+			t.Errorf("%s returned no rows from the sentinel store, so its scan proves nothing (%v)", q.Name, rowsByQuery)
 		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	sents := vendorSentinels()
+	for _, body := range bodies {
+		for _, l := range leaks(body, sents) {
+			t.Errorf("a member catalog answer leaks a vendor value (%s); see datalicense.go D1", l)
+		}
+		if strings.Contains(body, "SNTC") {
+			t.Errorf("a member catalog answer carries a crypto row: %.400s", body)
+		}
+	}
+}
+
+// TestAskCapCountsOnlyAsksThatReachTheModel: a refused plan counts (it cost an
+// LLM call); a 400, a 403 or a 503 refused before any LLM call does not.
+func TestAskCapCountsOnlyAsksThatReachTheModel(t *testing.T) {
+	ctx := context.Background()
+	used := func(st *store.Store, name string) string {
+		t.Helper()
+		u, _, err := st.GetUserByName(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := st.GetMeta(ctx, "copilot_ask:"+askDay()+":"+fmt.Sprint(u.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	// No LLM: the operator's asks are 503 and 400, and none counts.
+	srv, st, _, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	owner := ownerClient(t, srv.URL)
+	if code, _ := askAs(t, owner, srv.URL, "what regimes are live?"); code != 503 {
+		t.Fatalf("no-LLM ask: %d", code)
+	}
+	if v := used(st, "owner"); v != "" {
+		t.Errorf("a 503 counted against the cap: %q", v)
+	}
+
+	fake := &echoLLM{plan: planFor(`{"query":"worker_health","params":{}}`)}
+	publishedLLM = fake
+	t.Cleanup(func() { publishedLLM = nil })
+	srv, st, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	member := signupVerified(t, srv, mb, "cat", "cat@gmail.com")
+	owner = ownerClient(t, srv.URL)
+	for i := 0; i < 3; i++ {
+		if code, _ := askAs(t, member, srv.URL, "anything"); code != 403 {
+			t.Fatalf("member ask with the flag off: %d", code)
+		}
+		if code, _ := askAs(t, owner, srv.URL, ""); code != 400 {
+			t.Fatalf("empty question: %d", code)
+		}
+	}
+	if v1, v2 := used(st, "cat"), used(st, "owner"); v1 != "" || v2 != "" || fake.calls != 0 {
+		t.Errorf("refusals before any LLM call counted: member %q, operator %q, LLM calls %d", v1, v2, fake.calls)
+	}
+	// worker_health is an operator entry, so a member plan naming it would be
+	// refused; the operator's runs. Then a plan the catalog refuses: it still
+	// cost an LLM call and counts.
+	if code, body := askAs(t, owner, srv.URL, "worker health?"); code != 200 {
+		t.Fatalf("operator ask: %d %s", code, body)
+	}
+	fake.queue = append(fake.queue, planFor(`{"query":"no_such_query","params":{}}`))
+	if code, _ := askAs(t, owner, srv.URL, "something odd"); code != 422 {
+		t.Fatalf("refused plan: %d", code)
+	}
+	if v := used(st, "owner"); v != "2" {
+		t.Errorf("operator count %q after one answered ask and one refused plan, want 2", v)
 	}
 }

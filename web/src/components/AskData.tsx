@@ -171,9 +171,9 @@ export default function AskData() {
                       <React.Fragment key={i}>{part.text}</React.Fragment>
                     ) : (
                       <React.Fragment key={i}>
-                      {part.ids.map((id) => (
+                      {part.ids.map((id, j) => (
                         <button
-                          key={id}
+                          key={`${i}-${j}-${id}`}
                           type="button"
                           onClick={() => handleCitationClick(id)}
                           aria-expanded={openId === id}

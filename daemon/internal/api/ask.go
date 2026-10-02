@@ -91,11 +91,21 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "ask a question of 1 to 500 characters")
 		return
 	}
+	db, err := d.St.OpenQueryOnly()
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	defer db.Close() //nolint:errcheck
+	// The daily cap counts every ask that reaches the model, including a plan
+	// the catalog then refuses (it cost an LLM call). Everything above (401,
+	// 403, 503, a 400 question, a store error) refused before any LLM call and
+	// is not counted.
 	limit := askCapOperator
 	if tier == copilot.TierMember {
 		limit = askCapMember
 	}
-	n, err := d.St.IncrAskCount(r.Context(), userID(r), time.Now().UTC().Format("2006-01-02"))
+	n, err := d.St.IncrAskCount(r.Context(), userID(r), askDay())
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -104,12 +114,6 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusTooManyRequests, "you have used today's questions; the limit resets at UTC midnight")
 		return
 	}
-	db, err := d.St.OpenQueryOnly()
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	defer db.Close() //nolint:errcheck
 	res, err := copilot.Asker{LLM: d.LLM, DB: db, Tier: tier, UID: userID(r)}.Ask(r.Context(), q)
 	switch {
 	case err == nil:
@@ -125,6 +129,9 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadGateway, "could not answer that right now; try again shortly")
 	}
 }
+
+// askDay is the UTC day the cap counts against.
+func askDay() string { return time.Now().UTC().Format("2006-01-02") }
 
 func (d Deps) registerAsk(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ask", d.askStatus)

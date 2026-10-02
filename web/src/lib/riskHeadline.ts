@@ -98,7 +98,13 @@ export function riskHeadline(record: unknown): RiskHeadline {
   }
   if (verdict === "INSUFFICIENT" || verdict === "ACCRUING") {
     const progress = horizons
-      .map((h) => `${Math.min(h.distinctDays, minDays)} of ${minDays} trading days (${horizonName(h.horizon)})`)
+      // The true count: past the floor it reads "64 trading days (floor 60)",
+      // never a clamped "60 of 60".
+      .map((h) =>
+        h.distinctDays >= minDays
+          ? `${h.distinctDays} trading days (floor ${minDays}), awaiting its grade (${horizonName(h.horizon)})`
+          : `${h.distinctDays} of ${minDays} trading days (${horizonName(h.horizon)})`,
+      )
       .join("; ");
     const lead =
       verdict === "ACCRUING"

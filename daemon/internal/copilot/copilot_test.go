@@ -189,6 +189,8 @@ func TestValidateRejects(t *testing.T) {
 		{"int under min", TierMember, "recent_regime_flips", map[string]any{"days": 0.0}},
 		{"member on an operator entry", TierMember, "worker_health", nil},
 		{"member on the paper book", TierMember, "paper_book_summary", nil},
+		// A raw live hit rate skips the publication gates /api/accuracy applies.
+		{"member on raw live grades", TierMember, "regime_live_grades_by_kind", nil},
 		// IDOR: the journal entry has no user parameter to aim at another member.
 		{"another user's journal", TierMember, "my_journal_stats", map[string]any{"uid": 2.0}},
 		{"another user's journal by user_id", TierMember, "my_journal_stats", map[string]any{"user_id": 2.0}},
@@ -235,6 +237,8 @@ func TestCheckCitations(t *testing.T) {
 		"AAPL is in an uptrend with conviction 0.82 [q1:r1].",
 		"The hit rate is 0.61 [q1:r1, q2:r1]. It beat the baseline [q1:r2].",
 		"No row answers that [q1:r1].",
+		"AAPL is calm [q1:r1]. The rows do not answer the rest.",
+		"AAPL is calm [q1:r1]! I could not find MSFT.",
 	}
 	for _, s := range good {
 		if _, ok := CheckCitations(s, rows); !ok {
@@ -242,12 +246,21 @@ func TestCheckCitations(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"uncited":             "AAPL is in an uptrend.",
-		"invented id":         "AAPL is in an uptrend [q3:r1].",
-		"invented bare id":    "AAPL is in an uptrend [q1:r1], see also q9:r9.",
-		"invented reference":  "AAPL is in an uptrend [regime_forecasts#AAPL/trend21] [q1:r1].",
-		"uncited number":      "AAPL is in an uptrend [q1:r1]. Its hit rate is 73%.",
-		"uncited number line": "Uptrend [q1:r1]\nconviction 0.9",
+		"uncited":                  "AAPL is in an uptrend.",
+		"invented id":              "AAPL is in an uptrend [q3:r1].",
+		"invented bare id":         "AAPL is in an uptrend [q1:r1], see also q9:r9.",
+		"invented reference":       "AAPL is in an uptrend [regime_forecasts#AAPL/trend21] [q1:r1].",
+		"uncited number":           "AAPL is in an uptrend [q1:r1]. Its hit rate is 73%.",
+		"uncited number line":      "Uptrend [q1:r1]\nconviction 0.9",
+		"uncited label":            "AAPL is in an uptrend [q1:r1]. AAPL is in a calm regime.",
+		"uncited question":         "AAPL is in an uptrend [q1:r1]. Is MSFT calm?",
+		"uncited exclamation":      "AAPL is in an uptrend [q1:r1]. MSFT is calm!",
+		"cannot-answer first":      "I could not find MSFT. AAPL is calm [q1:r1].",
+		"facts as a cannot-answer": "AAPL is calm [q1:r1]. The rows do not cover MSFT, but MSFT is in a downtrend.",
+		"long cannot-answer":       "AAPL is calm [q1:r1]. The rows do not say so but every other stock here is in an uptrend now.",
+	}
+	if _, ok := CheckCitations("AAPL is in a calm regime.", rows); ok {
+		t.Error("a single uncited non-numeric sentence was accepted")
 	}
 	for name, s := range bad {
 		if _, ok := CheckCitations(s, rows); ok {
@@ -449,5 +462,39 @@ func TestMemberCatalogIsImpersonal(t *testing.T) {
 	}
 	if scoped != 1 {
 		t.Errorf("%d scoped member entries, want exactly the journal", scoped)
+	}
+}
+
+// TestTrackRecordFloor: a horizon with fewer than 10 resolved predictions in
+// the window is withheld (datalicense.go: a narrowable aggregate of realized
+// outcomes is derived only over >= 10 rows).
+func TestTrackRecordFloor(t *testing.T) {
+	st, db := openStore(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "Aaa Inc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, p, err := Validate(TierMember, "directional_track_record", map[string]any{"days": 30.0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Now().Unix() / 86400 * 86400
+	for i := 1; i <= 10; i++ {
+		ts := day - int64(i)*86400
+		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
+			RawProb: 0.6, CalProb: 0.6, NUsed: 40, Components: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, ts, 0.01); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := Run(ctx, db, q, p, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[bool]int{true: 1, false: 0}[i >= 10]; len(rows) != want {
+			t.Fatalf("%d resolved: %d rows, want %d: %v", i, len(rows), want, rows)
+		}
 	}
 }

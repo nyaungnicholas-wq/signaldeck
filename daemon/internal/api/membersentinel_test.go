@@ -467,7 +467,7 @@ var memberProbeExempt = map[string]string{
 
 // memberProbeFloor is the measured size of the probed member surface. It may
 // only go up: a drop means routes left the scan.
-const memberProbeFloor = 45
+const memberProbeFloor = 51
 
 func memberProbes(fx sentinelFixture) map[string]memberProbe {
 	get := func(url, marker string) memberProbe { return memberProbe{method: "GET", url: url, marker: marker} }

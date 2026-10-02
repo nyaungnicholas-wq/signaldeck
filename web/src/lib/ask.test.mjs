@@ -21,6 +21,16 @@ test("citation groups split out of the answer text", () => {
   // Brackets that are not citations stay text (the daemon refuses such answers anyway).
   assert.deepEqual(splitCitations("see [note] here"), [{ text: "see [note] here" }]);
   assert.deepEqual(splitCitations(""), []);
+  // A bare id is a chip too, and an id repeated in one group renders once
+  // (two chips with one key would be a React key collision).
+  assert.deepEqual(splitCitations("calm q1:r1 and [q1:r2, q1:r2]"), [
+    { text: "calm " },
+    { ids: ["q1:r1"] },
+    { text: " and " },
+    { ids: ["q1:r2"] },
+  ]);
+  const page = src("../components/AskData.tsx");
+  assert.match(page, /key=\{`\$\{i\}-\$\{j\}-\$\{id\}`\}/, "chip keys are unique per position");
 });
 
 test("cells: unix-second *_ts as UTC, null as a dash, the rest verbatim", () => {

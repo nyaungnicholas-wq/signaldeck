@@ -41,17 +41,20 @@ export interface AskAnswer {
 
 export type AnswerPart = { text: string } | { ids: string[] };
 
-const CITE = /\[(\s*q\d+:r\d+(?:\s*[,;]\s*q\d+:r\d+)*\s*)\]/g;
+// A bracketed group of ids, or a bare id (the daemon accepts both).
+const CITE = /\[(\s*q\d+:r\d+(?:\s*[,;]\s*q\d+:r\d+)*\s*)\]|\b(q\d+:r\d+)\b/g;
 
 /** Splits an answer into text and citation groups: "a [q1:r1, q1:r2]." gives
- *  [{text:"a "},{ids:["q1:r1","q1:r2"]},{text:"."}]. */
+ *  [{text:"a "},{ids:["q1:r1","q1:r2"]},{text:"."}]. A bare id is a group of
+ *  one; an id repeated within a group appears once. */
 export function splitCitations(answer: string): AnswerPart[] {
   const out: AnswerPart[] = [];
   let last = 0;
   for (const m of answer.matchAll(CITE)) {
     const at = m.index ?? 0;
     if (at > last) out.push({ text: answer.slice(last, at) });
-    out.push({ ids: m[1].split(/[,;]/).map((s) => s.trim()) });
+    const ids = m[1] !== undefined ? m[1].split(/[,;]/).map((s) => s.trim()) : [m[2]];
+    out.push({ ids: [...new Set(ids)] });
     last = at + m[0].length;
   }
   if (last < answer.length) out.push({ text: answer.slice(last) });

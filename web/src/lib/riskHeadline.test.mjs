@@ -36,6 +36,13 @@ test("the decision ignores the numbers: winning numbers without the pass verdict
   assert.doesNotMatch(r.text, /beaten/);
 });
 
+test("past the floor the true day count shows, not a clamped 60", () => {
+  const r = riskHeadline(rec({ horizon: 1, distinctDays: 64, verdict: "ACCRUING" }));
+  assert.match(r.text, /64 trading days \(floor 60\), awaiting its grade \(next day\)/);
+  assert.doesNotMatch(r.text, /60 of 60/);
+  assert.match(r.text, /14 of 60 trading days \(next week\)/);
+});
+
 test("the headline cell is horizon 1: a passing horizon 5 alone does not promote", () => {
   const r = riskHeadline(rec({ horizon: 1, distinctDays: 61, verdict: "NO SKILL DEMONSTRATED" },
     { horizon: 5, distinctDays: 61, verdict: "BEATS THE NULLS" }));
