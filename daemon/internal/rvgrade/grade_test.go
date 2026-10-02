@@ -135,6 +135,16 @@ func TestOpenReadingsHoldInsteadOfRuling(t *testing.T) {
 		t.Fatalf("wrong-sign headline: verdict %q (%s), want ACCRUING naming the gap", r.Verdict, r.Reason)
 	}
 
+	// A control on fewer days than the floor never decides BEATS vs ARTIFACT.
+	r = Decide(Grade{Headline: strong, Control: cellAt(-0.05, -8, 12)})
+	if r.Verdict != Accruing || !strings.Contains(r.Reason, "under the evidence floor") {
+		t.Fatalf("12-day control: verdict %q (%s), want ACCRUING", r.Verdict, r.Reason)
+	}
+	r = Decide(Grade{Headline: strong, Control: Cell{Days: 80}})
+	if r.Verdict != Accruing || !strings.Contains(r.Reason, "control statistic not computable") {
+		t.Fatalf("undefined control: verdict %q (%s), want ACCRUING", r.Verdict, r.Reason)
+	}
+
 	// An undefined headline statistic is never read as a verdict.
 	r = Decide(Grade{Headline: Cell{Days: 80}, Control: strong})
 	if r.Verdict != Accruing {

@@ -112,7 +112,7 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 	if start.unregistered {
 		study = rvgrade.Ruling{Verdict: rvgrade.Insufficient,
 			Reason: "The forward test is not on the pre-registration chain, so no live window exists; no verdict either way."}
-	} else if start.specMismatch {
+	} else if start.specMismatch && study.Verdict != rvgrade.Insufficient {
 		study = rvgrade.Ruling{Verdict: rvgrade.Accruing,
 			Reason: "The registration on the chain does not hash to the spec this grader was built against; held, not ruled."}
 	}

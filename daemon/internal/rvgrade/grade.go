@@ -244,6 +244,7 @@ const (
 	gapWrongSign  = "UNREGISTERED: significant in EWMA's favour"
 	gapNoControl  = "UNDEFINED: control statistic not computable"
 	gapNoHeadline = "UNDEFINED: headline statistic not computable"
+	gapThinCtl    = "UNDEFINED: RV^CC control under the evidence floor"
 )
 
 // Divisors are the three readings of "Bonferroni-corrected across family size
@@ -299,6 +300,11 @@ func Decide(g Grade) Ruling {
 					out = gapWrongSign
 				case !ctl.OK:
 					out = gapNoControl
+				case ctl.Days < spec.MinDistinctDays:
+					// Whether the 60-day floor binds the control too is not
+					// said (ledger A6); a ruling off fewer control days is
+					// not made.
+					out = gapThinCtl
 				default:
 					holds := ctl.Mean < 0
 					switch cb {

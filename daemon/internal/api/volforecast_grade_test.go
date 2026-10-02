@@ -153,3 +153,29 @@ func TestVolRecordFloorAndStartRule(t *testing.T) {
 		}
 	}
 }
+
+// No registration on the chain: no live window, so nothing is graded at all.
+func TestVolRecordWithoutRegistrationIsInsufficient(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	reg := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
+	seedRVStudy(t, st, 0, reg+60, reg+86400, 64)
+	for h, r := range readRVRecord(t, d) {
+		if r.Verdict != "INSUFFICIENT" || len(r.Grade) != 0 || r.DistinctDays != 0 {
+			t.Fatalf("h%d: verdict %q, %d days, grade %s; want INSUFFICIENT, 0, none", h, r.Verdict, r.DistinctDays, r.Grade)
+		}
+	}
+}
+
+// A drifted spec below the floor still reads INSUFFICIENT, never "floor met".
+func TestVolRecordDriftedSpecBelowFloorStaysInsufficient(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	reg := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
+	seedRVStudy(t, st, reg, reg+60, reg+86400, 20)
+	if _, err := st.AppendPrereg(context.Background(), prereg.Record{Kind: volprereg.RVForecastKind,
+		Ts: reg + 1, SpecHash: "x", Note: "amended", SpecJSON: `{"specDigest":"not-this-spec"}`}); err != nil {
+		t.Fatal(err)
+	}
+	if h1 := readRVRecord(t, d)[1]; h1.Verdict != "INSUFFICIENT" {
+		t.Fatalf("got %q, want INSUFFICIENT", h1.Verdict)
+	}
+}

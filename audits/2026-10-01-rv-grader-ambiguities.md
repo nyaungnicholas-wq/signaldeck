@@ -21,6 +21,7 @@ as an amendment record, never as an edit to the filed spec.
 | A3 | "the headline clears its bar but the RV^CC control does not" / "the RV^CC control holds" | control must clear the **same corrected bar** with HAR's sign, the **uncorrected 0.05** with HAR's sign, or **HAR's sign alone** | `Decide`, `controlBar` |
 | A4 | NO SKILL is "p at or above 0.05"; BEATS needs "the sign in HAR's favour" | **gap.** HAR *significantly worse* than EWMA matches no registered outcome. The grader reports `UNREGISTERED: significant in EWMA's favour` and holds at ACCRUING. It does not map this onto NO SKILL. | `Decide` |
 | A5 | "fewer than 60 distinct live trading days → INSUFFICIENT" | Implemented as a **rolling** grade over every live day at each rebuild, which is the literal reading. The alternative is a single grade frozen at the first 60 days. A rolling verdict can change from day to day, and the rule charges nothing for repeated live looks (optional stopping). | endpoint |
+| A6 | "fewer than 60 distinct live trading days → INSUFFICIENT" | It is unsaid whether the floor also binds the **RV^CC control**. Missing or zero-move closes can leave the control with fewer days than the headline. The grader will not rule BEATS vs ARTIFACT off a control under 60 days: it holds at `UNDEFINED: RV^CC control under the evidence floor`. The reference refuses its control below 30 days. | `Decide` |
 
 18 combinations of A1 × A2 × A3 are published in `horizons[0].readings`. Measured
 sensitivity: for a headline t of −3.2 over 80 days, Student-t p ≈ 0.0020 and normal
@@ -66,11 +67,23 @@ p ≈ 0.0014, which straddle 0.05/26 = 0.00192. A1 and A2 matter exactly in that
   resolution. A later bar revision moves the control's outcome but not the headline's.
   There is no wild-move guard on RV^CC, which matches `cc_series` in the reference.
 
+- **Rows enter a cell only when both losses are defined.** The reference averages each
+  model over its own valid rows instead. The two are identical on live data, because the
+  store refuses non-positive forecasts and nulls. "30 symbols on a day" is counted as
+  loss-defined forecasts in the cell, not as all resolved forecasts that day.
+- **Resolver forming-bar risk (pre-existing, `pipeline/rvforecast.go` RVOutcomeWorker).**
+  The resolver does not check `DailyBarSettled` on the last bar of the outcome window. A
+  pass during market hours could therefore freeze an h=1 RV^GK outcome from a partial
+  session, while `CCTarget` later reads the settled bar. Not changed here. It is a
+  resolver fix, not grading.
+
 ## Adjacent copy that a verdict will contradict (not changed here)
 
 - `RVRecordCaveat` opens "LIVE RECORD, ACCRUING. This is not a claim of skill." It stays
   on the response even under BEATS THE NULLS.
-- `meanQlike`, `vsEwma` and `vsRandomWalk` are pooled row means, not the day-clustered
+- `meanQlike`, `vsEwma`, `vsRandomWalk`, `n` and `ungradable` come from
+  `store.RVLiveRecord`, which has no start-rule filter. This is a no-op today, because no
+  forecast predates the registration. They are also pooled row means, not the day-clustered
   statistic. On a pass, step 9's `riskHeadline.ts` prints `vsEwma`. The registered number
   is `grade.headline.meanDiff`.
 - Step 9's pass sentence says the "next-day **and next-week**" forecast beat its
