@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 // Tier says who may run a catalog entry.
@@ -68,6 +70,10 @@ type Query struct {
 	// PerUserReason says why a Scoped entry answers members differently; every
 	// other member entry gives every member the same rows (impersonal).
 	PerUserReason string `json:"-"`
+	// Withheld, when it reports true, refuses the entry to members with the
+	// stated reason: a publication decision (SD-30), not a tier. The operator
+	// keeps the raw tally.
+	Withheld func() (string, bool) `json:"-"`
 }
 
 // MaxQueries is the most entries one plan may run.
@@ -164,7 +170,8 @@ GROUP BY o.kind ORDER BY o.kind`,
 		// differenced into a per-day series of realized outcomes.
 		Params: []Param{{Name: "days", Desc: "lookback window in days: 30, 90 (default) or 365", Kind: KindEnum,
 			Enum: []string{"30", "90", "365"}, Default: "90"}}, Tier: TierMember, MaxRows: 10,
-		Columns: []string{"horizon", "resolved", "directional_hits", "hit_rate", "base_rate_up", "first_ts", "last_ts"},
+		Withheld: func() (string, bool) { return publication.DirectionalWithheld("1d") },
+		Columns:  []string{"horizon", "resolved", "directional_hits", "hit_rate", "base_rate_up", "first_ts", "last_ts"},
 		SQL: `SELECT o.horizon, COUNT(*) AS resolved,
        SUM(CASE WHEN (o.prob > 0.5) = (o.up = 1) THEN 1 ELSE 0 END) AS directional_hits,
        ROUND(AVG(CASE WHEN (o.prob > 0.5) = (o.up = 1) THEN 1.0 ELSE 0.0 END), 4) AS hit_rate,
@@ -279,7 +286,16 @@ func Find(name string) (Query, bool) {
 
 // Allowed reports whether a caller of tier may run q.
 func (q Query) Allowed(caller Tier) bool {
-	return caller == TierOperator || q.Tier == TierMember
+	_, withheld := q.withheldFrom(caller)
+	return caller == TierOperator || (q.Tier == TierMember && !withheld)
+}
+
+// withheldFrom reports why q is withheld from caller, if it is.
+func (q Query) withheldFrom(caller Tier) (string, bool) {
+	if caller == TierOperator || q.Withheld == nil {
+		return "", false
+	}
+	return q.Withheld()
 }
 
 // For is the catalog a caller of tier may use.
@@ -310,6 +326,9 @@ func Validate(caller Tier, name string, raw map[string]any) (Query, map[string]a
 	q, ok := Find(name)
 	if !ok {
 		return Query{}, nil, fmt.Errorf("unknown query %q", name)
+	}
+	if why, ok := q.withheldFrom(caller); ok {
+		return Query{}, nil, fmt.Errorf("query %q is %s", name, why)
 	}
 	if !q.Allowed(caller) {
 		return Query{}, nil, fmt.Errorf("query %q is not available to this account", name)
