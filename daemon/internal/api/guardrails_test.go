@@ -144,7 +144,7 @@ func TestMemberForecastsAreImpersonal(t *testing.T) {
 var memberInputs = map[string]string{
 	// What to look up: the same public answer for anyone who asks.
 	"symbol": "ticker to look up", "market": "stocks/futures (crypto refused for members)",
-	"q": "company name search", "ticker": "TradingView webhook ticker (shared-secret inbound, serves nothing)",
+	"q": "company or journal-symbol search (ticker or name)", "ticker": "TradingView webhook ticker (shared-secret inbound, serves nothing)",
 	"id": "claim, research-ledger or lineage id", "kind": "lineage node kind / model-health forecast kind",
 	"horizon": "forecast horizon (1d, 21d...)", "feature": "evidence list filter", "status": "evidence list filter",
 	"form": "SEC form type filter", "code": "Form 4 transaction-code filter", "manager": "13F manager filter",

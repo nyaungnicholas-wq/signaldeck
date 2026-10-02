@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	// MinN is the resolved-call floor below which no hit rate, interval or
-	// baseline is shown: the platform's own withholding rule.
+	// MinN is the call-day floor (distinct entry sessions among resolved
+	// calls) below which no hit rate, interval or baseline is shown: the
+	// platform's own withholding rule, counted on the units the interval uses.
 	MinN = 30
 	// NoDataSessions: an open call whose bars are still missing this many
 	// sessions after its exit session is voided ("no data").
@@ -100,11 +101,11 @@ func CanWithdraw(ctx context.Context, st *store.Store, c store.MemberCall, now t
 	return !exists, err
 }
 
-// Stats is a member's record: counts always, rates only from MinN independent
-// units (CallDays) up.
+// Stats is a member's record: counts always, rates only from MinN call days
+// (CallDays) up.
 type Stats struct {
 	Resolved       int      `json:"resolved"`
-	CallDays       int      `json:"callDays"` // distinct entry sessions among resolved calls: the independent units
+	CallDays       int      `json:"callDays"` // distinct entry sessions among resolved calls: the units the interval counts
 	Hits           int      `json:"hits"`
 	Misses         int      `json:"misses"`
 	Open           int      `json:"open"`

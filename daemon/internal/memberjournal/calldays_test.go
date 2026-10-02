@@ -207,6 +207,8 @@ func TestSummarizeCountsCallDaysNotCalls(t *testing.T) {
 		Outcome: "",
 		EntryTs: 998 * 86400,
 	})
+	// Add a withdrawn call
+	calls5 = append(calls5, store.MemberCall{Call: "up", Status: "withdrawn", EntryTs: 997 * 86400})
 	s = Summarize(calls5)
 	if s.Resolved != 29 {
 		t.Errorf("Resolved = %d, want 29", s.Resolved)

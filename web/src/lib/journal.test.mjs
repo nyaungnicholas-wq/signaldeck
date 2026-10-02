@@ -15,14 +15,17 @@ const stats = (o) => ({
   hitRate: null, ciLow: null, ciHigh: null, baselineUpRate: null, withheld: true, minN: 30, ...o,
 });
 
-test("below 30 independent call days no rate is shown", () => {
-  assert.equal(statsHeadline(stats({ resolved: 12, callDays: 12, hits: 9 })), "Not enough independent call days yet (12/30; 12 resolved calls)");
+test("below 30 call days no rate is shown", () => {
+  assert.equal(statsHeadline(stats({ resolved: 12, callDays: 12, hits: 9 })), "Not enough call days yet (12/30; 12 resolved calls)");
   // The floor counts call days, not calls: 58 calls on 29 days is still withheld.
-  assert.equal(statsHeadline(stats({ resolved: 58, callDays: 29 })), "Not enough independent call days yet (29/30; 58 resolved calls)");
+  assert.equal(statsHeadline(stats({ resolved: 58, callDays: 29 })), "Not enough call days yet (29/30; 58 resolved calls)");
+  // The copy names the unit, never claims the days are independent (5- and
+  // 21-session calls on nearby days overlap).
+  assert.doesNotMatch(statsHeadline(stats({ resolved: 58, callDays: 29 })), /independent/);
   // Withheld wins even if a rate were present.
   assert.equal(
     statsHeadline(stats({ resolved: 29, callDays: 29, hitRate: 0.9, ciLow: 0.7, ciHigh: 0.97 })),
-    "Not enough independent call days yet (29/30; 29 resolved calls)",
+    "Not enough call days yet (29/30; 29 resolved calls)",
   );
   assert.equal(beatsDrift(stats({ resolved: 29, callDays: 29 })), null);
 });

@@ -36,9 +36,9 @@ export interface JournalCall {
 
 export interface JournalStats {
   resolved: number;
-  /** Distinct entry sessions among resolved calls: the independent units the
-   *  interval and the minN floor count (calls made the same day share one
-   *  market move). */
+  /** Distinct entry sessions among resolved calls: the units the interval and
+   *  the minN floor count (calls made the same day share one market move).
+   *  Not fully independent: 5- and 21-session calls on nearby days overlap. */
   callDays: number;
   hits: number;
   misses: number;
@@ -77,7 +77,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
  *  the always-up baseline over the same calls. */
 export function statsHeadline(s: JournalStats): string {
   if (s.withheld || s.hitRate == null || s.ciLow == null || s.ciHigh == null) {
-    return `Not enough independent call days yet (${s.callDays}/${s.minN}; ${s.resolved} resolved calls)`;
+    return `Not enough call days yet (${s.callDays}/${s.minN}; ${s.resolved} resolved calls)`;
   }
   const base = s.baselineUpRate == null ? "" : `; "always up" over the same calls: ${pct(s.baselineUpRate)}`;
   return `Hit rate ${pct(s.hitRate)} (95% interval ${pct(s.ciLow)}–${pct(s.ciHigh)}, counting each of ${s.callDays} call days once) over ${s.resolved} resolved calls${base}`;
