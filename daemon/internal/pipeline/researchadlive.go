@@ -125,7 +125,7 @@ func (w *ResearchEngineWorker) adReplicateOne(ctx context.Context, hyp rl.Hypoth
 	// an interrupted write leaves the cursor unadvanced and orphans biasing
 	// conservative.
 	for _, e := range evidence {
-		if err := w.St.InsertLedgerEvidence(ctx, e); err != nil {
+		if err := insertLedgerEvidence(ctx, w.St, e); err != nil {
 			return false, err
 		}
 	}
