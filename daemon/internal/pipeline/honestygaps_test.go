@@ -136,7 +136,7 @@ func TestGradeIsNotFooledByUselessConditioning(t *testing.T) {
 		t.Fatal("refused")
 	}
 	if f.Skill == nil {
-		t.Skip("not enough graded pairs on this fixture — the gate is doing its job")
+		t.Fatal("no skill graded on a 1400-bar fixture, so nothing below would be tested")
 	}
 	if *f.Skill > 0.05 {
 		t.Fatalf("skill = %v on constant-volatility data; conditioning cannot add 5%% where there is nothing to condition on", *f.Skill)
