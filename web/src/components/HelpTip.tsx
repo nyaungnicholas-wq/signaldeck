@@ -20,7 +20,7 @@ import type { ReactNode } from "react";
 
 function HelpTip({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -38,11 +38,16 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
     if (!btn || !pop) return;
     const r = btn.getBoundingClientRect();
     const pw = pop.offsetWidth;
-    const ph = pop.offsetHeight;
+    const ph = pop.scrollHeight; // natural height, not one a previous maxHeight capped
     const left = Math.min(Math.max(8, r.left + r.width / 2 - pw / 2), window.innerWidth - pw - 8);
-    let top = r.bottom + 8;
-    if (top + ph > window.innerHeight - 8 && r.top - ph - 8 >= 8) top = r.top - ph - 8;
-    setPos({ top, left });
+    // Below unless it only fits above; if it fits neither, take the roomier side
+    // and cap the height to it (the tip scrolls) so it never runs off-screen.
+    const below = window.innerHeight - r.bottom - 8 - 8;
+    const above = r.top - 8 - 8;
+    const down = ph <= below || below >= above;
+    const maxHeight = down ? below : above;
+    const top = down ? r.bottom + 8 : r.top - 8 - Math.min(ph, maxHeight);
+    setPos({ top, left, maxHeight });
   }, []);
 
   // Position before paint on open, then track scroll (capture phase catches
@@ -114,10 +119,11 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
           <div
             id={popId}
             ref={popRef}
-            className="pop-in fixed z-[1000] max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
+            className="pop-in fixed z-[1000] overflow-y-auto max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
             style={{
               top: pos?.top ?? 0,
               left: pos?.left ?? 0,
+              maxHeight: pos?.maxHeight,
               visibility: pos ? "visible" : "hidden",
               background: "var(--panel3)",
               borderColor: "var(--border-strong)",

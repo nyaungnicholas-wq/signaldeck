@@ -26,17 +26,30 @@ for (const vp of VIEWPORTS) {
       await p.goto(path);
       const tips = p.locator(".panel button[aria-controls^='helptip']");
       await expect(p.locator(".panel").getByRole("button", { name: anchor })).toBeVisible({ timeout: 60000 });
+      // panels load at different times; measure once the tip count and the page
+      // height stop changing (a reflow after placement would move the button)
+      let prev = "";
+      await expect
+        .poll(async () => {
+          const c = `${await tips.count()}/${await p.evaluate(() => document.documentElement.scrollHeight)}`;
+          const stable = c === prev;
+          prev = c;
+          return stable;
+        }, { timeout: 60000, intervals: [2000] })
+        .toBe(true);
       const n = await tips.count();
       expect(n, "no HelpTip inside a .panel was found - the check would be vacuous").toBeGreaterThan(0);
       for (let i = 0; i < n; i++) {
         const btn = tips.nth(i);
-        await btn.scrollIntoViewIfNeeded();
+        // mid-screen is the worst case: a tall tip may fit neither below nor above
+        await btn.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
         await btn.click();
         const id = await btn.getAttribute("aria-controls");
         expect(id, "button missing aria-controls").not.toBeNull();
         const pop = p.locator(`[id="${id}"]`);
         await expect(pop).toBeVisible();
         await expect(pop).toHaveCSS("visibility", "visible");
+        await pop.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const geo = await p.evaluate((popId) => {
           const b = document.querySelector(`[aria-controls="${popId}"]`)!.getBoundingClientRect();
           const r = document.getElementById(popId)!.getBoundingClientRect();
@@ -48,10 +61,10 @@ for (const vp of VIEWPORTS) {
           };
         }, id!);
         const at = `${await btn.getAttribute("aria-label")}: ${JSON.stringify(geo)}`;
-        expect(geo.r.top, `popover above viewport for ${at}`).toBeGreaterThanOrEqual(0);
+        expect(geo.r.top, `popover above viewport for ${at}`).toBeGreaterThanOrEqual(8);
         expect(geo.r.left, `popover left of viewport for ${at}`).toBeGreaterThanOrEqual(0);
         expect(geo.r.right, `popover right of viewport for ${at}`).toBeLessThanOrEqual(geo.vw);
-        expect(geo.r.bottom, `popover below viewport for ${at}`).toBeLessThanOrEqual(geo.vh);
+        expect(geo.r.bottom, `popover below viewport for ${at}`).toBeLessThanOrEqual(geo.vh - 8);
         const gap = Math.min(Math.abs(geo.r.top - geo.b.bottom), Math.abs(geo.b.top - geo.r.bottom));
         expect(gap, `popover not next to its button for ${at}`).toBeLessThanOrEqual(16);
         await p.keyboard.press("Escape");
