@@ -242,6 +242,11 @@ jobs:
       # CI, so the day-resampling discipline could regress silently. This is
       # the discovery command the test file's own header documents.
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # The Go HAR-RV grader's parity fixture must be what the reference
+      # implementation (tools/rv_forecast_backtest.py) actually computes;
+      # TestParityWithPythonReference then holds Go to it.
+      - name: RV grader parity fixture is the reference's own output
+        run: python3 tools/rv_grader_parity.py --check
       # Script-style test files are INVISIBLE to the discovery above. A file
       # that exposes a main() instead of a TestCase contributes ZERO tests to
       # `unittest discover` and zero to pytest, so it looks covered and is not:
