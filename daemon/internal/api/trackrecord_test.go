@@ -89,9 +89,13 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 	// is filtered out entirely and the assertions below grade an empty set.
 	base := int64(store.GradingEpochTS)
 	base -= base % day
-	// 3 distinct days, MANY rows each → rawN large, independentN = 3 (< 30).
-	for di := 0; di < 3; di++ {
-		for ri := 0; ri < 20; ri++ {
+	// One symbol on trackMinDistinctDays+2 days, MANY rows each: rawN large,
+	// the DAY gate cleared, independentN = 12 (< 30). Only the SAMPLE gate can
+	// hold this record; with 3 days (as this was) the day gate held it too, so
+	// deleting the sample gate left the test green.
+	const days = trackMinDistinctDays + 2
+	for di := 0; di < days; di++ {
+		for ri := 0; ri < 5; ri++ {
 			ts := base + int64(di)*day + int64(ri)*600
 			seedResolvedPrediction(t, st, sym.ID, md.H1d, ts, 0.6, 0.01)
 		}
@@ -99,14 +103,17 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 
 	body := getJSON(t, srv, "/api/track-record?horizon=1d")
 
-	if got := jnum(body, "independentN"); got != 3 {
-		t.Fatalf("independentN should be 3 (3 symbol-days), got %.0f", got)
+	if got := jnum(body, "independentN"); got != days || got >= trackMinIndependentN {
+		t.Fatalf("independentN should be %d (one per symbol-day, under %d), got %.0f", days, trackMinIndependentN, got)
 	}
-	if got := jnum(body, "rawN"); got < 50 {
-		t.Fatalf("rawN should reflect the ~60 raw rows, got %.0f", got)
+	if got := jnum(body, "distinctDays"); got < trackMinDistinctDays {
+		t.Fatalf("premise: distinctDays %.0f must clear the day gate (%d)", got, trackMinDistinctDays)
 	}
-	if gated, _ := body["gated"].(bool); !gated {
-		t.Fatal("expected gated=true below the independent-N floor")
+	if got := jnum(body, "rawN"); got != days*5 {
+		t.Fatalf("rawN should count all %d raw rows, got %.0f", days*5, got)
+	}
+	if gated, _ := body["gated"].(bool); !gated || body["gateReason"] != "sample" {
+		t.Fatalf("expected gated=true for the sample, got gated=%v gateReason=%v", body["gated"], body["gateReason"])
 	}
 	// Skill numbers must be withheld (JSON null → nil in the map).
 	for _, k := range []string{"winRate", "brier", "ic"} {
