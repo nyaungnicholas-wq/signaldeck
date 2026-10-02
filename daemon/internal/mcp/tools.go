@@ -157,6 +157,10 @@ var toolByName = func() map[string]tool {
 func toolDescriptors(cl *Client) []map[string]any {
 	out := make([]map[string]any, 0, len(toolList))
 	for _, t := range toolList {
+		desc := t.Description
+		if _, withheld := publication.DirectionalWithheld("1d"); withheld && t.Name == "get_track_record" {
+			desc = trackRecordWithheldDescription
+		}
 		granted := "NOT granted to your credential"
 		if cl.HasScope(t.Scope) {
 			granted = "granted to your credential"
@@ -169,7 +173,7 @@ func toolDescriptors(cl *Client) []map[string]any {
 			// Inspector does), and a client that cannot see which scope a tool
 			// needs will discover it by calling — which is the enumeration
 			// traffic layer 5 exists to watch for.
-			"description": t.Description + " Requires the \"" + t.Scope + "\" scope (" + granted + ").",
+			"description": desc + " Requires the \"" + t.Scope + "\" scope (" + granted + ").",
 			"inputSchema": t.Schema,
 			"annotations": map[string]any{
 				"readOnlyHint":    true,
@@ -434,8 +438,19 @@ func withholdDirectional(row map[string]any, horizon string) {
 		delete(row, "baselineAccuracy")
 		delete(row, "brierSkill")
 		row["figuresWithheld"] = why
+		// directionalNote states the figures ("below the naive baseline", "Brier
+		// skill is negative"); next to a withheld row it would serve them in prose.
+		row["note"] = why
 	}
 }
+
+// trackRecordWithheldDescription stands in for get_track_record's description
+// while SD-30 withholds the directional figures: "NEGATIVE live result" is a
+// claim about figures the tool then does not serve. The retirement still stands.
+const trackRecordWithheldDescription = "The platform's record, including the retired directional " +
+	"ensemble: its retirement stands, but its live figures are withheld while the label they were " +
+	"graded on is under review (SD-30). Structural claims are labelled as backtest until their " +
+	"first gradable date."
 
 func copyNum(src map[string]any, dst map[string]any, from, to string) {
 	if f, ok := src[from].(float64); ok {

@@ -68,8 +68,11 @@ func TestSD30_MCPTrackRecordWithholdsDirectionalFigures(t *testing.T) {
 			if row["verdict"] != "retired" || row["emitting"] != false {
 				t.Errorf("%s %v: the retirement must stay stated: %v", name, row["horizon"], row)
 			}
+			if row["note"] != publication.SD30Reason {
+				t.Errorf("%s %v: note = %v, want the SD-30 reason in place of the figures in prose", name, row["horizon"], row["note"])
+			}
 		}
-		for _, fig := range []string{"0.467", "0.451", "-0.252"} {
+		for _, fig := range []string{"0.467", "0.451", "-0.252", "below the naive baseline", "Brier skill is negative"} {
 			if strings.Contains(blob, fig) {
 				t.Errorf("%s: withheld figure %s still in the payload", name, fig)
 			}
@@ -92,5 +95,33 @@ func TestSD30_MCPTrackRecordOffRestoresFigures(t *testing.T) {
 		if _, present := row["figuresWithheld"]; present {
 			t.Fatalf("flag off still marks the row withheld: %v", row)
 		}
+		if row["note"] != directionalNote {
+			t.Fatalf("flag off must restore the retirement note: %v", row["note"])
+		}
 	}
+	if d := trackRecordToolDescription(t); !strings.Contains(d, "NEGATIVE live result") || strings.Contains(d, "SD-30") {
+		t.Fatalf("flag off must restore the tool description: %q", d)
+	}
+}
+
+// The tool description is a claim too: "NEGATIVE live result" names figures the
+// tool does not serve while SD-30 withholds them.
+func TestSD30_MCPTrackRecordDescriptionWithheld(t *testing.T) {
+	sd30On(t)
+	d := trackRecordToolDescription(t)
+	if strings.Contains(d, "NEGATIVE") || !strings.Contains(d, "SD-30") || !strings.Contains(d, "retirement stands") {
+		t.Fatalf("withheld description must drop the figure claim, keep the retirement and name SD-30: %q", d)
+	}
+}
+
+func trackRecordToolDescription(t *testing.T) string {
+	t.Helper()
+	for _, d := range toolDescriptors(fullClient()) {
+		if d["name"] == "get_track_record" {
+			s, _ := d["description"].(string)
+			return s
+		}
+	}
+	t.Fatal("get_track_record is not listed")
+	return ""
 }

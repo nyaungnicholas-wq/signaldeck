@@ -363,6 +363,7 @@ func TestChartOverlays_ScoreExtremeCrossingDedup(t *testing.T) {
 // same read. The route used to skip every gate and publish its win rate.
 func TestTrackRecordRefusesOnAnUnreadableRegistry(t *testing.T) {
 	sd30Off(t) // with SD-30 on, 1d is withheld whatever the registry says
+	setRegistryWait(t, func() {}) // the malformed case would otherwise re-read for ~1s
 	st, err := store.Open(filepath.Join(t.TempDir(), "noreg.db"))
 	if err != nil {
 		t.Fatal(err)

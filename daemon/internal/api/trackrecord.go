@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -94,6 +95,9 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		h = md.H1d
 	}
 	resp, err := d.buildTrackRecord(r.Context(), h)
+	if u := (uncachedResult{}); errors.As(err, &u) {
+		resp, err = u.payload, nil
+	}
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -272,6 +276,10 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// two conditions that waiting cannot clear.
 	gateReason := "sample"
 	var collapseReason string
+	// A refusal over a registry that did not parse may be a torn read of the
+	// grader's in-place rewrite: it is served, but not cached (see the gated
+	// return below), so the next request reads again.
+	var registryUnparsed bool
 	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
 		// The grader's own refusal. If it will not stand behind its numbers,
 		// neither may a surface computed over the same graded window.
@@ -304,6 +312,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		gateReason = "refused"
 		collapseReason = "accuracy registry unavailable, so neither the grader's refusal nor the " +
 			"graded window can be checked and these figures are withheld: " + rerr.Error()
+		registryUnparsed = errors.Is(rerr, errRegistryUnparsed)
 	}
 	// SD-30: a label mostly realised at issue is not evidence however many days
 	// it spans. Outside the registry block on purpose: an unreadable registry
@@ -422,6 +431,9 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			for _, m := range resp["byMarket"].([]map[string]any) {
 				delete(m, "dirHitRate")
 			}
+		}
+		if registryUnparsed {
+			return nil, uncachedResult{resp}
 		}
 		return resp, nil
 	}
