@@ -362,14 +362,30 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 	t := time.NewTicker(iv)
 	defer t.Stop()
 	r.runOnce(ctx, w)
+	iv = retime(w, t, iv)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			r.runOnce(ctx, w)
+			iv = retime(w, t, iv)
 		}
 	}
+}
+
+// retime re-reads a periodic worker's interval after each run and moves the
+// ticker when it changed. The interval used to be read ONCE, at boot, so an
+// interval that answers to load never took effect: the storage governor asks
+// for its next pass in 10 minutes while the WAL is over 128 MB, but after the
+// 2026-10-02 03:36 pass (WAL 1.6 GB) the next one was still an hour out,
+// because at boot the WAL had been small. Static intervals are unaffected.
+func retime(w Worker, t *time.Ticker, iv time.Duration) time.Duration {
+	if n := w.Interval(); n > 0 && n != iv {
+		t.Reset(n)
+		return n
+	}
+	return iv
 }
 
 // scheduledLoop drives a ScheduledWorker: compute the next real fire instant,
