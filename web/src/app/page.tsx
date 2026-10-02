@@ -65,6 +65,7 @@ type Row = {
   distinct_days: number | null;
   ci_method?: string;
   note?: string;
+  figures_withheld?: string; // SD-30: the daemon nulled this row's figures, and why
 };
 
 type Live =
@@ -391,12 +392,18 @@ function LiveRecord({ live }: { live: Live }) {
             >
               {pp(retired.skill)}
             </span>
+            {retired.figures_withheld ? (
+              <span className="text-sm" style={{ color: "var(--dim)" }}>
+                current figures {retired.figures_withheld}
+              </span>
+            ) : (
             <span className="text-sm" style={{ color: "var(--dim)" }}>
               <span className="tnum">{pct(retired.live_acc)}</span> correct against a{" "}
               <span className="tnum">{pct(retired.null_acc)}</span> baseline, over{" "}
               <span className="tnum">{retired.live_n.toLocaleString()}</span> forecasts on{" "}
               <span className="tnum">{retired.distinct_days ?? "—"}</span> days
             </span>
+            )}
           </div>
           <p className="m-0 max-w-[70ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
             {retiredBelow

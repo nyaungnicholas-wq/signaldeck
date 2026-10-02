@@ -18,7 +18,7 @@ import {
   type AccuracyStatus,
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
-import { bindingMismatch, labelOfPublished, unapprovedLabels } from "@/lib/accuracybinding";
+import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 export const dynamic = "force-dynamic";
@@ -174,6 +174,11 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
   // and a 6-observation "33.3%" reads as a measurement it is not. The floor is
   // the registry's own min_independent_n; the accuracy renders once n clears it.
   const convictionGated = r.band !== "all" && r.live_n < minN;
+  // SD-30: the daemon withholds this row's figures (its reason leads the
+  // reasons line above), and the file below still holds them, so every
+  // label-derived cell and the grader's own verdict sentence are suppressed.
+  const sd30 = pub?.figures_withheld;
+  const w = (v: string) => (sd30 ? "withheld" : v);
   return (
     <section
       className="panel"
@@ -199,12 +204,12 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
             {pub.reasons.join(" · ")}
           </span>
         ) : null}
-        {pub ? (
+        {pub && !sd30 ? (
           <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             Grader&apos;s sentence: {verdictOf(r)}
           </span>
         ) : null}
-        {unresolved ? (
+        {unresolved && !sd30 ? (
           <span className="text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
             Not resolved by this sample: {unresolved}
           </span>
@@ -212,20 +217,20 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <Cell
             label="LIVE ACC"
-            value={convictionGated ? `insufficient, n=${r.live_n}/${minN}` : pct(r.live_acc)}
+            value={w(convictionGated ? `insufficient, n=${r.live_n}/${minN}` : pct(r.live_acc))}
           />
           <Cell
             label="SKILL VS BASELINE"
-            value={
+            value={w(
               convictionGated || r.skill == null
                 ? "—"
-                : `${r.skill >= 0 ? "+" : ""}${(r.skill * 100).toFixed(1)}pp`
-            }
+                : `${r.skill >= 0 ? "+" : ""}${(r.skill * 100).toFixed(1)}pp`,
+            )}
           />
-          <Cell label="BASELINE (STRICTER NULL)" value={pct(drivingBaseline(r))} />
+          <Cell label="BASELINE (STRICTER NULL)" value={w(pct(drivingBaseline(r)))} />
           <Cell
             label="95% CI (DAY-CLUSTERED)"
-            value={r.ci ? `${pct(r.ci[0])}–${pct(r.ci[1])}` : r.ci_method === "withheld" ? "withheld" : "—"}
+            value={w(r.ci ? `${pct(r.ci[0])}–${pct(r.ci[1])}` : r.ci_method === "withheld" ? "withheld" : "—")}
           />
           <Cell
             label="EFFECTIVE N"
@@ -247,6 +252,12 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
       </div>
     </section>
   );
+}
+
+// The bins are the withheld record by another name (realised frequency per
+// predicted band), so a horizon the daemon withholds is dropped from them.
+function withoutHorizons(cal: Calibration, drop: Set<string>): Calibration {
+  return { ...cal, horizons: Object.fromEntries(Object.entries(cal.horizons).filter(([h]) => !drop.has(h))) };
 }
 
 /** Reliability diagram as a table: per bin of predicted P(up), what actually
@@ -407,6 +418,7 @@ type PublishedRow = {
   retirement_sticky: boolean;
   reasons?: string[];
   evidence_refs?: string[];
+  figures_withheld?: string; // SD-30: why the daemon nulled this row's figures
 };
 
 export default async function AccuracyPage() {
@@ -649,7 +661,9 @@ export default async function AccuracyPage() {
       ))}
 
       {/* ── RELIABILITY BINS: where the probabilities are actually wrong ── */}
-      {reg?.calibration ? <CalibrationPanel cal={reg.calibration} /> : null}
+      {reg?.calibration ? (
+        <CalibrationPanel cal={withoutHorizons(reg.calibration, withheldHorizons(pub.rows))} />
+      ) : null}
 
       {/* ── STRUCTURAL CLAIMS: PENDING means backtest, not evidence ── */}
       {structural.length > 0 && (

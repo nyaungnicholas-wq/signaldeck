@@ -273,7 +273,9 @@ export default function TrackRecordPage() {
                   independent (symbol, trading day) resolutions
                 </p>
                 <p className="m-0 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
-                  {current.gate == null
+                  {/* A refusal or a collapse does not clear by waiting, so it
+                      states its reason instead of an unlock ETA (SD-30 is one). */}
+                  {current.gate == null || (current.gateReason && current.gateReason !== "sample")
                     ? (current.note ?? "not yet significant")
                     : current.gate.estDaysToUngate == null
                       ? "unlock ETA unknown — nothing resolved in the last 7 days to measure an accrual rate from"

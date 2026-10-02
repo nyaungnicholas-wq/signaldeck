@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bindingMismatch, labelOfPublished, unapprovedLabels } from "./accuracybinding.ts";
+import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "./accuracybinding.ts";
 
 const GRADE_A = { graded_at: "2026-09-13T14:42:10", grader_sha256: "6908c6f9446ab440" };
 const APPROVAL_A = { gradedAt: "2026-09-13T14:42:10", graderSha256: "6908c6f9446ab440" };
@@ -82,4 +82,15 @@ test("every approved row stays approved", () => {
 		{ predictor: "directional-ensemble", horizon: "1d", variant: "high conviction" },
 	];
 	assert.deepEqual(unapprovedLabels(registryRows, published), []);
+});
+
+test("SD-30: a horizon the daemon withholds is named; one it publishes is not", () => {
+	const why = "withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision";
+	const rows = [
+		{ predictor: "directional-ensemble", horizon: "1d", variant: "", figures_withheld: why },
+		{ predictor: "trend21", horizon: "", variant: "" },
+		{ predictor: "directional-ensemble", horizon: "1w", variant: "" },
+	];
+	assert.deepEqual([...withheldHorizons(rows)], ["1d"]);
+	assert.equal(withheldHorizons([]).size, 0);
 });
