@@ -64,6 +64,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -517,7 +518,7 @@ func ledgerVerify(args []string) error {
 	// recompute=true: derive every anchored head from row payloads from
 	// genesis, so a consistently-rewritten chain fails here even though the
 	// stored hashes agree with each other.
-	av, err := st.VerifyLedgerAnchors(ctx, 0, true)
+	av, err := st.VerifyLedgerAnchors(ctx, 0, true, ledgeranchor.TrustedKeys())
 	if err != nil {
 		return fmt.Errorf("verify anchors: %w", err)
 	}

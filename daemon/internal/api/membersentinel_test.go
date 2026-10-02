@@ -231,7 +231,7 @@ func containsToken(body, tok string) bool {
 		// in "8733.5", "0.8733" or "e8733f".
 		moreAfter := end < len(body) && (alnum(body[end]) ||
 			body[end] == '.' && end+1 < len(body) && digit(body[end+1]))
-		if (j == 0 || !(alnum(body[j-1]) || body[j-1] == '.')) && !moreAfter {
+		if (j == 0 || (!alnum(body[j-1]) && body[j-1] != '.')) && !moreAfter {
 			return true
 		}
 		i = j + 1

@@ -94,6 +94,9 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
   if (!te) return null;
 
   const provenSeq = te.provenAnteriorThroughSeq ?? null;
+  // Newest anchor that reproduces locally. Not the same as provenSeq: while an
+  // older anchor fails, this can be set and provenSeq is (rightly) null.
+  const localSeq = te.localAnchorReproducesThroughSeq ?? null;
   // A COUNT minus a count. This was lv.count - provenSeq, a seq: seqs can skip
   // (AUTOINCREMENT after a failed insert, a truncated tail), so a gap at or
   // before the anchor under-reported what is unproven. Nothing proven means
@@ -126,16 +129,22 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
       // a chain this machine holds, checked by this machine; it constrains
       // anyone WITHOUT the key and nobody who has it (audit F09).
       "Local anchor reproduces through",
-      provenSeq === null
+      localSeq === null
         ? "nothing — no anchor currently reproduces"
-        : `entry #${provenSeq.toLocaleString()}${asOf ? `, signed ${asOf}` : ""}`,
-      provenSeq === null ? undefined : "anteriority against an adversary WITHOUT the signing key",
+        : `entry #${localSeq.toLocaleString()}${asOf ? `, signed ${asOf}` : ""}`,
+      localSeq === null
+        ? undefined
+        : provenSeq === null
+          ? "but an older signed anchor no longer reproduces, so no anteriority is claimed"
+          : "anteriority against an adversary WITHOUT the signing key",
     ],
     beyond === null
       ? null
       : [
           "Carries no anteriority proof",
-          `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
+          provenSeq === null
+            ? `all ${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"}`
+            : `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
         ],
     [
       "Anteriority against the operator",
@@ -446,7 +455,7 @@ export default function ProofPage() {
               <div className="flex flex-col">
                 <span className="tnum text-[1.5rem] font-extrabold">{lv.count.toLocaleString()}</span>
                 <span className="text-[0.7rem]" style={{ color: "var(--faint)" }}>
-                  entries verified
+                  entries in chain
                 </span>
               </div>
             </div>

@@ -10,9 +10,12 @@
 // floor, with a negative margin so its inline footprint stays glyph-sized.
 // The popover is position:fixed and placed from the button's rect (clamped
 // to the viewport, flipped above when there's no room below), so it can't be
-// clipped by .panel overflow or scrolling table wrappers. No dependencies.
+// clipped by .panel overflow or scrolling table wrappers. It is portalled to
+// <body>: .panel's backdrop-filter makes the panel the containing block for
+// fixed descendants, which put viewport-based coords off-screen. No dependencies.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
 function HelpTip({ label, children }: { label: string; children: ReactNode }) {
@@ -66,7 +69,8 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
       if (e.key === "Escape") close(true);
     };
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && !wrapRef.current?.contains(e.target)) close(false);
+      const t = e.target;
+      if (t instanceof Node && !wrapRef.current?.contains(t) && !popRef.current?.contains(t)) close(false);
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointerDown);
@@ -105,24 +109,26 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
           <line x1="11.94" y1="16.6" x2="11.95" y2="16.6" strokeWidth="2.4" />
         </svg>
       </button>
-      {open && (
-        <div
-          id={popId}
-          ref={popRef}
-          className="pop-in fixed z-[1000] max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
-          style={{
-            top: pos?.top ?? 0,
-            left: pos?.left ?? 0,
-            visibility: pos ? "visible" : "hidden",
-            background: "var(--panel3)",
-            borderColor: "var(--border-strong)",
-            color: "var(--text)",
-            boxShadow: "var(--shadow-2)",
-          }}
-        >
-          {children}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            id={popId}
+            ref={popRef}
+            className="pop-in fixed z-[1000] max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
+            style={{
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              visibility: pos ? "visible" : "hidden",
+              background: "var(--panel3)",
+              borderColor: "var(--border-strong)",
+              color: "var(--text)",
+              boxShadow: "var(--shadow-2)",
+            }}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }

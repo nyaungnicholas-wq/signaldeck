@@ -1366,7 +1366,10 @@ export interface LedgerTamperEvidence {
     receipt?: unknown;
     reason?: string;
   };
-  /** Newest seq covered by a reproducing anchor. null = nothing is proven. */
+  /** Newest seq whose local anchor reproduces — even while an older one fails. */
+  localAnchorReproducesThroughSeq?: number | null;
+  /** Newest seq covered by a reproducing anchor, null whenever any anchor
+   *  fails. null = nothing is proven. */
   provenAnteriorThroughSeq?: number | null;
   provenAnteriorThroughCount?: number | null;
   /** Unix seconds of that anchor. */

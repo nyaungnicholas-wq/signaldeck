@@ -62,7 +62,7 @@ func TestTunnelURLBannerStraddlingChunkBoundary(t *testing.T) {
 	}
 	log := head + b + tail
 	boundary := len(log) - (256 << 10)
-	if !(boundary > len(head) && boundary < len(head)+len(b)) {
+	if boundary <= len(head) || boundary >= len(head)+len(b) {
 		t.Fatalf("boundary not in banner")
 	}
 	path := tunWriteLog(t, log)
