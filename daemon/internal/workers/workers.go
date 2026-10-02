@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"math/bits"
 	"log/slog"
+	"math/bits"
 	"math/rand"
 	"os"
 	"runtime/debug"
@@ -381,7 +381,7 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 // for its next pass in 10 minutes while the WAL is over 128 MB, but after the
 // 2026-10-02 03:36 pass (WAL 1.6 GB) the next one was still an hour out,
 // because at boot the WAL had been small. Static intervals are unaffected.
-func retime(w Worker, t *time.Ticker, iv time.Duration) time.Duration {
+func retime(w Worker, t interface{ Reset(time.Duration) }, iv time.Duration) time.Duration {
 	if n := w.Interval(); n > 0 && n != iv {
 		t.Reset(n)
 		return n
