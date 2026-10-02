@@ -805,9 +805,16 @@ export interface CalBin {
 }
 export interface Calibration {
   horizon: Horizon;
+  // Independent (symbol, settled trading day) observations, not rows (CAL-N).
   n: number;
+  distinctDays?: number;
+  // Below minIndependentN observations or minDistinctDays days every headline
+  // figure (brier, reliability, brierSkill) is null and brierNote says why.
+  gated?: boolean;
+  minIndependentN?: number;
+  minDistinctDays?: number;
   bins: CalBin[];
-  brier: number;
+  brier: number | null;
   // Brier SKILL against the constant base-rate forecast: 1 - brier/(p(1-p)).
   // A bare Brier score is not interpretable — 0.302 reads as small until the
   // 56% base rate puts the constant forecast at 0.246, i.e. the model is 23%
@@ -818,7 +825,7 @@ export interface Calibration {
   baseRate: number | null;
   brierRef: number | null;
   brierNote?: string;
-  reliability: number;
+  reliability: number | null;
   // Phase 0 labeling: calibration is backtested / in-sample until live.
   live?: boolean;
   trackLabel?: string;

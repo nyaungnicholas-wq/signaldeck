@@ -15,6 +15,9 @@ package api
 // graded forward), while track-record grades live out-of-sample predictions
 // behind an independent-observation AND distinct-day gate, so it deliberately
 // sees a smaller, day-declustered sample.
+// Since 2026-10-02 (CAL-N) calibration is day-declustered too: one pair per
+// (symbol, settled trading day) over the grader's own population, behind the
+// same two gates. What still differs is the population, as the notes say.
 // The 2026-08-02 re-audit (finding C-2) recorded this as a real reporting
 // defect anyway, and it is: a reader comparing the two surfaces could not
 // reconcile them, because neither payload referenced the other or stated the
@@ -38,6 +41,6 @@ package api
 const calibrationBinMinN = 30
 
 const (
-	calibrationScopeNote = "SCOPE: this is the PREQUENTIAL record - every probability was frozen at prediction time and graded forward, over all resolved pairs. /api/track-record publishes the same underlying record behind an independent-observation AND distinct-day gate, so its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a smaller, day-declustered sample, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."
-	trackRecordScopeNote = "SCOPE: this is the live out-of-sample record behind both gates (independent observations AND distinct days), so it is a smaller and day-declustered sample. /api/calibration publishes the PREQUENTIAL record over all resolved pairs; its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a wider ungated sample, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."
+	calibrationScopeNote = "SCOPE: this is the PREQUENTIAL record - every probability was frozen at prediction time and graded forward - over the accuracy grader's own population: one observation per (symbol, settled trading day) in the graded window, after the settlement-quarantine and stale-feed exclusions, behind an independent-observation AND distinct-day gate. /api/track-record publishes the same underlying record behind the same two gates but without those two exclusions, so its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a slightly different population, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."
+	trackRecordScopeNote = "SCOPE: this is the live out-of-sample record behind both gates (independent observations AND distinct days), so it is a smaller and day-declustered sample. /api/calibration publishes the PREQUENTIAL record behind the same two gates over the accuracy grader's own population, which also drops settlement-quarantined and stale-feed rows; its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a slightly different population, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."
 )

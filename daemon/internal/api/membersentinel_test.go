@@ -283,6 +283,25 @@ func seedSentinels(t *testing.T, st *store.Store, variant int) sentinelFixture {
 			{SymbolID: id, TF: md.TF1d, Ts: day, Open: sntO2, High: sntH2, Low: sntL2, Close: sntC2, Volume: sntV2},
 		}))
 	}
+	// Call bars under the resolved predictions below (CAL-N, 2026-10-02).
+	// /api/calibration grades the accuracy grader's population, which drops a
+	// row whose settlement it cannot reconstruct from bars; without these every
+	// seeded call is unverifiable and the route answers an empty body. Same
+	// sentinel values, so anything derived from them is still scanned.
+	callBars := func(id int64, days ...int64) {
+		t.Helper()
+		var bars []md.Bar
+		for _, k := range days {
+			bars = append(bars, md.Bar{SymbolID: id, TF: md.TF1d, Ts: day - k*86400,
+				Open: sntO1, High: sntH1, Low: sntL1, Close: sntC1, Volume: sntV1})
+		}
+		must(st.UpsertBars(ctx, bars))
+	}
+	callBars(fx.sntl.ID, 4, 3, 2)
+	callBars(fx.sntc.ID, 3, 2)
+	for i := 0; i < variant; i++ {
+		callBars(fx.sntw.ID, int64(4+i), int64(3+i))
+	}
 	must(st.UpsertTVRating(ctx, store.TVRatingRow{SymbolID: fx.sntl.ID, Ts: day, RecoAll: 0.5, RecoMA: 0.4,
 		RecoOther: 0.1, RSI: sntTVRSI, Close: sntTVClose, Label: "SNTL_TVRATING"}))
 	must(st.InsertTVQuote(ctx, store.TVQuoteRow{SymbolID: fx.sntl.ID, Ts: day, Price: sntTVPrice,

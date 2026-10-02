@@ -229,7 +229,7 @@ func (b calibBuckets) deficit(prob float64) (float64, bool) {
 // track-record reads (no lookahead — every pair is a resolved outcome).
 func buildCalibBuckets(ctx context.Context, st *store.Store, h md.Horizon) calibBuckets {
 	b := calibBuckets{realized: map[int]float64{}, known: map[int]bool{}}
-	probs, ups, err := st.ResolvedPredictionPairs(ctx, h, 20000)
+	probs, ups, _, err := st.ResolvedPredictionPairs(ctx, h, 20000)
 	if err != nil || len(probs) == 0 {
 		return b
 	}
