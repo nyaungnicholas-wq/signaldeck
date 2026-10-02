@@ -866,10 +866,11 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 
 	admitted := endpointsOf(t, memberAdmittedRoutes(t))
 	exercised, exempt := probe("member", member, admitted, nil)
-	reachable, reachablePath := map[string]bool{}, map[string]bool{}
+	reachable, methods := map[string]bool{}, map[string]int{}
 	for _, ep := range admitted {
 		_, p, _ := strings.Cut(ep, " ")
-		reachable[ep], reachablePath[p] = true, true
+		reachable[ep] = true
+		methods[p]++
 	}
 	for ep := range probes {
 		if !reachable[ep] {
@@ -877,8 +878,13 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		}
 	}
 	for path := range memberProbeExempt {
-		if !reachablePath[path] {
+		switch methods[path] {
+		case 0:
 			t.Errorf("memberProbeExempt names %s, which a member cannot reach: stale exemption", path)
+		case 1:
+		default: // an exemption is per path: a second handler must not inherit it unseen
+			t.Errorf("memberProbeExempt names %s, which now has %d methods: probe the new one or exempt it by name",
+				path, methods[path])
 		}
 	}
 	if exercised != len(admitted)-exempt || exercised < memberProbeFloor {
