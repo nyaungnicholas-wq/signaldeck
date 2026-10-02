@@ -455,9 +455,13 @@ func envIntOr(k string, def int) int {
 // taking the first bar at-or-after base+horizon.
 type OutcomeResolver struct {
 	St *store.Store
-	// page and writeCap are 0 in production (outcomePage, outcomeWriteCap);
-	// tests shrink them.
-	page, writeCap int
+	// page, writeCap and maxPages are 0 in production (outcomePage,
+	// outcomeWriteCap, outcomeMaxPages); tests shrink them.
+	page, writeCap, maxPages int
+	// resume is where each horizon's last pass stopped early, as (ts,
+	// symbol_id); the next pass continues after it and wraps to the head at the
+	// end of the queue. In memory only: a restart starts from the head.
+	resume map[md.Horizon][2]int64
 }
 
 // Name implements workers.Worker.
@@ -498,6 +502,11 @@ func horizonTF(h md.Horizon) md.Timeframe {
 const (
 	outcomePage     = 4000
 	outcomeWriteCap = 4000
+	// outcomeMaxPages bounds the rows ONE pass reads per horizon (100k at the
+	// default page, ~2 s of reads): a pass that finds few writable rows would
+	// otherwise read the whole mature queue. The next pass resumes where this
+	// one stopped, so a long run of waiting rows still cannot wedge the queue.
+	outcomeMaxPages = 25
 )
 
 // Run resolves matured outcomes, per horizon so short windows never starve
@@ -510,17 +519,25 @@ const (
 // and the published 1d/1w record stood weeks behind (newest graded score 09-04
 // on 10-01; 807k mature 1d rows owed on 10-02). The prediction resolver had the
 // same wedge (SD-11). Each horizon now pages through its queue in (ts,
-// symbol_id) order until it has outcomeWriteCap writes or reaches the end, so a
-// skipped row costs a read, never a slot. Guards and labels are unchanged.
+// symbol_id) order until it has outcomeWriteCap writes, has read
+// outcomeMaxPages pages, or reaches the end; the next pass resumes where this
+// one stopped. A skipped row costs a read, never a slot, and every row is
+// reached within one sweep. Guards and labels are unchanged.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved, voided, waiting := 0, 0, 0
-	page, writeCap := o.page, o.writeCap
+	page, writeCap, maxPages := o.page, o.writeCap, o.maxPages
 	if page <= 0 {
 		page = outcomePage
 	}
 	if writeCap <= 0 {
 		writeCap = outcomeWriteCap
+	}
+	if maxPages <= 0 {
+		maxPages = outcomeMaxPages
+	}
+	if o.resume == nil {
+		o.resume = map[md.Horizon][2]int64{}
 	}
 	// Delisted names never print a forward bar: void their rows at once instead of
 	// parking them 30 days at the head of the oldest-first LIMIT-1500 queue, where
@@ -540,9 +557,18 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
-		afterTs, afterSym := int64(-1), int64(0)
-		for written := 0; written < writeCap; {
-			pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), afterTs, afterSym, page)
+		head := [2]int64{-1, 0}
+		cur, ok := o.resume[h]
+		if !ok {
+			cur = head
+		}
+		for written, pages := 0, 0; ; pages++ {
+			if pages == maxPages {
+				slog.Info("outcome-resolver: page cap hit, next pass resumes here",
+					"horizon", string(h), "pages", pages, "written", written, "resume_ts", cur[0], "resume_symbol", cur[1])
+				break
+			}
+			pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), cur[0], cur[1], page)
 			if err != nil {
 				return "", err
 			}
@@ -555,6 +581,7 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", err
 				}
+				cur = [2]int64{p.Ts, p.SymbolID}
 				if !ok {
 					waiting++
 					continue
@@ -570,12 +597,15 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 				return "", err
 			}
 			written += len(batch)
-			if len(pending) < page {
-				break // end of the queue
+			if written == writeCap {
+				break // the next pass resumes after the last row judged
 			}
-			last := pending[len(pending)-1]
-			afterTs, afterSym = last.Ts, last.SymbolID
+			if len(pending) < page {
+				cur = head // end of the queue: the next pass starts at the head
+				break
+			}
 		}
+		o.resume[h] = cur
 	}
 	// The prediction resolver only visits rows that HAVE a forward bar, so forecasts on
 	// delisted names were never touched: 16,648 of them on 1,894 names kept those names

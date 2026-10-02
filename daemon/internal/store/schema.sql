@@ -68,6 +68,16 @@ CREATE TABLE IF NOT EXISTS score_outcomes (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_outcomes_unresolved
   ON score_outcomes (resolved_at) WHERE resolved_at IS NULL;
+-- The outcome resolver's page read (pendingOutcomesSQL) seeks its keyset cursor
+-- here and walks it in index order. On idx_outcomes_unresolved it read every
+-- pending row of every horizon, sorted them in a temp b-tree and looked up the
+-- table row for each: 0.59 s a page against 0.095 s here, on a copy of the
+-- 2026-10-01 snapshot's score_outcomes (8.88M rows, 1.83M pending). resolved_at
+-- is a column only so the read is COVERED: SQLite counts the WHERE's
+-- resolved_at as a column reference even on a partial index. Build on that
+-- copy: 1.3 s, +27.6 MB, paid once at the first boot after this lands.
+CREATE INDEX IF NOT EXISTS idx_outcomes_pending
+  ON score_outcomes (horizon, ts, symbol_id, resolved_at) WHERE resolved_at IS NULL;
 -- The RESOLVED side had no index at all, so the two reads that serve the
 -- published honesty numbers -- ResolvedOutcomes and ResolvedOutcomesIndependent,
 -- both `WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?` --
