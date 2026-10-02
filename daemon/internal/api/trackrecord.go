@@ -932,13 +932,15 @@ const regimeMinResolutions = 30
 // Best-effort: on a store error it returns an "available:false" stub rather
 // than failing the whole track-record page.
 func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
-	rows, err := d.St.ResolvedRegimeOutcomes(ctx, 50000)
+	// Tallied in SQL, every graded call (the read used to stop at 50,000 rows,
+	// newest first, so past that every per-kind count undercounted). One
+	// independent observation per (symbol, kind, UTC-day): the dedup unique
+	// index guarantees this at write time and the query re-applies it, so a
+	// future schema change cannot silently pseudo-replicate.
+	days, err := d.St.ResolvedRegimeOutcomeDays(ctx)
 	if err != nil {
 		return map[string]any{"available": false, "error": err.Error()}
 	}
-	// One independent observation per (symbol, kind, UTC-day). The dedup unique
-	// index already guarantees this at write time; the re-check here is
-	// defensive so a future schema change can't silently pseudo-replicate.
 	type agg struct {
 		n, correct int
 		sumClaimed float64
@@ -948,28 +950,22 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 		// treatment rather than a Wilson interval at the raw call count.
 		obs []clusterstat.Obs
 	}
-	seen := map[[3]int64]bool{}
 	byKind := map[string]*agg{}
-	for _, r := range rows {
-		k := string(r.Kind)
-		dk := [3]int64{r.SymbolID, kindOrdinal(k), r.Day}
-		if seen[dk] {
-			continue
-		}
-		seen[dk] = true
-		a := byKind[k]
+	for _, t := range days {
+		a := byKind[t.Kind]
 		if a == nil {
 			a = &agg{}
-			byKind[k] = a
+			byKind[t.Kind] = a
 		}
-		a.n++
-		if r.Correct == 1 {
-			a.correct++
-		}
-		a.sumClaimed += r.HistoricalAccuracy
+		a.n += t.N
+		a.correct += t.Correct
+		a.sumClaimed += t.SumClaimed
+		// One observation per call, as before: the day's hits, then its misses.
 		// Dir is DirNone: "was this regime call right" is not a directional bet,
 		// so the market-breadth diagnostic must not be computed for it.
-		a.obs = append(a.obs, clusterstat.Obs{Day: r.Day, Hit: r.Correct == 1})
+		for i := 0; i < t.N; i++ {
+			a.obs = append(a.obs, clusterstat.Obs{Day: t.Day, Hit: i < t.Correct})
+		}
 	}
 	kinds := map[string]any{}
 	for k, a := range byKind {
@@ -1008,25 +1004,5 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 		// #20: regime claims were measured on (and are resolved against) the
 		// currently-tracked universe's bars.
 		"survivorship": survivorshipBlock(),
-	}
-}
-
-// kindOrdinal maps a regime kind to a stable small int for the dedup key.
-func kindOrdinal(k string) int64 {
-	switch k {
-	case "trend21":
-		return 1
-	case "trend63":
-		return 2
-	case "liquidity21":
-		return 3
-	case "vol21":
-		return 4
-	case "trend21-crypto":
-		return 5
-	case "liquidity21-crypto":
-		return 6
-	default:
-		return 99
 	}
 }

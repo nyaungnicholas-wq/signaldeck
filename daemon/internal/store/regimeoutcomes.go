@@ -591,6 +591,47 @@ func (s *Store) ResolvedRegimeOutcomes(ctx context.Context, limit int) ([]Regime
 	return out, rows.Err()
 }
 
+// RegimeOutcomeDay is the graded regime calls of one kind on one UTC day of
+// call, already deduplicated: N calls, Correct of them right, SumClaimed the
+// sum of their frozen claimed accuracies.
+type RegimeOutcomeDay struct {
+	Kind       string
+	Day        int64
+	N, Correct int
+	SumClaimed float64
+}
+
+// ResolvedRegimeOutcomeDays tallies every graded regime call by (kind, day) in
+// SQL, one call per (symbol, kind, day) — the newest when a key repeats, as
+// the track record always deduplicated. It replaces reading the rows through
+// ResolvedRegimeOutcomes(ctx, 50000) for the track record: past 50,000 graded
+// calls (42,333 on the 2026-10-01 snapshot) that read dropped the oldest and
+// every per-kind count undercounted. Exact at any volume; on the snapshot it
+// returns 204 tallies in 0.06 s.
+func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context) ([]RegimeOutcomeDay, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind, day, COUNT(*), COALESCE(SUM(correct), 0), COALESCE(SUM(historical_accuracy), 0)
+		FROM (
+		  SELECT kind, day, correct, historical_accuracy,
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id, kind, day ORDER BY ts DESC, id DESC) AS rn
+		  FROM regime_outcomes WHERE resolved_at IS NOT NULL
+		) WHERE rn = 1
+		GROUP BY kind, day ORDER BY kind, day`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []RegimeOutcomeDay
+	for rows.Next() {
+		var d RegimeOutcomeDay
+		if err := rows.Scan(&d.Kind, &d.Day, &d.N, &d.Correct, &d.SumClaimed); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // RegimePostmortem is one stored high-conviction-miss narrative.
 type RegimePostmortem struct {
 	OutcomeID       int64   `json:"outcomeId"`
