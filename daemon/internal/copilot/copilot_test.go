@@ -212,16 +212,16 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestParsePlan(t *testing.T) {
-	ok := "```json\n{\"queries\":[{\"query\":\"vol_forecast_record\",\"params\":{}}]}\n```"
+	ok := "```json\n{\"queries\":[{\"query\":\"prereg_chain\",\"params\":{}}]}\n```"
 	if calls, _, err := ParsePlan(TierMember, ok); err != nil || len(calls) != 1 {
 		t.Errorf("fenced plan: %v %v", calls, err)
 	}
 	bad := map[string]string{
 		"no JSON":         "I think you should look at the regimes.",
 		"empty plan":      `{"queries":[]}`,
-		"extra key":       `{"queries":[{"query":"vol_forecast_record","params":{}}],"sql":"SELECT 1"}`,
-		"extra call key":  `{"queries":[{"query":"vol_forecast_record","params":{},"sql":"DELETE FROM meta"}]}`,
-		"four queries":    `{"queries":[{"query":"vol_forecast_record"},{"query":"vol_forecast_record"},{"query":"vol_forecast_record"},{"query":"vol_forecast_record"}]}`,
+		"extra key":       `{"queries":[{"query":"prereg_chain","params":{}}],"sql":"SELECT 1"}`,
+		"extra call key":  `{"queries":[{"query":"prereg_chain","params":{},"sql":"DELETE FROM meta"}]}`,
+		"four queries":    `{"queries":[{"query":"prereg_chain"},{"query":"prereg_chain"},{"query":"prereg_chain"},{"query":"prereg_chain"}]}`,
 		"operator entry":  `{"queries":[{"query":"worker_health","params":{}}]}`,
 		"injected symbol": `{"queries":[{"query":"vol_regime_for_symbol","params":{"symbol":"X'); DELETE FROM meta; --"}}]}`,
 	}
@@ -238,8 +238,8 @@ func TestCheckCitations(t *testing.T) {
 		"AAPL is in an uptrend with conviction 0.82 [q1:r1].",
 		"The hit rate is 0.61 [q1:r1, q2:r1]. It beat the baseline [q1:r2].",
 		"No row answers that [q1:r1].",
-		"AAPL is calm [q1:r1]. The rows do not answer the rest.",
-		"AAPL is calm [q1:r1]! I could not find MSFT.",
+		"AAPL is calm [q1:r1]. " + CantAnswer,
+		"AAPL is calm [q1:r1]!\n" + CantAnswer + "\n",
 	}
 	for _, s := range good {
 		if _, ok := CheckCitations(s, rows); !ok {
@@ -259,6 +259,12 @@ func TestCheckCitations(t *testing.T) {
 		"cannot-answer first":      "I could not find MSFT. AAPL is calm [q1:r1].",
 		"facts as a cannot-answer": "AAPL is calm [q1:r1]. The rows do not cover MSFT, but MSFT is in a downtrend.",
 		"long cannot-answer":       "AAPL is calm [q1:r1]. The rows do not say so but every other stock here is in an uptrend now.",
+		// H-5: under ten words, no digit or comma, opens like a refusal; the
+		// old pattern exempted it, and it is a forecast.
+		"claim after a refusal opening": "AAPL is calm [q1:r1]. The rows don't say more but AAPL will surely double.",
+		"paraphrased cannot-answer":     "AAPL is calm [q1:r1]. The rows do not answer the rest.",
+		"cannot-find variant":           "AAPL is calm [q1:r1]! I could not find MSFT.",
+		"prescribed sentence not last":  "AAPL is calm [q1:r1]. " + CantAnswer + " MSFT is in a downtrend.",
 	}
 	// An id glued into a word is not a citation (the web's \b...\b agrees).
 	if _, ok := CheckCitations("AAPL is calm xq1:r1.", rows); ok {
@@ -472,7 +478,8 @@ func TestMemberCatalogIsImpersonal(t *testing.T) {
 
 // TestTrackRecordFloor: a horizon with fewer than 10 resolved predictions in
 // the window is withheld (datalicense.go: a narrowable aggregate of realized
-// outcomes is derived only over >= 10 rows).
+// outcomes is derived only over >= 10 rows). The "<h>#pm" benchmark twins
+// share the table and are never SignalDeck horizons, however many there are.
 func TestTrackRecordFloor(t *testing.T) {
 	sd30Off(t) // the member query as the SD-30 flag restores it; sd30_test.go covers the flag on
 	st, db := openStore(t)
@@ -481,11 +488,20 @@ func TestTrackRecordFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, p, err := Validate(TierMember, "directional_track_record", map[string]any{"days": "30"})
+	q, p, err := Validate(TierOperator, "directional_track_record", map[string]any{"days": "30"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	day := time.Now().Unix() / 86400 * 86400
+	for i := 1; i <= 12; i++ {
+		ts := day - int64(i)*86400
+		if err := st.SeedBenchmarkOutcome(ctx, sym.ID, md.H1d+"#pm", ts, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.ResolvePrediction(ctx, sym.ID, md.H1d+"#pm", ts, 0.01); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i := 1; i <= 10; i++ {
 		ts := day - int64(i)*86400
 		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
@@ -499,8 +515,22 @@ func TestTrackRecordFloor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := map[bool]int{true: 1, false: 0}[i >= 10]; len(rows) != want {
-			t.Fatalf("%d resolved: %d rows, want %d: %v", i, len(rows), want, rows)
+		if want := map[bool]int{true: 1, false: 0}[i >= 10]; len(rows) != want || (want == 1 && rows[0]["horizon"] != "1d") {
+			t.Fatalf("%d resolved: %d rows, want %d of horizon 1d: %v", i, len(rows), want, rows)
+		}
+	}
+}
+
+// TestUngatedRecordsAreOperatorOnly: a raw directional hit rate and the per-call
+// vol wins against the nulls skip the gates the published records apply, so a
+// member plan naming either is refused (H-2, H-3).
+func TestUngatedRecordsAreOperatorOnly(t *testing.T) {
+	for _, name := range []string{"directional_track_record", "vol_forecast_record", "regime_live_grades_by_kind"} {
+		if _, _, err := Validate(TierMember, name, nil); err == nil {
+			t.Errorf("a member may run %s", name)
+		}
+		if _, _, err := Validate(TierOperator, name, nil); err != nil {
+			t.Errorf("the operator may not run %s: %v", name, err)
 		}
 	}
 }
@@ -577,12 +607,12 @@ func TestTruncatedResultsAreMarked(t *testing.T) {
 func TestTrackRecordDaysIsAMenu(t *testing.T) {
 	sd30Off(t) // the member query as the SD-30 flag restores it; sd30_test.go covers the flag on
 	for _, bad := range []any{90.0, "60", "7", "", "90 OR 1=1"} {
-		if _, _, err := Validate(TierMember, "directional_track_record", map[string]any{"days": bad}); err == nil {
+		if _, _, err := Validate(TierOperator, "directional_track_record", map[string]any{"days": bad}); err == nil {
 			t.Errorf("days %v accepted", bad)
 		}
 	}
 	for _, ok := range []string{"30", "90", "365"} {
-		if _, _, err := Validate(TierMember, "directional_track_record", map[string]any{"days": ok}); err != nil {
+		if _, _, err := Validate(TierOperator, "directional_track_record", map[string]any{"days": ok}); err != nil {
 			t.Errorf("days %s refused: %v", ok, err)
 		}
 	}

@@ -486,7 +486,7 @@ var memberProbeExempt = map[string]string{
 
 // memberProbeFloor is the measured size of the probed member surface. It may
 // only go up: a drop means routes left the scan.
-const memberProbeFloor = 51
+const memberProbeFloor = 55
 
 func memberProbes(fx sentinelFixture) map[string]memberProbe {
 	get := func(url, marker string) memberProbe { return memberProbe{method: "GET", url: url, marker: marker} }
@@ -499,6 +499,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/accuracy": get("/api/accuracy", `"publication_status":"RETIRED"`),
 		// Alert switches (plan step 5): the member's own settings, never data.
 		"/api/alert-prefs": get("/api/alert-prefs", `"emailVerified":true`),
+		"POST /api/alert-prefs": {method: "POST", url: "/api/alert-prefs", body: map[string]bool{"emailDigest": true},
+			marker: `"emailDigest":true,"emailVerified":true`},
 		"/api/alert-prefs/telegram-link": {method: "POST", url: "/api/alert-prefs/telegram-link", body: map[string]string{},
 			marker: "telegram", status: http.StatusServiceUnavailable,
 			why: "the fixture configures no bot token; the refusal is the whole answer (alertprefs_test.go drives the 200)"},
@@ -507,11 +509,17 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		// GET only renders the confirm form (it never redeems); the POST that
 		// redeems is driven in alertprefs_test.go.
 		"/api/alerts/unsubscribe": {method: "GET", url: "/api/alerts/unsubscribe?token=probe", marker: `value="probe"`},
+		"POST /api/alerts/unsubscribe": {method: "POST", url: "/api/alerts/unsubscribe?token=probe", body: map[string]string{},
+			marker: "invalid or has expired", status: http.StatusBadRequest,
+			why: "a made-up token: the redeem answers fixed text either way; alertprefs_test.go redeems a real one"},
 		"/api/auth/me":            get("/api/auth/me", `"username":"mira"`),
 		// Ask the data (plan step 10): the status read; off for members by
 		// default, so the refusal is served. ask_test.go drives POST against this
 		// store with the flag on and an echoing fake model.
 		"/api/ask": get("/api/ask", `"available":false`),
+		"POST /api/ask": {method: "POST", url: "/api/ask", body: map[string]string{"question": "probe"},
+			marker: askMemberOff, status: http.StatusForbidden,
+			why: "the member flag is off here; ask_test.go drives POST through every member entry against this store with it on"},
 		// "n" (resolved pairs), not a bin's "N": SD-30 withholds the bins.
 		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"n":%d`, n)),
 		"/api/canary":             get("/api/canary", "SNTL_CANARY_MODEL"),
@@ -532,6 +540,10 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		// The member's own journal (plan step 8): a call graded from sentinel
 		// bars; the grade is served, no close or return (journal_test.go).
 		"/api/journal": get("/api/journal", `"status":"resolved","outcome":"hit"`),
+		// Creating a call answers with the journal, the new open call included.
+		"POST /api/journal": {method: "POST", url: "/api/journal",
+			body:   map[string]any{"symbol": "SNTL", "market": "stocks", "call": "up", "horizon": 1},
+			marker: `"symbol":"SNTL","market":"stocks","call":"up"`},
 		"/api/journal/withdraw": {method: "POST", url: "/api/journal/withdraw", body: map[string]int64{"id": fx.journalCall},
 			marker: "withdrawn only before", status: http.StatusConflict,
 			why: "the seeded call is resolved, so it is final; journal_test.go drives the 200"},
@@ -609,6 +621,41 @@ func memberAdmittedRoutes(t *testing.T) []string {
 	return out
 }
 
+// endpointsOf is every registered "METHOD path" on the given paths, sorted by
+// path then method. The scans run per endpoint: keyed by path, a path's second
+// handler (POST /api/journal beside its GET) was never probed.
+func endpointsOf(t *testing.T, paths []string) []string {
+	t.Helper()
+	want := map[string]bool{}
+	for _, p := range paths {
+		want[p] = true
+	}
+	var out []string
+	for ep := range registeredAPIEndpoints(t) {
+		if _, p, _ := strings.Cut(ep, " "); want[p] {
+			out = append(out, ep)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		mi, pi, _ := strings.Cut(out[i], " ")
+		mj, pj, _ := strings.Cut(out[j], " ")
+		return pi < pj || (pi == pj && mi < mj)
+	})
+	return out
+}
+
+// byEndpoint keys probes "METHOD path"; a bare-path key takes its probe's method.
+func byEndpoint(m map[string]memberProbe) map[string]memberProbe {
+	out := make(map[string]memberProbe, len(m))
+	for k, pr := range m {
+		if !strings.Contains(k, " ") {
+			k = pr.method + " " + k
+		}
+		out[k] = pr
+	}
+	return out
+}
+
 // anonProbeOverride is the probe a caller with no session gets where the
 // member's probe does not describe the anonymous answer.
 var anonProbeOverride = map[string]memberProbe{
@@ -618,7 +665,7 @@ var anonProbeOverride = map[string]memberProbe{
 
 // anonProbeFloor is the measured size of the probed anonymous surface per
 // posture. It may only go up: a drop means routes left the scan.
-var anonProbeFloor = map[string]int{"public-surface": 26, "tunnel": 9}
+var anonProbeFloor = map[string]int{"public-surface": 28, "tunnel": 11}
 
 func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 	// Members reach the same union under both published postures; the gate
@@ -784,22 +831,27 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		t.FailNow()
 	}
 
-	probes := memberProbes(fx)
-	// probe drives every path in paths as one caller and returns how many it
-	// probed and how many memberProbeExempt skipped.
-	probe := func(who string, c *http.Client, paths []string, override map[string]memberProbe) (exercised, exempt int) {
-		for _, path := range paths {
+	probes := byEndpoint(memberProbes(fx))
+	// probe drives every "METHOD path" in endpoints as one caller and returns
+	// how many it probed and how many memberProbeExempt (per path) skipped.
+	probe := func(who string, c *http.Client, endpoints []string, override map[string]memberProbe) (exercised, exempt int) {
+		for _, ep := range endpoints {
+			method, path, _ := strings.Cut(ep, " ")
 			if _, ok := memberProbeExempt[path]; ok {
 				exempt++
 				continue
 			}
-			pr, ok := override[path]
+			pr, ok := override[ep]
 			if !ok {
-				pr, ok = probes[path]
+				pr, ok = probes[ep]
 			}
 			if !ok {
 				t.Errorf("%s is reachable by %s and has no probe: add one to memberProbes "+
-					"(or an entry with its reason to memberProbeExempt)", path, who)
+					"(or an entry with its reason to memberProbeExempt)", ep, who)
+				continue
+			}
+			if pr.method != method {
+				t.Errorf("the probe for %s sends %s", ep, pr.method)
 				continue
 			}
 			var code int
@@ -841,20 +893,27 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		return exercised, exempt
 	}
 
-	admitted := memberAdmittedRoutes(t)
+	admitted := endpointsOf(t, memberAdmittedRoutes(t))
 	exercised, exempt := probe("member", member, admitted, nil)
-	reachable := map[string]bool{}
-	for _, p := range admitted {
-		reachable[p] = true
+	reachable, methods := map[string]bool{}, map[string]int{}
+	for _, ep := range admitted {
+		_, p, _ := strings.Cut(ep, " ")
+		reachable[ep] = true
+		methods[p]++
 	}
-	for path := range probes {
-		if !reachable[path] {
-			t.Errorf("memberProbes names %s, which a member cannot reach: stale probe", path)
+	for ep := range probes {
+		if !reachable[ep] {
+			t.Errorf("memberProbes names %s, which a member cannot reach: stale probe", ep)
 		}
 	}
 	for path := range memberProbeExempt {
-		if !reachable[path] {
+		switch methods[path] {
+		case 0:
 			t.Errorf("memberProbeExempt names %s, which a member cannot reach: stale exemption", path)
+		case 1:
+		default: // an exemption is per path: a second handler must not inherit it unseen
+			t.Errorf("memberProbeExempt names %s, which now has %d methods: probe the new one or exempt it by name",
+				path, methods[path])
 		}
 	}
 	if exercised != len(admitted)-exempt || exercised < memberProbeFloor {
@@ -871,8 +930,8 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 			open = append(open, p)
 		}
 	}
-	sort.Strings(open)
-	exercised, exempt = probe("anonymous", anon, open, anonProbeOverride)
+	open = endpointsOf(t, open)
+	exercised, exempt = probe("anonymous", anon, open, byEndpoint(anonProbeOverride))
 	for _, p := range open {
 		if !reachable[p] {
 			t.Errorf("%s is anonymous on %s but a member cannot reach it", p, posture)

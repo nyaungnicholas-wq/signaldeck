@@ -31,8 +31,14 @@ func TestSD30_DirectionalTrackRecordWithheldFromMembers(t *testing.T) {
 	if _, _, err := Validate(TierOperator, "directional_track_record", args); err != nil {
 		t.Fatalf("the operator keeps the raw tally: %v", err)
 	}
+	// Flag off removes only the SD-30 reason: since H-2 the query is
+	// operator-only on its own terms, so a member is still refused, just not
+	// for SD-30, and the operator keeps it.
 	sd30Set(t, false)
-	if _, _, err := Validate(TierMember, "directional_track_record", args); err != nil {
-		t.Fatalf("flag off must restore member access: %v", err)
+	if _, _, err := Validate(TierMember, "directional_track_record", args); err == nil || strings.Contains(err.Error(), publication.SD30Reason) {
+		t.Fatalf("flag off: a member is refused by tier (H-2), not by SD-30; got %v", err)
+	}
+	if _, _, err := Validate(TierOperator, "directional_track_record", args); err != nil {
+		t.Fatalf("flag off: the operator keeps the query: %v", err)
 	}
 }

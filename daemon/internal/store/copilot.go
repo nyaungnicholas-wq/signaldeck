@@ -49,3 +49,12 @@ func (s *Store) IncrAskCount(ctx context.Context, uid int64, day string) (int, e
 	}
 	return n, nil
 }
+
+// UndoAskCount takes back one IncrAskCount for uid on the UTC day, for an ask
+// that was counted and then refused before any LLM call. It never goes below
+// zero.
+func (s *Store) UndoAskCount(ctx context.Context, uid int64, day string) error {
+	_, err := s.authW().ExecContext(ctx, `UPDATE meta SET v=CAST(CAST(v AS INTEGER)-1 AS TEXT)
+		WHERE k=? AND CAST(v AS INTEGER) > 0`, "copilot_ask:"+day+":"+strconv.FormatInt(uid, 10))
+	return err
+}

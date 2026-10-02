@@ -16,10 +16,12 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 )
 
-// registeredAPIRoutes collects every literal "<METHOD> /api/..." pattern in the
-// package's non-test sources. Dynamically built patterns are not seen; the
-// route literals in api.go and the register* helpers are all string constants.
-func registeredAPIRoutes(t *testing.T) map[string]bool {
+// registeredAPIEndpoints collects every literal "<METHOD> /api/..." pattern in
+// the package's non-test sources, keyed "METHOD path": one path can carry two
+// handlers (GET and POST /api/journal), and a scan keyed by path alone probes
+// only one of them. Dynamically built patterns are not seen; the route literals
+// in api.go and the register* helpers are all string constants.
+func registeredAPIEndpoints(t *testing.T) map[string]bool {
 	t.Helper()
 	files, err := os.ReadDir(".")
 	if err != nil {
@@ -37,8 +39,20 @@ func registeredAPIRoutes(t *testing.T) map[string]bool {
 			t.Fatalf("read %s: %v", name, err)
 		}
 		for _, m := range re.FindAllSubmatch(data, -1) {
-			routes[string(m[2])] = true
+			routes[string(m[1])+" "+string(m[2])] = true
 		}
+	}
+	return routes
+}
+
+// registeredAPIRoutes is the set of paths registeredAPIEndpoints registers,
+// for the checks that are per path (licence rows, the member gate).
+func registeredAPIRoutes(t *testing.T) map[string]bool {
+	t.Helper()
+	routes := map[string]bool{}
+	for ep := range registeredAPIEndpoints(t) {
+		_, path, _ := strings.Cut(ep, " ")
+		routes[path] = true
 	}
 	return routes
 }
