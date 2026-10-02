@@ -185,3 +185,37 @@ func TestFilingsPruneLetsAnAccountWriteIn(t *testing.T) {
 		t.Fatalf("%d filings left, want the %d recent ones", total, recent)
 	}
 }
+
+// The scores downsample (1m17s in one statement on 2026-10-01) must let an
+// account write in between its day batches, and still keep exactly the last
+// row per (symbol, horizon, UTC day).
+func TestScoresDailyPruneLetsAnAccountWriteIn(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	const syms, days, perDay = 50, 20, 20
+	if _, err := st.w.ExecContext(ctx, `
+		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO scores (symbol_id, horizon, ts, score, components)
+		SELECT i % ? + 1, '1d', (i / ?) % ? * 86400 + (i / (? * ?)) * 60 + 3600, 0.5, '[]'
+		FROM n`, syms*days*perDay-1, syms, syms, days, syms, days); err != nil {
+		t.Fatal(err)
+	}
+	const total = syms * days * perDay
+	seen := midBulkWrite(t, st, total, `SELECT count(*) FROM scores`, func() error {
+		n, err := st.PruneScoresKeepDailyLast(ctx, days*86400)
+		if err == nil && n != total-syms*days {
+			err = fmt.Errorf("pruned %d rows, want %d", n, total-syms*days)
+		}
+		return err
+	})
+	if seen == syms*days { // the count once the whole prune is done
+		t.Fatalf("the account write saw the prune finished: it waited out the whole prune, one statement holding the write lock")
+	}
+	var left, groups int64
+	if err := st.db.QueryRowContext(ctx, `SELECT count(*), count(DISTINCT symbol_id || ':' || (ts/86400)) FROM scores`).Scan(&left, &groups); err != nil {
+		t.Fatal(err)
+	}
+	if left != syms*days || groups != syms*days {
+		t.Fatalf("after the prune: %d rows in %d (symbol, day) groups, want %d in %d", left, groups, syms*days, syms*days)
+	}
+}
