@@ -44,6 +44,16 @@ started the task again - every five minutes, forever, against a build no restart
 could fix. The state now lives in logs\web-guard-state.json and the suppression
 lifts when the build id changes, when the instance comes back complete, or - if
 web\.next\BUILD_ID cannot be read at all - six hours after it was recorded.
+
+THE QUICK TUNNEL TOO (2026-09-30). 'SignalDeck Quick Tunnel' runs the
+cloudflared that carries the public URL to port 8323. At 22:25:58 PT it died on
+a console signal (0xC000013A) and nothing restarted it - RestartOnFailure only
+covers a task that fails to START - so the public site answered 530 for ~12 min
+until a manual Start-ScheduledTask. It is checked here, on every run, because
+this guard already runs every 5 minutes and already stands down for
+ops\.maintenance. Unlike the ngrok 'SignalDeck Tunnel' (tunnel-guard.ps1) it has
+no collection window: the public URL is meant to be up around the clock.
+Disable the task to take the URL down on purpose; a stopped one is restarted.
 #>
 
 param([string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\web-guard.log'))
@@ -137,6 +147,23 @@ function Get-BuildId {
     }
 }
 
+$QuickTunnelTask = 'SignalDeck Quick Tunnel'
+
+# True when the quick tunnel is up. The task's action wraps cloudflared and waits
+# on it, so a RUNNING task is a live tunnel. That is the primary test, because under
+# S4U this session usually cannot read a process's command line (measured in
+# start-local-workspace.ps1), so a process match alone would start a second
+# instance every run. Otherwise only a cloudflared whose command line NAMES the
+# quick tunnel counts. An unreadable one used to count as well, but from this
+# S4U/Limited token every SYSTEM process reads empty: the named-tunnel service
+# ('cloudflared service install' runs as SYSTEM) would have passed for the quick
+# tunnel, and a dead quick tunnel would never have been restarted.
+function Test-QuickTunnel($Task) {
+    if ($Task -and $Task.State -eq 'Running') { return $true }
+    $procs = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction Stop)
+    return @($procs | Where-Object { $_.CommandLine -match 'quicktunnel|tunnel --url|127\.0\.0\.1:8323' }).Count -gt 0
+}
+
 try {
     # STAND DOWN DURING A RELEASE. ops/web-release.ps1 stops the task, renames
     # web\.next and starts it again; a guard arriving in that window sees a port
@@ -161,6 +188,39 @@ try {
 
     $results = @()
     $state = Get-GuardState
+
+    # --- quick tunnel: its own try, so it can never stop the web checks ------
+    try {
+        $qt = Get-ScheduledTask -TaskName $QuickTunnelTask -ErrorAction SilentlyContinue
+        if (-not $qt) {
+            Write-Log ("quicktunnel: '{0}' is not registered here - not checked" -f $QuickTunnelTask)
+        } elseif ($qt.State -eq 'Disabled') {
+            Write-Log "quicktunnel: task disabled - left down on purpose"
+        } elseif (Test-QuickTunnel $qt) {
+            Write-Log "quicktunnel ok"
+            $results += 'quicktunnel ok'
+        } else {
+            Write-Log ("quicktunnel DOWN (task not running, no quick-tunnel cloudflared) - starting task '{0}'" -f $QuickTunnelTask)
+            Start-ScheduledTask -TaskName $QuickTunnelTask
+            $up = $false
+            # 10 s, not the web's 45: this task has a 3-minute limit to share.
+            for ($i = 0; $i -lt 5 -and -not $up; $i++) {
+                Start-Sleep -Seconds 2
+                $up = Test-QuickTunnel (Get-ScheduledTask -TaskName $QuickTunnelTask -ErrorAction SilentlyContinue)
+            }
+            if ($up) {
+                Write-Log "quicktunnel back - the public URL changed, see logs\quicktunnel.log"
+                $results += 'quicktunnel ok'
+            } else {
+                Write-Log "quicktunnel STILL DOWN 10 s after the start"
+                $results += 'quicktunnel DOWN'
+            }
+        }
+    } catch {
+        Write-Log ("quicktunnel UNVERIFIED - {0}" -f $_.Exception.Message)
+        $results += 'quicktunnel UNVERIFIED'
+    }
+
     foreach ($t in $Targets) {
         $port = $t.Port
         $task = $t.Task

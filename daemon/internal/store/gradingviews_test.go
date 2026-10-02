@@ -39,17 +39,17 @@ func TestResolvedPairs_PublishedVsRawViews(t *testing.T) {
 	// dedup failure when the dedup was the point. Two days keeps the property
 	// this test actually guards (raw column vs published column, newest first)
 	// separable from the dedup, which TestResolvedRawPairs_OnePerSymbolDay owns.
-	const day100 = 100*86400 + 3600
-	const day101 = 101*86400 + 3600
+	const day100 = (gw+100)*86400 + 3600
+	const day101 = (gw+101)*86400 + 3600
 	seedResolvedPred(t, st, sym.ID, md.H1d, day100, 0.55, 0.62, 0.01)
 	seedResolvedPred(t, st, sym.ID, md.H1d, day101, 0.48, 0.51, -0.02)
 	// Unresolved row: excluded from both views.
 	if err := st.UpsertPrediction(ctx, Prediction{SymbolID: sym.ID, Horizon: md.H1d,
-		Ts: 102*86400 + 3600, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
+		Ts: (gw+102)*86400 + 3600, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
 		t.Fatalf("upsert prediction: %v", err)
 	}
 
-	probs, ups, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
+	probs, ups, _, err := st.ResolvedPredictionPairs(ctx, md.H1d, 10)
 	if err != nil || len(probs) != 2 || len(ups) != 2 {
 		t.Fatalf("published pairs = %d/%d, %v; want 2/2", len(probs), len(ups), err)
 	}
@@ -88,13 +88,13 @@ func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
 	// Three re-scores of AAPL inside ONE trading day; only the newest may
 	// survive. All stamps sit in regular hours so none folds into a
 	// neighbouring day.
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+14*3600, 0.10, 0.11, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+16*3600, 0.20, 0.21, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+20*3600, 0.30, 0.31, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+14*3600, 0.10, 0.11, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+16*3600, 0.20, 0.21, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+20*3600, 0.30, 0.31, 0.01)
 	// A different symbol on the SAME day is an independent observation.
-	seedResolvedPred(t, st, b.ID, md.H1d, 200*86400+15*3600, 0.40, 0.41, -0.01)
+	seedResolvedPred(t, st, b.ID, md.H1d, (gw+200)*86400+15*3600, 0.40, 0.41, -0.01)
 	// The same symbol on the NEXT day is also independent.
-	seedResolvedPred(t, st, a.ID, md.H1d, 201*86400+14*3600, 0.60, 0.61, -0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+201)*86400+14*3600, 0.60, 0.61, -0.01)
 
 	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
 	if err != nil {
@@ -107,8 +107,8 @@ func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
 		t.Fatalf("ragged result: %d raws / %d ups / %d days", len(raws), len(ups), len(days))
 	}
 	// Newest day first, and real UTC day numbers rather than ordinals.
-	if days[0] != 201 || days[1] != 200 || days[2] != 200 {
-		t.Fatalf("days = %v; want [201 200 200] (ts/86400, newest first)", days)
+	if days[0] != gw+201 || days[1] != gw+200 || days[2] != gw+200 {
+		t.Fatalf("days = %v; want [gw+201 gw+200 gw+200] (ts/86400, newest first)", days)
 	}
 	// Day 201 holds only AAPL's 0.60. Within day 200 the surviving AAPL row must
 	// be the 17:00 re-score (0.30), never the 01:00 one that the runner
@@ -196,13 +196,13 @@ func TestDirectionalRecord_IndependentDaysAndBaseline(t *testing.T) {
 	b, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
 	day := int64(86400)
 	// Anchored AFTER the survivorship epoch on purpose. The gradeable
-	// population starts at SurvivorshipEpochTS (gradeablepop.go), so a fixture
+	// population starts at GradingEpochTS (gradeablepop.go), so a fixture
 	// sitting at day 100 of 1970 — as this one did — is filtered out entirely
 	// and LiveDirectionalRecord asserts nothing. The offsets below are relative
 	// to the epoch, which keeps the ORIGINAL intent (two distinct symbol-days,
 	// with the later of two same-day calls winning) while making the rows look
 	// like rows this platform could actually have written.
-	epoch := int64(SurvivorshipEpochTS)
+	epoch := int64(GradingEpochTS)
 	// A day100 correct-up; A day101 has TWO rows resolving the same move —
 	// only the latest (correct) may count; B day101 wrong-up.
 	seedResolvedPred(t, st, a.ID, md.H1d, epoch+100*day+60, 0.6, 0.6, 0.01)
@@ -551,5 +551,104 @@ func TestLatestPerpStocktwitsAndCOTReads(t *testing.T) {
 	r, ok, err := st.LatestCOTByContract(ctx, "%e-mini s&p%")
 	if err != nil || !ok || r.ReportDate != "2026-07-21" || r.NoncommLong != 110 {
 		t.Fatalf("LatestCOTByContract = %+v, %v, %v", r, ok, err)
+	}
+}
+
+// gw shifts a day-number fixture into the graded window. The calibration pairs
+// start at GradingEpochTS (predict.go), so a fixture dated 1970 now describes
+// evidence the fit correctly refuses. Whole weeks, so weekday and DST side are
+// unchanged: day 0 lands on 2026-08-13 (a Thursday, like 1970-01-01).
+const gw = 20678
+
+// The calibration fit reads the graded window only (GradingEpochTS). A resolved
+// row before the epoch is evidence the grader refuses, so it must not train the
+// map either; without the filter this returns both rows.
+func TestResolvedRawPairs_ExcludePreEpochRows(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	// Anchored on the epoch itself, so a re-registration cannot strand both rows
+	// on one side of it.
+	const epochDay = GradingEpochTS / 86400
+	seedResolvedPred(t, st, sym.ID, md.H1d, (epochDay-30)*86400+15*3600, 0.10, 0.11, 0.01) // pre-epoch
+	seedResolvedPred(t, st, sym.ID, md.H1d, (epochDay+3)*86400+15*3600, 0.70, 0.71, 0.01)
+	raws, _, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raws) != 1 || raws[0] != 0.70 {
+		t.Fatalf("raws = %v; want only the post-epoch 0.70", raws)
+	}
+}
+
+// /api/signal-report labels this read the symbol's "LIVE forward record", so it
+// must be the grader's population: pre-epoch rows out, one observation per
+// settled move (latest call wins). The whole-ledger read it replaced showed
+// AAPL 3,059 rows at 61.8% against 5 graded observations at 40%.
+func TestPredictionOutcomesForSymbol_GradedWindowOnly(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	day, epoch := int64(86400), int64(GradingEpochTS)
+	for i := int64(1); i <= 3; i++ { // pre-epoch, all right: never graded
+		seedResolvedPred(t, st, sym.ID, md.H1d, epoch-i*day+15*3600, 0.7, 0.7, 0.01)
+	}
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+15*3600, 0.7, 0.7, 0.01) // early call, right
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+16*3600, 0.3, 0.3, 0.01) // same move, latest, wrong
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+4*day+15*3600, 0.6, 0.6, 0.02) // right
+
+	rows, correct, total, err := st.PredictionOutcomesForSymbol(ctx, sym.ID, "1d", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || correct != 1 || len(rows) != 2 {
+		t.Fatalf("correct/total/rows = %d/%d/%d; want 1/2/2 (graded window, one per settled move)",
+			correct, total, len(rows))
+	}
+	if rows[0].Ts != epoch+4*day+15*3600 || rows[1].Ts != epoch+3*day+16*3600 || rows[1].Correct {
+		t.Fatalf("rows = %+v; want newest first, the latest call standing for its move", rows)
+	}
+}
+
+// The production form: once any bar exists the read runs with the stale-feed
+// WITH clause and the settlement filter, and the symbol/horizon filters are
+// appended to that SQL text. The case above seeds no bars, so it never
+// exercised this form.
+func TestPredictionOutcomesForSymbol_SettlementForm(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	msft, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
+	day := int64(86400)
+	d0 := int64(GradingEpochTS) + 4*3600 // exchange midnight on the epoch day
+	var bars []md.Bar
+	for _, id := range []int64{aapl.ID, msft.ID} {
+		for i := int64(0); i < 4; i++ {
+			bars = append(bars, md.Bar{SymbolID: id, TF: md.TF1d, Ts: d0 + i*day, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1})
+		}
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SettlementApplicable(ctx); err != nil || !ok {
+		t.Fatalf("SettlementApplicable = %v, %v; the fixture must take the production form", ok, err)
+	}
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // right
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+day+23*3600, 0.7, 0.7, -0.01) // wrong
+	seedResolvedPred(t, st, msft.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // another symbol
+
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 2 || correct != 1 {
+		t.Fatalf("AAPL correct/total = %d/%d (err %v); want 1/2, MSFT's row excluded", correct, total, err)
+	}
+	// A stale feed on AAPL's second day takes that row out, and only for AAPL.
+	if _, err := st.w.ExecContext(ctx, `INSERT INTO dq_events (symbol_id, ts, kind) VALUES (?, ?, 'stale')`,
+		aapl.ID, d0+day+23*3600); err != nil {
+		t.Fatal(err)
+	}
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 1 || correct != 1 {
+		t.Fatalf("after the stale event AAPL correct/total = %d/%d (err %v); want 1/1", correct, total, err)
+	}
+	if _, _, total, err := st.PredictionOutcomesForSymbol(ctx, msft.ID, "1d", 50); err != nil || total != 1 {
+		t.Fatalf("MSFT total = %d (err %v); want 1, untouched by AAPL's stale event", total, err)
 	}
 }

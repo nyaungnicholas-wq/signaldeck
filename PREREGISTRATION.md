@@ -464,3 +464,76 @@ resolved, so no realized structural outcome could have informed either change.
 document's `prereg-document` record, appending visible AMENDMENT entries on the
 next `prereg-registrar` pass. Until that pass runs the grader refuses to grade at
 all, exactly as section 12 describes. That refusal is the intended state.
+
+## 11. AMENDMENT 2026-09-20 — the DIRECTIONAL grading window starts 2026-08-07
+
+**What changed.** The population the directional rows are graded over now
+starts at `GRADING_EPOCH = 2026-08-07` (`tools/accuracy_registry.py`,
+`store.GradingEpoch`) instead of the survivorship epoch. The survivorship epoch
+itself (2026-07-24) does not move: it still bounds listing-status
+reconstruction and the STRUCTURAL universe in section 6, which this amendment
+does not touch.
+
+**Why, stated with the outcome in view.** The publication gate refuses the whole
+directional table while any collapsed cross-section — a day on which the whole
+universe received a handful of distinct probabilities — sits in the graded
+window, and since 2026-09-09 that window is anchored and does not roll. The
+2026-07-27..08-06 collapse is a fixed defect (a34db09, 906310c) and its days
+would otherwise stay in the window indefinitely; the gate's own refusal text
+said "this clears when the window is re-registered". At filing the registry
+had read REFUSED since 2026-09-13, the withheld grade read FAILED (1d) and
+INSUFFICIENT DAYS (1w), and the directional ensemble was already retired on its
+live record. The correction cannot flatter the model: it changes no accuracy
+figure, null, interval, evidence floor, auto-retire rule or verdict map, and
+the expected result on the rows in hand is INSUFFICIENT DAYS, not a verdict.
+
+**How the day was chosen.** By the collapse detector's own ruler, never by an
+accuracy number. `prereg-amend -kind grading-window-reregistration` measures
+every graded day from both epochs and REFUSES to file while any collapsed
+cross-section sits on or after the new one. It refused 2026-08-05 (1d
+2026-08-06: 33 distinct across 327 symbols, ratio 0.10 below the 0.15 floor)
+and files at 2026-08-07, where the window it opens holds none. The measured
+collapse table travels inside the chain record.
+
+**Chaining.** The `grading-window-reregistration` record carries the measured
+state at filing; the grader edit re-hashes the `grading-protocol` record and this
+document re-hashes `prereg-document`, appending visible AMENDMENT entries on the
+next registrar pass. Until that pass runs the grader refuses to grade, exactly as
+section 12 describes.
+
+## 14. AMENDMENT 2026-09-30 — the DIRECTIONAL grading window moves to 2026-09-25
+
+**What changed.** The directional graded population now starts at
+`GRADING_EPOCH = 2026-09-25` (`tools/accuracy_registry.py`, `store.GradingEpoch`)
+instead of 2026-08-07. Section 11's amendment stays on the record unaltered; this
+is a second, separate boundary move. The survivorship epoch (2026-07-24) and the
+structural universe of section 6 do not move.
+
+**Why, stated with the outcome in view.** Two defects compounded. The fleet
+calibration fit read every resolved pair since the survivorship epoch, so its
+near-flat map squeezed 1d probabilities into about 1.8 points around 0.48 and
+every symbol was called DOWN: one market-wide call per day, which the collapse
+detector classifies as a collapsed cross-section (1d 2026-09-14: 28 distinct
+across 324 symbols). Separately, the 1d resolver had stopped grading from about
+2026-09-10, so the squeezed days never reached the gate. Both are fixed (a9383b0,
+live 2026-09-25 03:47:47 UTC; 5c9940b, 2026-09-30); fixing the resolver graded
+2026-09-14 and the gate refused the whole directional table. At filing the
+directional ensemble was already retired on its own record and the last published
+grade read NO SKILL (1d) and INSUFFICIENT DAYS (1w). This changes no accuracy
+figure, null, interval, evidence floor, auto-retire rule or verdict map; it
+discards the dispersed 2026-08-07..09-24 days along with the squeezed ones, which
+is the cost of a single window start, and the expected result is INSUFFICIENT
+DAYS for both horizons until the credible-day floor is met again.
+
+**How the day was chosen.** By when the defect ended and by the collapse
+detector's own ruler, never by an accuracy number: 2026-09-25 is the first UTC
+day served by the repaired calibration, and every symbol's latest forecast that
+day (the row the grader keeps) postdates the fix.
+`prereg-amend -kind grading-window-reregistration-2` re-measures both windows at
+filing and refuses while any collapsed cross-section sits on or after the new
+epoch; the measured table travels inside the chain record.
+
+**Chaining.** As in section 11: the `grading-window-reregistration-2` record
+carries the measured state at filing, the grader edit re-hashes the
+`grading-protocol` record and this document re-hashes `prereg-document` on the
+next registrar pass, until which the grader refuses to grade.

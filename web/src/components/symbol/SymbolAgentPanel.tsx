@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { symbolAgent, type Horizon, type Market, type SymbolAgent } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import { SYMBOL_MODEL_DESCRIPTION, SYMBOL_MODEL_LABEL } from "@/lib/hypothetical";
 
 // Horizons the per-symbol learner models (matches the daemon's predHorizons).
 type AgentHorizon = "1d" | "1w";
@@ -79,9 +80,14 @@ function SkillBar({ label, hitRate, hasHR, ic, hasIC, n }: {
 export default function SymbolAgentPanel({
   symbol,
   market,
+  memberView = false,
 }: {
   symbol: string;
   market: Market;
+  // Members never see the per-signal hit rates (H-4, 2026-10-02): the daemon
+  // emits a row from n=1 with no base-rate comparison, and the bars colour
+  // 58% green as "edge over a coin flip". Not evidence to show a member.
+  memberView?: boolean;
 }) {
   const [horizon, setHorizon] = useState<AgentHorizon>("1d");
   const [retryTick, setRetryTick] = useState(0);
@@ -115,7 +121,13 @@ export default function SymbolAgentPanel({
   return (
     <section className="panel">
       <div className="panel-h">
-        <span>THIS SYMBOL&rsquo;S AGENT</span>
+        {/* Named for what it is: a classifier, not an adviser or a persona. */}
+        <span>
+          {SYMBOL_MODEL_LABEL.toUpperCase()}{" "}
+          <span className="font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+            ({SYMBOL_MODEL_DESCRIPTION})
+          </span>
+        </span>
         {data && badge && (
           <span
             className="chip ml-2"
@@ -125,7 +137,7 @@ export default function SymbolAgentPanel({
             {badge.text}
           </span>
         )}
-        <div role="group" aria-label="Agent horizon" className="ml-auto flex items-center gap-1">
+        <div role="group" aria-label="Model horizon" className="ml-auto flex items-center gap-1">
           {AGENT_HORIZONS.map((h) => {
             const active = h === horizon;
             return (
@@ -152,7 +164,7 @@ export default function SymbolAgentPanel({
         />
       ) : !data ? (
         <div className="px-4 py-4">
-          <Skeleton lines={4} label="loading symbol agent" className="border-0 p-0" />
+          <Skeleton lines={4} label="loading symbol model" className="border-0 p-0" />
         </div>
       ) : (
         <div className="flex flex-col gap-4 px-4 py-4">
@@ -186,8 +198,8 @@ export default function SymbolAgentPanel({
             </div>
           )}
 
-          {/* Per-signal skill bars — the measured edge, whatever the tier. */}
-          {(data.skill ?? []).length > 0 ? (
+          {/* Per-signal skill bars — operator only (see memberView). */}
+          {memberView ? null : (data.skill ?? []).length > 0 ? (
             <div className="flex flex-col gap-3">
               <div className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
                 per-signal skill (this symbol&rsquo;s own history)
@@ -215,7 +227,7 @@ export default function SymbolAgentPanel({
           {data.personal && Object.keys(data.activeWeights).length > 0 && (
             <div className="flex flex-col gap-1">
               <div className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
-                active blend weights (personal)
+                active blend weights (this symbol&rsquo;s own)
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {Object.entries(data.activeWeights)

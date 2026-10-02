@@ -20,6 +20,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/canary"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/distribution"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -98,7 +99,7 @@ func (d Deps) canaryTrials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"trials": rows,
+		"trials": withholdCanary(rows),
 		"count":  len(rows),
 		"gates": map[string]any{
 			"minObservations": canary.MinObservations,
@@ -113,6 +114,28 @@ func (d Deps) canaryTrials(w http.ResponseWriter, r *http.Request) {
 		},
 		"howToRead": canaryHowToRead,
 	})
+}
+
+// withholdCanary: a trial of the directional ensemble grades its versions on
+// the SD-30 label, so it keeps its facts (what serves, the sample sizes) and
+// loses every accuracy, interval and baseline, and the verdict drawn from them.
+func withholdCanary(rows []store.CanaryTrial) []any {
+	out := make([]any, 0, len(rows))
+	for _, t := range rows {
+		h, isDir := strings.CutPrefix(t.Model, "directional-ensemble-")
+		why, ok := publication.DirectionalWithheld(h)
+		if !isDir || !ok {
+			out = append(out, t)
+			continue
+		}
+		out = append(out, map[string]any{
+			"model": t.Model, "incumbent": t.Incumbent, "challenger": t.Challenger,
+			"serving": t.Serving, "incN": t.IncN, "chN": t.ChN, "decidedAt": t.DecidedAt,
+			"decision": "withheld", "reason": why,
+			"incAcc": nil, "chAcc": nil, "chLower": nil, "chUpper": nil, "baseline": nil,
+		})
+	}
+	return out
 }
 
 const datasetVersionsHowToRead = "Each row is a content hash of the exact daily bars a measurement would read. When the hash changes inside a range that was already recorded, the provider REWROTE history: any claim measured on that slice is no longer reproducible and has to be re-graded. Appending newer bars is not a revision and is not counted as one. revisions is the running count of genuine rewrites, so the worst-affected symbols sort first."

@@ -83,11 +83,20 @@ def verdict(acc, null_acc, agreement, calls_up):
     }
 
 
+# The graded window's first day, as accuracy_registry.GRADING_EPOCH_TS (not
+# imported: that grader is hash-pinned and refuses to run when touched).
+# test_selection_honesty_epoch.py holds the two equal.
+GRADING_EPOCH_TS = 1790294400  # 2026-09-25T00:00Z
+
+
 def calls_up_by_horizon(db_path):
     """Fraction of graded calls pointing UP, per horizon, from the live record.
 
     The registry publishes agreement but not DIRECTION, and agreement is the
     same number whether the book called up on everything or down on everything.
+    Graded window only (ts >= GRADING_EPOCH_TS): over the whole table it read
+    47% UP for 1d while the graded rows were 6% UP, so the published reason
+    said "calling DOWN on 52.9%" of a book that called DOWN on 94%.
     Deduped to one row per (symbol, horizon, UTC day) to match the registry's
     independence collapse. Read-only: safe against the running daemon.
     """
@@ -102,10 +111,10 @@ def calls_up_by_horizon(db_path):
                      ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
                        date(ts,'unixepoch') ORDER BY ts DESC) rn
               FROM prediction_outcomes
-              WHERE up IS NOT NULL AND prob IS NOT NULL
+              WHERE up IS NOT NULL AND prob IS NOT NULL AND ts >= ?
             )
             SELECT horizon, AVG(CASE WHEN prob >= 0.5 THEN 1.0 ELSE 0.0 END)
-            FROM d WHERE rn = 1 GROUP BY horizon""").fetchall()
+            FROM d WHERE rn = 1 GROUP BY horizon""", (GRADING_EPOCH_TS,)).fetchall()
         out = {h: v for h, v in rows if v is not None}
     finally:
         con.close()

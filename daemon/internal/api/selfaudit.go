@@ -10,7 +10,9 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -25,6 +27,17 @@ func (d Deps) selfAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	if findings == nil {
 		findings = []store.SelfAuditRow{} // honest empty state → [], never null
+	}
+	// SD-30: calibration, its at-chance level and the prediction bias are all
+	// measured against the directional label, so at 1d/1w they say why instead.
+	for i, f := range findings {
+		kind, h, _ := strings.Cut(f.Metric, ":")
+		if kind != "calibration" && kind != "calibration_level" && kind != "prediction_bias" {
+			continue
+		}
+		if why, ok := publication.DirectionalWithheld(h); ok {
+			findings[i].Value, findings[i].Status, findings[i].Detail = 0, "withheld", why
+		}
 	}
 	var generatedTs int64
 	for _, f := range findings {

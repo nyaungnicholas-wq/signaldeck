@@ -312,6 +312,26 @@ type ledgerObs struct {
 	high    bool // vix_high_vol regime flag at prediction time
 }
 
+// insertLedgerEvidence appends e to its hypothesis's chain and links the
+// lineage spine (Layers 2+8): hypothesis --evidenced_by--> this evidence row,
+// stamped with the build's git rev so every grade is tied to the code version
+// that produced it. Every ledger evidence writer in this package goes through
+// here (TestLedgerEvidenceWritersLinkLineage), so no producer can leave the
+// spine silently short. The link is best-effort: the evidence row is already
+// durably written, and a lineage failure must not fail the grade.
+func insertLedgerEvidence(ctx context.Context, st *store.Store, e rl.Evidence) error {
+	if err := st.InsertLedgerEvidence(ctx, e); err != nil {
+		return err
+	}
+	_ = lineage.Link(ctx, st, lineage.Edge{
+		SrcKind: lineage.KindHypothesis, SrcID: "ledger:" + e.HypID,
+		DstKind:  lineage.KindClaim,
+		DstID:    fmt.Sprintf("ledger-evidence:%s@%d:%s", e.HypID, e.Ts, e.Kind),
+		EdgeKind: lineage.EdgeEvidencedBy, MetaJSON: lineage.RevMeta(),
+	})
+	return nil
+}
+
 // ledgerGrader grades one open hypothesis on fresh labeled 1w rows. filter
 // selects qualifying rows; call returns the directional call (true = long).
 type ledgerGrader struct {
@@ -494,20 +514,9 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		Note: note, WindowFrom: winFrom, WindowTo: winTo,
 	})
 	for _, e := range evidence {
-		if err := w.St.InsertLedgerEvidence(ctx, e); err != nil {
+		if err := insertLedgerEvidence(ctx, w.St, e); err != nil {
 			return false, err
 		}
-		// Lineage spine (Layers 2+8): hypothesis --evidenced_by--> this
-		// evidence row, edge stamped with the build's git rev so every grade
-		// is tied to the code version that produced it. Best-effort — a
-		// lineage failure must not fail the grade (the evidence row above is
-		// already durably written).
-		_ = lineage.Link(ctx, w.St, lineage.Edge{
-			SrcKind: lineage.KindHypothesis, SrcID: "ledger:" + e.HypID,
-			DstKind:  lineage.KindClaim,
-			DstID:    fmt.Sprintf("ledger-evidence:%s@%d:%s", e.HypID, e.Ts, e.Kind),
-			EdgeKind: lineage.EdgeEvidencedBy, MetaJSON: lineage.RevMeta(),
-		})
 	}
 
 	// Regime coverage accumulates on the hypothesis — but a token high-vol
@@ -871,7 +880,7 @@ func (w *ResearchLedgerWorker) seedOnce(ctx context.Context, now int64) (bool, e
 			case -1: // below-band (the hypothesis predicts a rate BELOW p0)
 				bf, _ = rl.BayesFactorBelow(e.k, e.n, rl.TranscribedNull(e.p0, e.n, "transcribed"), h.MaxEdge)
 			}
-			if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
+			if err := insertLedgerEvidence(ctx, w.St, rl.Evidence{
 				HypID: h.ID, Ts: now, Kind: e.kind, K: e.k, N: e.n, P0: e.p0, BF: bf,
 				Note: e.note, WindowFrom: 0, WindowTo: 0,
 			}); err != nil {
@@ -1021,7 +1030,7 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 		}
 		for _, e := range s.ev {
 			bf, _ := rl.BayesFactorAbove(e.k, e.n, rl.TranscribedNull(e.p0, e.n, "transcribed"), h.MaxEdge)
-			if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
+			if err := insertLedgerEvidence(ctx, w.St, rl.Evidence{
 				HypID: h.ID, Ts: now, Kind: rl.KindManual, K: e.k, N: e.n, P0: e.p0,
 				BF: bf, Note: e.note,
 			}); err != nil {
@@ -1074,7 +1083,7 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 			continue // frontier row absent (fresh DB mid-seed) — skip, not fatal
 		}
 		bf, _ := rl.BayesFactorAbove(f.e.k, f.e.n, rl.TranscribedNull(f.e.p0, f.e.n, "transcribed"), hyp.MaxEdge)
-		if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
+		if err := insertLedgerEvidence(ctx, w.St, rl.Evidence{
 			HypID: f.hypID, Ts: now, Kind: rl.KindManual, K: f.e.k, N: f.e.n,
 			P0: f.e.p0, BF: bf, Note: f.e.note,
 		}); err != nil {
@@ -1116,7 +1125,7 @@ func (w *ResearchLedgerWorker) seedWave3(ctx context.Context, now int64) (bool, 
 			return true, w.St.SetMeta(ctx, researchLedgerSeedV4Key, fmt.Sprintf("%d", now))
 		}
 	}
-	if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
+	if err := insertLedgerEvidence(ctx, w.St, rl.Evidence{
 		HypID: "H012", Ts: now, Kind: rl.KindManual, BF: 1,
 		Note: tag + ": CONDITIONING CORRECTION. The 72-87% fill rates include day-0 fills (true only at the gap-day OPEN). Conditional on surviving day 0 unfilled, remaining-window fill = 55.5/60.6% (0.5-1% up/dn), 52.8/57.4% (1-2%), 51.4/51.0% (2-4%), 45.1/43.9% (4-10%) — every bucket below the 70% product bar. Live gapfill5 forecasts PULLED from the platform; unconditional statement stands. BF=1: correction note, not new binomial evidence.",
 	}); err != nil {

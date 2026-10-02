@@ -141,46 +141,6 @@ func (b *credsBody) validate() string {
 	return ""
 }
 
-// authRegister creates an account. The FIRST registered user becomes admin.
-func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
-	if !d.Cfg.OpenSignup {
-		httpErr(w, 403, "registration is closed")
-		return
-	}
-	var body credsBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, 400, "bad json: "+err.Error())
-		return
-	}
-	if msg := body.validate(); msg != "" {
-		httpErr(w, 400, msg)
-		return
-	}
-	if _, exists, err := d.St.GetUserByName(r.Context(), body.Username); err != nil {
-		httpInternal(w, err)
-		return
-	} else if exists {
-		httpErr(w, 409, "username taken")
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	n, err := d.St.CountUsers(r.Context())
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	uid, err := d.St.CreateUser(r.Context(), body.Username, string(hash), n == 0)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	d.startSession(w, r, uid, body.Username, n == 0)
-}
-
 // loginFailures throttles repeated password failures PER USERNAME.
 //
 // The request rate limiter alone did not cover this: it keys on client (user
@@ -191,12 +151,15 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 //
 // Keyed on the SUBMITTED username whether or not that user exists, so the
 // lockout cannot be used to enumerate accounts — an unknown name locks out
-// exactly like a real one.
+// exactly like a real one. Keyed EXACTLY as typed, because the user lookup is
+// case-sensitive: a lowercased key let an attacker register "NICK", sign in
+// to it, and clear the counter guarding "nick" after every four guesses.
 var loginFailures = &failCounter{fails: map[string]*failState{}}
 
 type failCounter struct {
-	mu    sync.Mutex
-	fails map[string]*failState
+	mu        sync.Mutex
+	fails     map[string]*failState
+	lastSweep time.Time
 }
 
 type failState struct {
@@ -263,15 +226,37 @@ func (f *failCounter) succeed(key string) {
 	delete(f.fails, key)
 }
 
-// sweep drops entries idle past the maximum backoff — they can no longer be
-// holding anyone out, so keeping them only grows the map. Called under mu.
+// sweep drops entries idle past the maximum backoff. A name that crossed the
+// lockout threshold is remembered for loginLockoutMemory instead: at the cap
+// its lock ends exactly loginLockoutMax after the last failure, so forgetting
+// it then reset n to zero and handed back four free guesses plus the whole
+// backoff ladder every ~36 minutes. Called under mu.
+//
+// It walks the whole map under mu, so it runs at most once a minute rather than
+// on every sign-in; and past loginFailSoftCap entries (someone spraying names
+// to fill it) remembered names fall back to the 15-minute rule, so the memory
+// degrades to the old behaviour under attack instead of growing without bound.
 func (f *failCounter) sweep(now time.Time) {
+	pressure := len(f.fails) > loginFailSoftCap
+	if !pressure && now.Sub(f.lastSweep) < time.Minute {
+		return
+	}
+	f.lastSweep = now
 	for k, st := range f.fails {
-		if now.Sub(st.last) > loginLockoutMax {
+		idle := now.Sub(st.last)
+		if idle > loginLockoutMemory || ((st.n < loginLockoutAfter || pressure) && idle > loginLockoutMax) {
 			delete(f.fails, k)
 		}
 	}
 }
+
+// loginFailSoftCap is the lockout-map size past which names stop being
+// remembered for loginLockoutMemory (see sweep).
+const loginFailSoftCap = 50000
+
+// loginLockoutMemory is how long a name that reached the lockout stays at the
+// cap: one guess per loginLockoutMax for a day, not a fresh ladder.
+const loginLockoutMemory = 24 * time.Hour
 
 // authLogin verifies credentials and issues a session cookie.
 func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
@@ -281,12 +266,19 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(body.Username)
+	// No account name is longer than validate() allows. Without this bound a
+	// 128 KB username became a lockout map key and a full log line, at the
+	// write-tier rate, per address.
+	if len(name) > 32 {
+		httpErr(w, 401, "invalid username or password")
+		return
+	}
 
 	// Check the lockout BEFORE bcrypt: the whole point is to stop spending a
 	// ~100ms hash on an attacker, and answering fast here is not an oracle
 	// because the lockout key exists for unknown usernames too.
 	now := time.Now()
-	if wait := loginFailures.retryAfter(strings.ToLower(name), now); wait > 0 {
+	if wait := loginFailures.retryAfter(name, now); wait > 0 {
 		// Round UP, and never below a second. Rounding to nearest produced
 		// "try again in 0s" for any sub-500ms remainder — an instruction to
 		// wait no time at all, on a request that was just refused.
@@ -312,16 +304,31 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || !ok {
-		loginFailures.fail(strings.ToLower(name), now)
+		loginFailures.fail(name, now)
 		slog.Warn("login failed", "username", name)
 		httpErr(w, 401, "invalid username or password")
 		return
 	}
-	loginFailures.succeed(strings.ToLower(name))
+	// A public account must confirm its email before it can sign in. Legacy
+	// accounts (created before emails existed) have no address and are exempt.
+	if _, verified, hasEmail, err := d.St.AccountEmail(r.Context(), u.ID); err != nil {
+		httpInternal(w, err)
+		return
+	} else if hasEmail && !verified {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{
+			"error": "confirm your email first — check your inbox, or request a new link",
+			"code":  "unverified",
+		})
+		return
+	}
+	// Clear the counter only for a sign-in that actually issues a session.
+	loginFailures.succeed(name)
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 
 func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, username string, isAdmin bool) {
+	// Sign-in is a write a person waits on; let it ahead of the worker fleet.
+	defer d.St.Priority()()
 	// Prune on every session creation, not just login: it also deletes the
 	// pre-digest rows that stored a cookie value verbatim (see
 	// store.PruneSessions). Those rows stopped authenticating the moment the
@@ -339,7 +346,10 @@ func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, us
 		return
 	}
 	d.setSessionCookie(w, r, token, int(sessionTTL.Seconds()))
-	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin})
+	// member mirrors isMember for the session just issued (this request carries
+	// no session yet), so every sign-in path can land a member on /today.
+	member := d.published() && !d.isAdminUID(r.Context(), uid)
+	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin, "member": member})
 }
 
 // authLogout deletes the session and clears the cookie.
@@ -378,7 +388,13 @@ func (d Deps) authMe(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 401, "not signed in")
 		return
 	}
-	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin})
+	// member is the daemon's own verdict (isMember), not something the web could
+	// derive from isAdmin: on a private deployment every signed-in account is
+	// the operator, admin or not. memberFinra tells the member pages whether the
+	// FINRA short panels are open to members (memberFINRARoutes), so they never
+	// fetch a route the gate refuses.
+	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin, "member": d.isMember(r),
+		"memberFinra": d.Cfg.MemberFINRA})
 }
 
 func (d Deps) registerAuth(mux *http.ServeMux) {
@@ -386,6 +402,7 @@ func (d Deps) registerAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", d.authLogin)
 	mux.HandleFunc("POST /api/auth/logout", d.authLogout)
 	mux.HandleFunc("GET /api/auth/me", d.authMe)
+	d.registerAccounts(mux) // verify / resend / forgot / reset (accounts.go)
 }
 
 // withUser stashes the resolved user id in the request context.

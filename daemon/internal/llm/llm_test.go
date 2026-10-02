@@ -238,13 +238,13 @@ func TestTrimToBudget(t *testing.T) {
 		big[i] = 'x'
 	}
 	msgs := []Message{{Role: "system", Content: "charter"}, {Role: "user", Content: string(big)}}
-	trimToBudget(msgs, maxPromptChars)
+	trimToBudget(msgs, MaxPromptChars)
 	if msgs[0].Content != "charter" {
 		t.Fatal("system charter must be preserved")
 	}
 	total := len(msgs[0].Content) + len(msgs[1].Content)
-	if total > maxPromptChars+64 {
-		t.Fatalf("total %d exceeds budget %d", total, maxPromptChars)
+	if total > MaxPromptChars+64 {
+		t.Fatalf("total %d exceeds budget %d", total, MaxPromptChars)
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
@@ -43,6 +45,32 @@ func TestAnalystWorker_TransientProviderFailureIsDegradedNotError(t *testing.T) 
 	detail, err := w.Run(context.Background())
 	if err == nil || !errors.Is(err, workers.ErrDegraded) {
 		t.Fatalf("transient provider failure: err = %v, want it to wrap workers.ErrDegraded", err)
+	}
+	if detail == "" {
+		t.Errorf("a degraded run must still say what happened; detail was empty")
+	}
+}
+
+// sentiment-tagger meets the same exhausted pool and must file it the same
+// way. A pass that tagged nothing is DEGRADED: not a hard error that fails
+// /api/ready over upstream capacity, and not an ok that hides a tagger starving
+// behind it.
+func TestSentimentTagger_TransientWithNothingTaggedIsDegraded(t *testing.T) {
+	st := newAnalystTestStore(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertNews(ctx, store.NewsItem{ID: "n1", SymbolID: sym.ID,
+		Ts: time.Now().Unix(), Headline: "Apple beats"}); err != nil {
+		t.Fatal(err)
+	}
+	w := &SentimentTagger{St: st, LLM: &fakeAnalystLLM{err: llm.ErrTransient}}
+
+	detail, err := w.Run(ctx)
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("transient provider failure with 0 tagged: err = %v, want it to wrap workers.ErrDegraded", err)
 	}
 	if detail == "" {
 		t.Errorf("a degraded run must still say what happened; detail was empty")

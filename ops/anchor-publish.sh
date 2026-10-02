@@ -20,6 +20,11 @@
 #      with n, accuracy, CI, prequential null, and verdict — so an outsider
 #      reads the track record on the repo's front page without cloning or
 #      running Python. Never hand-edited; regenerated on every publish.
+#   5. stamps/<UTC>.txt, a statement binding the CURRENT ledger head, the
+#      anchor line, the prereg head and the hashes of the registry and protocol,
+#      timestamped by two RFC 3161 authorities and OpenTimestamps (see step 5
+#      below for why git dates alone prove nothing), plus verify.py, VERIFY.md
+#      and the TSA certificates a stranger needs to check all of it offline.
 #
 # This script never creates or re-points a remote. The public repo must be
 # cloned by the operator first; point SIGNALDECK_ANCHOR_REPO at the clone
@@ -63,18 +68,36 @@ AUTH=()
   fail=0
 
   if [ ! -d "$REPO/.git" ]; then
-    echo "FAIL: no anchors clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of the signaldeck-anchors repo (private today, see README)"
+    echo "FAIL: no anchors clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of github.com/nyaungnicholas-wq/signaldeck-anchors"
     exit 1
+  fi
+
+  # 0. Verify first. A verify call writes a signed anchor when one is due, so
+  #    step 1 below publishes a fresh one instead of whatever the last visitor
+  #    to /api/ledger/verify left behind (measured 2026-09-30: the newest
+  #    anchors were 17 hours to 7 days apart). Its `intact` verdict also goes
+  #    into the statement in step 5. Failure only downgrades it to "unchecked".
+  intact=unchecked
+  vcount=0
+  vjson=$(curl -sf --max-time 60 -H "X-Signaldeck: 1" ${AUTH[@]+"${AUTH[@]}"} "$API/api/ledger/verify") || vjson=""
+  if [ -n "$vjson" ]; then
+    vres=$(printf '%s' "$vjson" | "$(sd_py)" -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+    print("true" if d.get("intact") is True else "false", int(d.get("count") or 0))
+except Exception:
+    print("unchecked 0")')
+    intact=${vres%% *}
+    vcount=${vres##* }
   fi
 
   # 1. Newest anchor digest. Append-only and idempotent: a line already in
   #    anchors.log is not re-appended, so runs between anchor cadences are free.
   #    The API is tried first, but it requires the daemon up and a credential;
-  #    the fallback reads ledger_anchors straight from SQLite and RECOMPUTES
-  #    the publish line per daemon/internal/ledgeranchor/ledgeranchor.go
-  #    (Message/Digest/PublishLine), same as the prereg block below does for
-  #    its chain. Recomputation is also a check: if the recomputed digest does
-  #    not equal the stored digest column the row is not published.
+  #    the fallback reads ledger_anchors straight from SQLite, verifies the
+  #    newest anchor the way the daemon does, and RECOMPUTES the publish line
+  #    per daemon/internal/ledgeranchor/ledgeranchor.go (Message/Digest/
+  #    PublishLine). Any failed check publishes nothing.
   touch "$REPO/anchors.log"
   # Python, not jq: jq is NOT installed under the Git Bash that runs this
   # repo's scheduled tasks, so every jq line in this file was a `command not
@@ -89,33 +112,29 @@ try:
 except Exception:
     sys.exit(0)
 anchors = d.get("anchors") or []
-if anchors and anchors[0].get("publish"):
+# Only an anchor the daemon itself verifies (pinned key, head reproduces) is
+# worth a third-party timestamp; publishing a failing one would give a forged
+# anchor exactly the external standing anchoring exists to deny it.
+if anchors and anchors[0].get("ok") is True and anchors[0].get("publish"):
     print(anchors[0]["publish"])
+elif anchors:
+    print("REFUSE " + str(anchors[0].get("reason") or "the daemon does not verify the newest anchor"))
 ')
-  if [ -z "$line" ]; then
-    line=$("$(sd_py)" - "$SD/data/signaldeck.db" <<'PY'
-import hashlib, sqlite3, sys
-con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
-row = con.execute("SELECT created_at, ledger_seq, ledger_count, head_hash, alg,"
-                  " pub_key, sig, digest FROM ledger_anchors"
-                  " ORDER BY seq DESC LIMIT 1").fetchone()
-if not row:
-    sys.exit(1)
-created_at, lseq, lcount, head, alg, pub, sig, stored = row
-if alg != "ed25519":
-    sys.exit(1)  # unknown scheme — do not guess at the payload
-msg = ("signaldeck-ledger-anchor|v1|alg=ed25519"
-       f"|created_at={created_at}|ledger_seq={lseq}|ledger_count={lcount}|head={head}")
-digest = hashlib.sha256(
-    msg.encode() + b"\x1e" + sig.encode() + b"\x1e" + pub.encode()).hexdigest()
-if digest != stored:
-    sys.exit(1)  # stored digest does not reproduce — publish nothing
-print(f"SIGNALDECK-LEDGER-ANCHOR v1 seq={lseq} count={lcount} ts={created_at} digest={digest}")
-PY
-    ) || line=""
+  refused=""
+  case "$line" in REFUSE\ *) refused=${line#REFUSE }; line="" ;; esac
+  if [ -z "$line" ] && [ -z "$refused" ]; then
+    # tools/anchor_fallback.py applies the daemon's own anchor checks (pinned
+    # key, Ed25519 signature via openssl, head == entry_hash at its seq, row
+    # count) and prints nothing unless all pass: the API path publishes only an
+    # anchor the daemon verifies, and this path must not publish more.
+    line=$("$(sd_py)" "$SD/tools/anchor_fallback.py" "$SD/data/signaldeck.db" \
+      "$SD/daemon/internal/ledgeranchor/pinned_pubkeys.txt") || line=""
     [ -n "$line" ] && echo "note: API unavailable — anchor line recomputed from data/signaldeck.db"
   fi
-  if [ -n "$line" ]; then
+  if [ -n "$refused" ]; then
+    echo "FAIL: the daemon reports the newest anchor as failing ($refused) — refusing to timestamp it externally"
+    fail=1
+  elif [ -n "$line" ]; then
     grep -qxF -- "$line" "$REPO/anchors.log" || printf '%s\n' "$line" >> "$REPO/anchors.log"
   else
     echo "FAIL: no anchor available from $API and none recomputable from data/signaldeck.db — the signed ledger head was NOT externally timestamped by this run"
@@ -187,14 +206,135 @@ PY
   #    truncated README in the public history.
   mv "$REPO/README.md.tmp" "$REPO/README.md"
 
+  # 5. The timestamped statement (2026-09-30). Everything above lands in git,
+  #    and a git date is whatever the committer's clock says: an operator can
+  #    force-push a rewritten history with backdated commits and nothing above
+  #    would show it. This step writes one small file binding the CURRENT
+  #    ledger head (read straight from SQLite, so it does not wait for the
+  #    anchor cadence), the anchor line, the prereg head and the hashes of the
+  #    registry and protocol, and has it timestamped by parties this machine
+  #    does not control: two RFC 3161 authorities (a signed time anyone checks
+  #    offline with openssl) and OpenTimestamps (Bitcoin). verify.py recomputes
+  #    the ledger chain to each published head via /api/ledger/range and
+  #    reports how many forecasts were timestamped before their outcome window
+  #    closed -- which is the claim "graded honestly" actually rests on.
+  mkdir -p "$REPO/stamps" "$REPO/tsa"
+  cp "$SD"/ops/tsa/*.pem "$SD"/ops/tsa/*.crt "$REPO/tsa/"
+  cp "$SD/tools/verify_public_record.py" "$REPO/verify.py"
+  cp "$SD/ops/anchors-VERIFY.md" "$REPO/VERIFY.md"
+  # One byte sequence everywhere. The statement hashes the registry, and the
+  # registry is written CRLF on this machine while git stores it LF, so a hash
+  # of the working copy could never match what a verifier checks out (measured
+  # 2026-09-30: 1551 CRs on disk, 0 in the blob). Normalise to LF here, and
+  # `* -text` makes every checkout on every platform hand back exactly these
+  # bytes. PREREGISTRATION.md is deliberately not touched: it is LF already and
+  # its SHA-256 is frozen in the prereg chain. The two logs are included because
+  # a Windows clone checks them out CRLF: committed that way under `* -text`,
+  # the old blob would stop being a prefix of the new one, and verify.py's
+  # append-only check would report a rewrite that is only a line ending.
+  sed -i 's/\r$//' "$REPO/README.md" "$REPO/accuracy_registry.json" "$REPO/VERIFY.md" \
+    "$REPO/verify.py" "$REPO/anchors.log" "$REPO/prereg.log" "$REPO"/tsa/*
+  printf '%s\n' '# Hashed and timestamped byte-for-byte: never convert line endings.' \
+    '* -text' > "$REPO/.gitattributes"
+  # Leftovers of a killed run (an unstamped statement, a .tmp token) must never
+  # ride along into a later commit: published, an orphan statement binds the
+  # wrong registry and fails verify.py forever, and deleting it later fails the
+  # never-modified check. Untracked files under stamps/ are only ever ours.
+  git -C "$REPO" clean -fq -- stamps 2>/dev/null
+  stamp_files=()
+
+  headline=$("$(sd_py)" - "$DB" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True, timeout=60)
+row = con.execute("SELECT seq, entry_hash FROM prediction_ledger"
+                  " ORDER BY seq DESC LIMIT 1").fetchone()
+if row:
+    print(f"seq={row[0]} head={row[1]}")
+PY
+  ) || headline=""
+  if [ -z "$headline" ]; then
+    echo "FAIL: ledger head unreadable from $DB — no statement written, nothing timestamped"
+    fail=1
+  else
+    # `intact=true` vouches only for what the step-0 verify walked: if entries
+    # landed between that walk and this read, say "unchecked" instead.
+    hseq=$(printf '%s' "$headline" | sed -n 's/^seq=\([0-9]*\) .*/\1/p')
+    [ "$intact" = true ] && [ "$vcount" != "$hseq" ] && intact=unchecked
+    docsha=none
+    [ -f "$REPO/PREREGISTRATION.md" ] && docsha=$(sha256sum "$REPO/PREREGISTRATION.md" | cut -d' ' -f1)
+    body=$(printf '%s\n' "ledger-head $headline intact=$intact" "anchor ${line:-none}" \
+      "${pline:-prereg none}" \
+      "registry-sha256 $(sha256sum "$REPO/accuracy_registry.json" | cut -d' ' -f1)" \
+      "prereg-doc-sha256 $docsha")
+    # The newest PUBLISHED statement (an orphan would have been cleaned above),
+    # and it counts as current only if something actually timestamped it: an
+    # unstamped one is re-issued, never left standing behind "unchanged".
+    prev=$(git -C "$REPO" ls-files -- 'stamps/*.txt' | sort | tail -1)
+    if [ -n "$prev" ] && [ "$(tail -n +3 "$REPO/$prev")" = "$body" ] \
+       && { compgen -G "$REPO/$prev.*.tsr" >/dev/null || [ -e "$REPO/$prev.ots" ]; }; then
+      echo "statement unchanged since $(basename "$prev") — not re-stamped"
+    else
+      name=$(date -u '+%Y%m%dT%H%M%SZ')
+      stmt="$REPO/stamps/$name.txt"
+      printf 'signaldeck-statement v1\nutc %s-%s-%sT%s:%s:%sZ\n%s\n' \
+        "${name:0:4}" "${name:4:2}" "${name:6:2}" "${name:9:2}" "${name:11:2}" "${name:13:2}" \
+        "$body" > "$stmt"
+      stamped=0
+      tsq="$stmt.tsq.tmp"
+      openssl ts -query -data "$stmt" -sha256 -cert -out "$tsq" 2>/dev/null
+      # rfc3161 NAME URL VERIFY-ARGS...: keep a token only if it verifies
+      # against the certificates verify.py will use.
+      rfc3161() {
+        local tsa=$1 url=$2; shift 2
+        local out="$stmt.$tsa.tsr"
+        if curl -sf --max-time 30 -H 'Content-Type: application/timestamp-query' \
+             --data-binary @"$tsq" -o "$out.tmp" "$url" \
+           && openssl ts -verify -data "$stmt" -in "$out.tmp" "$@" 2>&1 | grep -q 'Verification: OK'; then
+          mv "$out.tmp" "$out"; echo "rfc3161 $tsa: OK"; return 0
+        fi
+        rm -f "$out.tmp"; echo "WARN: rfc3161 $tsa failed — $name not stamped by it"; return 1
+      }
+      rfc3161 freetsa https://freetsa.org/tsr \
+        -CAfile "$REPO/tsa/freetsa-cacert.pem" -untrusted "$REPO/tsa/freetsa-tsa.crt" && stamped=$((stamped+1))
+      rfc3161 digicert http://timestamp.digicert.com \
+        -CAfile "$REPO/tsa/digicert-trusted-root-g4.pem" && stamped=$((stamped+1))
+      rm -f "$tsq"
+      # The venv interpreter, not sd_py: sd_py is the system Python, which has
+      # no opentimestamps library, so this stamp would fail on every run.
+      if "$SD/.venv/Scripts/python.exe" "$SD/tools/ots_stamp.py" "$stmt"; then
+        stamped=$((stamped+1))
+      else
+        echo "WARN: OpenTimestamps stamp failed for $name"
+      fi
+      if [ "$stamped" -eq 0 ]; then
+        echo "FAIL: statement $name was timestamped by NO third party — committed, but it proves nothing beyond git"
+        fail=1
+      fi
+      # Exactly this run's files go into the commit; see the clean above.
+      for f in "$stmt" "$stmt.ots" "$stmt.freetsa.tsr" "$stmt.digicert.tsr"; do
+        [ -e "$f" ] && stamp_files+=("stamps/$(basename "$f")")
+      done
+    fi
+  fi
+
   cd "$REPO" || exit 1
-  git add anchors.log accuracy_registry.json prereg.log README.md
-  [ -f PREREGISTRATION.md ] && git add PREREGISTRATION.md
+  # One path at a time: a single missing path makes a combined `git add` abort
+  # whole, and then NOTHING publishes, the statement included (found in the
+  # 2026-09-30 dry run, with verify.py not yet in place).
+  for p in anchors.log accuracy_registry.json prereg.log README.md PREREGISTRATION.md \
+           .gitattributes tsa verify.py VERIFY.md ${stamp_files[@]+"${stamp_files[@]}"}; do
+    [ -e "$p" ] && git add -- "$p"
+  done
   if git diff --cached --quiet; then
     echo "nothing new to publish"
     exit $fail
   fi
-  git commit -q -m "anchor + accuracy registry $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  # Checked: an unchecked failure here used to fall through to the push and the
+  # "published" stamp below, reporting a publish that never happened.
+  if ! git commit -q -m "anchor + accuracy registry + statement $(date -u '+%Y-%m-%dT%H:%M:%SZ')"; then
+    echo "FAIL: git commit failed in $REPO — nothing published"
+    exit 1
+  fi
   git push -q origin HEAD || { echo "PUSH FAILED — commit exists locally only"; exit 1; }
   # RECORD THE PUSH, NOT THE COMMIT. This is the only durable evidence that
   # anything actually LEFT the machine, and it is deliberately written after

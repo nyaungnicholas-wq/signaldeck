@@ -111,6 +111,16 @@ func testSigner(t *testing.T) *ledgeranchor.Signer {
 	return sg
 }
 
+// trust pins exactly these signers' keys — the test analogue of
+// ledgeranchor.TrustedKeys(), which production passes.
+func trust(sgs ...*ledgeranchor.Signer) ledgeranchor.KeySet {
+	k := ledgeranchor.KeySet{}
+	for _, sg := range sgs {
+		k[sg.PublicKeyHex()] = true
+	}
+	return k
+}
+
 // anchorNow forces one anchor to be written, failing the test if the cadence or
 // a precondition refused it.
 func anchorNow(t *testing.T, st *Store, sg *ledgeranchor.Signer, now time.Time) ledgeranchor.Record {
@@ -161,7 +171,7 @@ func TestLedgerAnchor_CatchesWholesaleRegeneration(t *testing.T) {
 			}
 
 			// Before the rewrite the anchor must verify, or the test proves nothing.
-			pre, err := st.VerifyLedgerAnchors(ctx, 0, true)
+			pre, err := st.VerifyLedgerAnchors(ctx, 0, true, trust(sg))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -194,7 +204,7 @@ func TestLedgerAnchor_CatchesWholesaleRegeneration(t *testing.T) {
 			}
 
 			for _, recompute := range []bool{true, false} {
-				av, err := st.VerifyLedgerAnchors(ctx, 0, recompute)
+				av, err := st.VerifyLedgerAnchors(ctx, 0, recompute, trust(sg))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -222,7 +232,7 @@ func TestLedgerAnchor_CatchesWholesaleRegeneration(t *testing.T) {
 			if _, err := st.w.ExecContext(ctx, `DELETE FROM ledger_anchors`); err != nil {
 				t.Fatal(err)
 			}
-			av, err := st.VerifyLedgerAnchors(ctx, 0, true)
+			av, err := st.VerifyLedgerAnchors(ctx, 0, true, trust(sg))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +259,7 @@ func TestLedgerAnchor_HonestChainVerifiesAndPublishes(t *testing.T) {
 	second := anchorNow(t, st, sg, time.Unix(1_700_100_000, 0))
 
 	for _, recompute := range []bool{true, false} {
-		av, err := st.VerifyLedgerAnchors(ctx, 0, recompute)
+		av, err := st.VerifyLedgerAnchors(ctx, 0, recompute, trust(sg))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,7 +310,7 @@ func TestLedgerAnchor_RecomputeCatchesStoredHashPreservingRewrite(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	strong, err := st.VerifyLedgerAnchors(ctx, 0, true)
+	strong, err := st.VerifyLedgerAnchors(ctx, 0, true, trust(sg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +321,7 @@ func TestLedgerAnchor_RecomputeCatchesStoredHashPreservingRewrite(t *testing.T) 
 		t.Error("recompute mode says the head still matches — it re-derived from stored hashes, not payloads")
 	}
 
-	cheap, err := st.VerifyLedgerAnchors(ctx, 0, false)
+	cheap, err := st.VerifyLedgerAnchors(ctx, 0, false, trust(sg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,14 +428,131 @@ func TestLedgerAnchor_NoDuplicateAnchorForTheSameHead(t *testing.T) {
 		t.Errorf("rotated key over the same head: wrote=false reason=%q, want it recorded", reason)
 	}
 
-	av, err := st.VerifyLedgerAnchors(ctx, 0, true)
+	// Rotation is legitimate only once the new key is pinned. Before that, its
+	// anchor is a valid signature by a stranger and must read as failing.
+	unpinned, err := st.VerifyLedgerAnchors(ctx, 0, true, trust(sg))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if unpinned.FailingAnchors != 1 {
+		t.Errorf("rotated key not yet pinned: failingAnchors = %d, want 1", unpinned.FailingAnchors)
+	}
+
+	av, err := st.VerifyLedgerAnchors(ctx, 0, true, trust(sg, rotated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if av.FailingAnchors != 0 {
+		t.Errorf("rotated key pinned: failingAnchors = %d, want 0", av.FailingAnchors)
 	}
 	if av.AnchorCount != 2 {
 		t.Errorf("anchorCount = %d, want 2 (one per key)", av.AnchorCount)
 	}
 	if len(av.DistinctPubKeys) != 2 {
 		t.Errorf("distinct pubkeys = %d, want 2 — a key rotation must stay visible", len(av.DistinctPubKeys))
+	}
+}
+
+// TestAnchorDue_RefusesOverAContradictedPriorAnchor: a regenerated chain still
+// verifies intact, so the intact gate alone let the cadence sign a NEW anchor
+// over history the newest prior anchor already contradicts — turning tamper
+// evidence into a fresh, perfectly reproducing claim. The stored entry hash at
+// the prior anchor's seq is one indexed lookup, and it must veto the anchor.
+func TestAnchorDue_RefusesOverAContradictedPriorAnchor(t *testing.T) {
+	for _, resetSeqs := range []bool{false, true} {
+		st := openTemp(t)
+		ctx := context.Background()
+		sg := testSigner(t)
+
+		appendN(t, st, 50)
+		anchorNow(t, st, sg, time.Unix(1_700_000_500, 0))
+
+		for _, q := range []string{`DELETE FROM prediction_ledger`, `DELETE FROM meta WHERE k='` + metaLedgerVerifyCkpt + `'`} {
+			if _, err := st.w.ExecContext(ctx, q); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if resetSeqs {
+			if _, err := st.w.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='prediction_ledger'`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		appendFabricated(t, st, 60)
+		v, err := st.VerifyLedger(ctx)
+		if err != nil || !v.Intact {
+			t.Fatalf("premise: fabricated chain must verify intact (intact=%v err=%v)", v.Intact, err)
+		}
+
+		_, due, reason, err := st.AnchorDue(ctx, v, AnchorPolicy{}, time.Unix(1_800_000_000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if due {
+			t.Fatalf("resetSeqs=%v: anchor due over a chain the prior anchor contradicts", resetSeqs)
+		}
+		if !strings.Contains(reason, "no longer reproduces") {
+			t.Errorf("resetSeqs=%v: refusal does not say why: %q", resetSeqs, reason)
+		}
+		if _, wrote, _, _ := st.MaybeAnchorLedger(ctx, sg, v, AnchorPolicy{}, time.Unix(1_800_000_000, 0)); wrote {
+			t.Errorf("resetSeqs=%v: MaybeAnchorLedger wrote over a contradicted chain", resetSeqs)
+		}
+	}
+}
+
+// TestLedgerAnchor_FreshKeyCannotVouchForAFabricatedHistory reproduces the
+// verifier's 2026-10-01 probe. A writer WITHOUT the signing key deletes every
+// anchor and every ledger row, regenerates a fabricated chain onto the same seq
+// range, and signs it with a key they just generated, backdated 30 days. Every
+// signature in the table is then valid under the key recorded beside it, so a
+// check that trusts the row's own key reports the fabrication as proven.
+func TestLedgerAnchor_FreshKeyCannotVouchForAFabricatedHistory(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sg := testSigner(t) // the daemon's real key; the attacker never sees it
+	appendN(t, st, 50)
+	anchorNow(t, st, sg, time.Unix(1_700_000_000, 0))
+
+	for _, q := range []string{
+		`DELETE FROM ledger_anchors`,
+		`DELETE FROM prediction_ledger`,
+		`DELETE FROM sqlite_sequence WHERE name='prediction_ledger'`,
+	} {
+		if _, err := st.w.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := st.w.ExecContext(ctx, `DELETE FROM meta WHERE k=?`, metaLedgerVerifyCkpt); err != nil {
+		t.Fatal(err)
+	}
+	appendFabricated(t, st, 50)
+	forged := anchorNow(t, st, testSigner(t), time.Now().Add(-30*24*time.Hour))
+	if !forged.Verify() {
+		t.Fatal("setup: the forged anchor must carry a VALID signature, or this test proves nothing")
+	}
+
+	for _, recompute := range []bool{true, false} {
+		av, err := st.VerifyLedgerAnchors(ctx, 0, recompute, trust(sg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if av.FailingAnchors != 1 || av.ProvenThroughSeq != nil {
+			t.Fatalf("recompute=%v: failingAnchors=%d provenThroughSeq=%v, want 1/nil — a fabricated history signed by a fresh key read as proven",
+				recompute, av.FailingAnchors, av.ProvenThroughSeq)
+		}
+		a := av.Anchors[0]
+		if !a.SignatureOK || a.PinnedKey || !strings.Contains(a.Reason, "unpinned key") {
+			t.Errorf("recompute=%v: signatureOK=%v pinnedKey=%v reason=%q, want true/false/'signed by an unpinned key'",
+				recompute, a.SignatureOK, a.PinnedKey, a.Reason)
+		}
+	}
+}
+
+// The committed pin list must parse, or PinnedKeys panics in production.
+func TestPinnedPubKeysParse(t *testing.T) {
+	if len(ledgeranchor.PinnedKeys()) == 0 {
+		t.Fatal("pinned_pubkeys.txt holds no keys — every live anchor would read as unpinned")
+	}
+	if _, err := ledgeranchor.ParseKeySet("not-a-key\n"); err == nil {
+		t.Fatal("a malformed pin parsed — a typo would silently drop a key")
 	}
 }

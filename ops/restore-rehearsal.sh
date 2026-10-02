@@ -57,7 +57,12 @@ if [ -n "${SIGNALDECK_OFFSITE_DIR:-}" ]; then
 elif [ -n "${OneDrive:-}" ] && [ -d "$OneDrive" ]; then
   OFFSITE_DIR="$OneDrive/SignalDeckBackups"
 else
-  OFFSITE_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+  # Was $HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups -
+  # the retired Mac's iCloud path, which on Windows resolves to a directory that
+  # cannot exist. Leaving it meant the last resort pointed at nothing while
+  # looking like a configured destination. Empty is honest: the caller below
+  # falls back to data/backups and says so.
+  OFFSITE_DIR=""
 fi
 
 # file_mtime FILE — modification time as a unix epoch, portably.

@@ -95,3 +95,35 @@ func TestPruneWorkerRuns_StillPrunesAndStillKeepsTheOtherFloors(t *testing.T) {
 		t.Fatalf("grid-search record was pruned (%d left); deleting one refunds multiplicity that was actually spent", got)
 	}
 }
+
+// A calendar worker's next slot is measured from its last SERVED run. A run
+// killed mid-flight (orphaned at boot, 'running' from a dead process, stopped
+// by a shutdown) must not count; an error still does (it consumed the slot).
+func TestLastWorkerRunAtSkipsInterruptedRuns(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	for _, r := range []struct {
+		ts     int64
+		status string
+		detail string
+	}{
+		{1000, "ok", "wrote weekly report"},
+		{2000, "error", "provider down"},
+		{3000, "orphaned", "process died mid-run; swept at boot 3100"},
+		{4000, "ok", "stopped (shutdown)"},
+		{5000, "running", ""},
+	} {
+		if _, err := st.w.ExecContext(ctx,
+			`INSERT INTO worker_runs (worker, started_at, status, detail) VALUES ('weekly-report',?,?,?)`,
+			r.ts, r.status, r.detail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.LastWorkerRunAt(ctx, "weekly-report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Unix() != 2000 {
+		t.Fatalf("last served run = %d, want 2000 (the error consumed its slot; the three interrupted runs did not)", got.Unix())
+	}
+}

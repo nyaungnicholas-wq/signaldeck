@@ -17,6 +17,7 @@ import (
 // stay GATED until >= trackMinDistinctDays distinct days exist, no matter how
 // many symbols resolved (regression for the 995-obs-over-3-days ungating).
 func TestTrackRecord_DayClusterGate(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "daygate.db"))
 	if err != nil {
@@ -26,7 +27,7 @@ func TestTrackRecord_DayClusterGate(t *testing.T) {
 
 	// 60 symbols all resolving on the SAME 2 days: indepN=120 >= 30, days=2 < 10.
 	// AFTER the 2026-07-24 survivorship epoch (see ResolvedPredictionOutcomes).
-	day1 := time.Date(2026, 8, 3, 14, 0, 0, 0, time.UTC).Unix()
+	day1 := store.GradingEpoch + 86400 + 14*3600 // day after the graded window opens, 14:00 UTC
 	day2 := day1 + 86400
 	for i := 0; i < 60; i++ {
 		sym, err := st.UpsertSymbol(ctx, "S"+time.Unix(int64(i)+1e6, 0).Format("040506"), md.Stocks, "")

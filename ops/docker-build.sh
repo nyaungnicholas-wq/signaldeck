@@ -88,17 +88,17 @@ fi
 
 # NEXT_PUBLIC_SITE_URL is inlined into the web bundle at BUILD time and cannot
 # be set later from the container environment, so it crosses here or not at all.
-# Unset, web/src/lib/site.ts falls back to http://localhost:8323 SILENTLY and
-# the image serves a robots.txt and sitemap.xml no crawler can use, plus og:
-# and twitter: cards pointing at localhost. None of that is visible until
-# someone shares a link, which is why this refuses rather than warns.
+# Unset, web/src/lib/site.ts returns null and the image serves an EMPTY
+# sitemap.xml, a robots.txt with no Sitemap line and pages with no og: or
+# twitter: card (it used to be localhost in all three). None of that is visible
+# until someone shares a link, which is why this refuses rather than warns.
 #
 # A local image is a legitimate reason to have no hostname, so the opt-out is
 # explicit and named rather than implied by an empty variable.
 if [ -z "${NEXT_PUBLIC_SITE_URL:-}" ] && [ "${SIGNALDECK_ALLOW_LOCALHOST_SITE_URL:-}" != "1" ]; then
   echo "docker build REFUSED: NEXT_PUBLIC_SITE_URL is unset." >&2
   echo "  The web bundle inlines it at build time. Unset, this image serves" >&2
-  echo "  robots.txt, sitemap.xml and og: cards pointing at http://localhost:8323." >&2
+  echo "  an empty sitemap.xml and pages with no og: card." >&2
   echo "  Publishable:  NEXT_PUBLIC_SITE_URL=https://<host> $0 $*" >&2
   echo "  Local only:   SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 $0 $*" >&2
   exit 1
@@ -106,7 +106,7 @@ fi
 if [ -n "${NEXT_PUBLIC_SITE_URL:-}" ]; then
   echo "docker build: site URL $NEXT_PUBLIC_SITE_URL" >&2
 else
-  echo "docker build: site URL unset -- localhost fallback (local image only)" >&2
+  echo "docker build: site URL unset -- no sitemap entries or og: card (local image only)" >&2
 fi
 
 # THE AUDIENCE OF THE IMAGE, chosen rather than defaulted into.

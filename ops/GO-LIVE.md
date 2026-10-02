@@ -44,9 +44,10 @@ Claude cannot (and should not) do them for you.
    - `SIGNALDECK_TRUST_PROXY=false`
    The CSRF/origin/Host allowlists are already built; add your tailnet host to
    the allowlists per the README section "Exposing SignalDeck remotely".
-3. Restart both services:
-   `launchctl kickstart -k gui/$(id -u)/com.signaldeck.daemon`
-   `launchctl kickstart -k gui/$(id -u)/com.signaldeck.web`
+3. Restart both services (Windows):
+   `bash ops/signaldeck-ctl.sh restart`
+   The `launchctl kickstart` commands this step used to give are macOS-only and
+   do nothing here; the Mac they named is retired.
 4. On the phone: open `http://<mac-tailnet-name>:8323`, log in with your
    SignalDeck account ("nicholas"). Tailscale encrypts the path; nothing is on
    the public internet.
@@ -96,9 +97,11 @@ Tailscale (1) → open on phone → PWA install (3) → Telegram (2).
 ## Recurring
 
 - [ ] **Quarterly: execute `ops/DR_RUNBOOK.md` on a second machine** — full
-      drill, not a read-through: restore the newest offsite backup on a Mac
-      that isn't this one, reinstall the launchd fleet, and verify the
+      drill, not a read-through: restore the newest offsite backup on a machine
+      that isn't this one, re-register the fleet with
+      `ops/install-windows-tasks.ps1 -Install` (elevated) from `ops/tasks/*.xml`,
+      and verify the
       restored ledger reproduces the last published external anchor. The
       weekly `com.signaldeck.restore` rehearsal proves the *backup* restores;
       only this drill proves the *procedure* (and the operator) can bring
-      SignalDeck back when this Mac is gone.
+      SignalDeck back when this machine is gone.

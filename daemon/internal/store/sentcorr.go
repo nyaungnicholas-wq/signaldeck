@@ -109,14 +109,13 @@ type LexNewsRow struct {
 // the full multi-ticker mapping. Running this each pass means the feature builder
 // can read one authoritative source instead of unioning two.
 func (s *Store) ReconcileNewsSymbols(ctx context.Context) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `
-		INSERT OR IGNORE INTO news_symbols (news_id, symbol_id)
-		SELECT id, symbol_id FROM news WHERE symbol_id > 0`)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	// Only the missing pairs, found on the read pool: the whole-table
+	// INSERT..SELECT held the write lock 12.6s every pass (readThenWrite).
+	return s.readThenWrite(ctx, `
+		SELECT n.id, n.symbol_id FROM news n
+		WHERE n.symbol_id > 0 AND NOT EXISTS (
+		  SELECT 1 FROM news_symbols ns WHERE ns.news_id = n.id AND ns.symbol_id = n.symbol_id)`,
+		nil, 2, `INSERT OR IGNORE INTO news_symbols (news_id, symbol_id)`, "")
 }
 
 // InsertNewsSymbols records the tracked symbols an article mentions.

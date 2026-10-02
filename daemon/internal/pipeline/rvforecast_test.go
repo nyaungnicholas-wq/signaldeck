@@ -115,7 +115,7 @@ func TestRVForecastAndResolveRoundTrip(t *testing.T) {
 		t.Fatalf("early resolver: %v", err)
 	}
 	for _, h := range RVHorizons {
-		rec, err := st.RVLiveRecord(ctx, int(h))
+		rec, err := st.RVLiveRecord(ctx, int(h), 0)
 		if err != nil {
 			t.Fatalf("record: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestRVForecastAndResolveRoundTrip(t *testing.T) {
 	t.Logf("resolve: %s", detail)
 
 	for _, h := range RVHorizons {
-		rec, err := st.RVLiveRecord(ctx, int(h))
+		rec, err := st.RVLiveRecord(ctx, int(h), 0)
 		if err != nil {
 			t.Fatalf("record h=%d: %v", h, err)
 		}
@@ -195,5 +195,43 @@ func TestRVForecastRunnerSkipsCrypto(t *testing.T) {
 		if open, _ := st.OpenRVForecasts(ctx, int(h), 10); len(open) != 0 {
 			t.Errorf("h=%d: forecast a crypto symbol", h)
 		}
+	}
+}
+
+// An outcome window whose last session is still forming is not resolved: the
+// h=1 outcome waits for the next session to settle instead of freezing a
+// partial bar's range.
+func TestRVOutcomeWaitsForTheWindowToSettle(t *testing.T) {
+	const nBars = 900
+	st, sym, now := newRVPipelineStore(t, md.Stocks, nBars)
+	ctx := context.Background()
+	run := &RVForecastRunner{St: st, Now: func() time.Time { return now },
+		Rev: func() string { return "testrev0000000000000000000000000000000000" }}
+	if detail, err := run.Run(ctx); err != nil {
+		t.Fatalf("forecast run: %v (%s)", err, detail)
+	}
+	start := time.Date(2020, 1, 2, 0, 0, 0, 0, marketcal.Loc())
+	ext := rvTestBars(sym.ID, nBars+1, start)
+	if err := st.UpsertBars(ctx, ext); err != nil {
+		t.Fatal(err)
+	}
+	next := time.Unix(ext[nBars].Ts, 0) // NY midnight of the outcome session
+
+	resolved := func(at time.Time) int {
+		res := &RVOutcomeWorker{St: st, Now: func() time.Time { return at }}
+		if _, err := res.Run(ctx); err != nil && !errors.Is(err, workers.ErrDegraded) {
+			t.Fatalf("resolver: %v", err)
+		}
+		rec, err := st.RVLiveRecord(ctx, 1, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.N
+	}
+	if n := resolved(next.Add(13 * time.Hour)); n != 0 {
+		t.Fatalf("resolved %d h=1 forecast(s) from a session still trading at 13:00 ET", n)
+	}
+	if n := resolved(next.Add(22 * time.Hour)); n != 1 {
+		t.Fatalf("settled window: resolved %d, want 1", n)
 	}
 }

@@ -198,6 +198,7 @@ func appendLedgerTx(ctx context.Context, tx *sql.Tx, e LedgerEntry) (LedgerEntry
 type LedgerVerification struct {
 	Intact      bool   `json:"intact"`                // true iff every recomputed hash matches
 	Count       int64  `json:"count"`                 // rows examined
+	HeadSeq     int64  `json:"headSeq"`               // seq of the last row examined (0 if empty)
 	HeadHash    string `json:"headHash"`              // entry_hash of the last row ("" if empty)
 	BrokenAtSeq *int64 `json:"brokenAtSeq,omitempty"` // first seq whose stored/linkage hash disagrees
 }
@@ -241,12 +242,12 @@ func (s *Store) VerifyLedger(ctx context.Context) (LedgerVerification, error) {
 			// Stop at the first break: everything after it is untrustworthy.
 			// Still report count of rows examined up to and including the break.
 			res.Count++
-			res.HeadHash = e.EntryHash
+			res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 			return res, rows.Err()
 		}
 		running = e.EntryHash
 		res.Count++
-		res.HeadHash = e.EntryHash
+		res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 	}
 	return res, rows.Err()
 }
@@ -274,6 +275,17 @@ func (s *Store) LedgerHead(ctx context.Context) (LedgerEntry, bool, error) {
 	return e, true, nil
 }
 
+// LedgerEntryHash returns the entry_hash stored at seq. ok=false when no row
+// has that seq. One primary-key row, one column.
+func (s *Store) LedgerEntryHash(ctx context.Context, seq int64) (string, bool, error) {
+	var h string
+	err := s.db.QueryRowContext(ctx, `SELECT entry_hash FROM prediction_ledger WHERE seq=?`, seq).Scan(&h)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return h, err == nil, err
+}
+
 // LedgerFor returns the most recent ledger entries for one symbol+horizon,
 // newest first, capped at limit (limit<=0 → default 100). Read-only.
 func (s *Store) LedgerFor(ctx context.Context, symbolID int64, h md.Horizon, limit int) ([]LedgerEntry, error) {
@@ -289,6 +301,35 @@ func (s *Store) LedgerFor(ctx context.Context, symbolID int64, h md.Horizon, lim
 	if err != nil {
 		return nil, err
 	}
+	return scanLedgerRows(rows)
+}
+
+// LedgerRange returns up to limit entries with seq >= fromSeq, ascending: the
+// chain in the order it was written. A per-symbol slice (LedgerFor) cannot be
+// linked to an anchor's head, because every link points at the previous entry
+// of ANY symbol; contiguous ranges are what let an outsider recompute each
+// link and the head a published statement commits to. seq is the primary key,
+// so this is a bounded index range scan. Read-only.
+func (s *Store) LedgerRange(ctx context.Context, fromSeq int64, limit int) ([]LedgerEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if fromSeq < 1 {
+		fromSeq = 1
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
+		       feature_hash, model_version, prev_hash, entry_hash
+		FROM prediction_ledger
+		WHERE seq >= ?
+		ORDER BY seq ASC LIMIT ?`, fromSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanLedgerRows(rows)
+}
+
+func scanLedgerRows(rows *sql.Rows) ([]LedgerEntry, error) {
 	defer rows.Close() //nolint:errcheck
 	var out []LedgerEntry
 	for rows.Next() {

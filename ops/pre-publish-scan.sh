@@ -82,7 +82,14 @@ GENERIC_PATTERN='(api[_-]?key|apikey|secret|password|passwd|token|authtoken|auth
 # fails, because nothing about `audits/` is trusted here; only this one
 # never-live string is. It cannot collide with a real credential: NVIDIA issues
 # no key of the form AAAA1111bbbb2222cccc3333dddd4444.
-EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|decoy|_test\.go|e2e/|csrf|nvapi-AAAA1111bbbb2222cccc3333dddd4444'
+# ConvertTo-TaskTokens is ops/lib-tasks.ps1's placeholder swapper for Scheduled
+# Task XML. GENERIC_PATTERN matches `token` + word chars + `=` + 12 chars, so
+# `$tokenized2 = ConvertTo-TaskTokens ...` read as a token assignment. The
+# variable has been renamed, but the line is already in history and the history
+# scan cannot be fixed by a rename. Excluding the FUNCTION NAME is the narrowest
+# form that clears it: it cannot mask a credential, because a real secret would
+# have to be assigned from a call to this specific function to hide here.
+EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|decoy|_test\.go|e2e/|csrf|nvapi-AAAA1111bbbb2222cccc3333dddd4444|ConvertTo-TaskTokens'
 # The scanner's OWN self-test fixture plants synthetic, never-live secrets
 # (nvapi-, whsec_, a fake password) on purpose — that is how it proves the
 # detector still detects. Scanning it meant this script reported

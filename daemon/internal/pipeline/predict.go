@@ -294,7 +294,7 @@ func benchmarkHorizon(h md.Horizon) md.Horizon { return h + benchmarkSuffix }
 //
 // It reads the ONE boundary rather than restating it: a second copy of the same
 // instant is a second place it can drift out of step with the registry.
-const benchmarkMajorityEpoch = store.SurvivorshipEpoch
+const benchmarkMajorityEpoch = store.GradingEpoch
 
 func horizonSecs(h md.Horizon) int64 {
 	if h == md.H1w {
@@ -504,11 +504,23 @@ func (w *PredictionRunner) Interval() time.Duration { return 10 * time.Minute }
 // A leg is vetoed only when the WHOLE interval sits at or below 0.5. One that
 // straddles chance, or has too few days to measure, falls through to the
 // per-symbol Wilson bound below and is judged there.
-func rankGate(vetoed map[string]bool, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
-	if vetoed[leg+"|"+string(h)] {
+//
+// `edges` is the fleet's day-clustered POSITIVE verdict (see fleetVetoes) and
+// is consulted only when the per-symbol grade cannot be taken at all — too few
+// evaluations for RankEdge to bound, which for expectancy is every row. A
+// measured per-symbol bound, positive or negative, is never overridden.
+func rankGate(vetoed map[string]bool, edges map[string]float64, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
+	key := leg + "|" + string(h)
+	if vetoed[key] {
 		return -1, true
 	}
-	return clusterstat.RankEdge(auc, nEval)
+	if e, ok := clusterstat.RankEdge(auc, nEval); ok {
+		return e, true
+	}
+	if e, ok := edges[key]; ok {
+		return e, true
+	}
+	return 0, false
 }
 
 // requireMeasuredLegs reports whether the blend runs in PRODUCTION mode, where
@@ -542,6 +554,17 @@ func requireMeasuredLegs() bool {
 }
 
 func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
+	// PER-STAGE TIMING, always on. A run that blows the 30m deadline used to
+	// report only that it took 30m, which is why a capacity trend and a
+	// machine-sleep artefact were both read off it before anyone could see WHICH
+	// stage spent the budget. The clock costs a map write per stage; the runs
+	// worth diagnosing are rare and overnight, so it must not be opt-in.
+	clk := newStageClock()
+	// Writer-pool contention over this pass, from database/sql's own counters.
+	// The write pool is MaxOpenConns(1), so its WaitDuration IS SQLite writer
+	// contention. Fleet-wide and cumulative: it names the saturated resource for
+	// the window, it does not apportion the wait to this worker.
+	pool0 := w.St.PoolWaits()
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
 		return "", err
@@ -573,7 +596,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// per-symbol estimates whose standard error is near 0.1. See fleetveto.go.
 	// Best-effort: on an unreadable cross-section nothing is vetoed and the
 	// per-symbol bound stays in charge.
-	vetoed := fleetVetoes(ctx, w.St, predHorizons)
+	stopVeto := clk.at("fleetveto")
+	vetoed, fleetEdges := fleetVetoes(ctx, w.St, predHorizons)
+	stopVeto()
 
 	// Fill the settled-move key on rows that predate the column, a bounded batch
 	// per pass so it converges without a migration framework and never stalls a
@@ -586,6 +611,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// the same budget: they share one derivation, so letting one lag behind would
 	// mean two surfaces disagreeing about what one observation is — the exact
 	// drift the shared md.SettleDay implementation exists to prevent.
+	stopBackfill := clk.at("backfill")
 	for _, bf := range []struct {
 		name string
 		fn   func(context.Context, int) (int64, error)
@@ -601,6 +627,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			slog.Info("settle_ts backfilled", "table", bf.name, "rows", n)
 		}
 	}
+	stopBackfill()
 	// Read once per pass, not per symbol: the mode is a deploy-time decision and
 	// re-reading it mid-sweep could split one pass across two contracts.
 	strictLegs := requireMeasuredLegs()
@@ -608,6 +635,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// legless blend is recorded once a day rather than on all ~138 passes. One
 	// query per horizon, mutated in place as this pass writes.
 	evidenceDay := map[md.Horizon]map[int64]int64{}
+	stopEvid := clk.at("evidenceday")
 	for _, h := range predHorizons {
 		m, err := w.St.EvidenceDayBySymbol(ctx, h)
 		if err != nil {
@@ -615,6 +643,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 		evidenceDay[h] = m
 	}
+	stopEvid()
 	// CROSS-SECTIONAL FEATURES, computed ONCE for the whole universe (a
 	// percentile needs the cross-section, so it cannot be built inside the
 	// per-symbol loop below). These are the four factors measured to rank the
@@ -712,7 +741,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	stopXS := clk.at("xsfeat")
 	xsFeats := crossSectionalFeatures(ctx, w.St, syms)
+	stopXS()
 	if len(xsFeats) == 0 {
 		slog.Info("cross-sectional features unavailable this pass — universe too " +
 			"thin or the batched bar read failed; the alphax leg sees the old feature set")
@@ -756,6 +787,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// writes UNresolved rows), so hoisting is output-identical and drops one
 	// 3000-row join per symbol.
 	globalCal := map[md.Horizon]func(float64) float64{}
+	stopCal := clk.at("globalcal")
 	for _, h := range predHorizons {
 		if fn, ok, err := globalCalibration(ctx, w.St, h); err == nil && ok {
 			globalCal[h] = fn
@@ -768,7 +800,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// strictly before today — committed before today's outcome can exist, so
 	// the benchmark never sees the move it will be graded on. A failed read
 	// skips the benchmark this pass rather than inventing a guess.
+	stopCal()
 	benchProb := map[md.Horizon]float64{}
+	stopPM := clk.at("prequential")
 	todayUTC := md.TradingDay(time.Now().UTC().Unix())
 	for _, h := range predHorizons {
 		p, ok, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch)
@@ -784,10 +818,13 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
+	stopPM()
 	n, featErrs, staleCals, noLegs, gatedRows, staleFeed := 0, 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
 	formingTrimmed := 0
+	stopLoop := clk.at("loop")
+	poolLoop0 := w.St.PoolWaits()
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -898,7 +935,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// legs, written by ExpectancyTrainer. Without it this leg is admitted
 			// on availability alone — and with pressure and alphax now benched on
 			// measured ranking, it would be the leg carrying most of the blend.
-			if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelExpectancy, ts); ok {
+			if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelExpectancy, ts); ok {
 				c.RankEdge[ensemble.LegExpectancy] = e
 			}
 			// Forecast prob + lift (lift gates whether it is trusted).
@@ -906,7 +943,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
-					if e, ok := rankGate(vetoed, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
+					if e, ok := rankGate(vetoed, fleetEdges, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
 						c.RankEdge[ensemble.LegForecast] = e
 					}
 				}
@@ -919,7 +956,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelGBM, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelGBM, ts); ok {
 
 					c.RankEdge[ensemble.LegGBM] = e
 
@@ -928,7 +965,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelMeanRev, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelMeanRev, ts); ok {
 
 					c.RankEdge[ensemble.LegMeanRev] = e
 
@@ -943,7 +980,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelAlphaX, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelAlphaX, ts); ok {
 
 					c.RankEdge[ensemble.LegAlphaX] = e
 
@@ -959,7 +996,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelPressure, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelPressure, ts); ok {
 
 					c.RankEdge[ensemble.LegPressure] = e
 
@@ -1253,6 +1290,8 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
+	stopLoop()
+	loopPool := w.St.PoolWaits().Since(poolLoop0)
 	if doUniverse {
 		// Only after a clean full pass, so a mid-run error retries next minute.
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
@@ -1301,6 +1340,22 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		detail += fmt.Sprintf(" (%d row(s) withheld by the cross-section gate — %s)",
 			gatedRows, strings.Join(hs, "; "))
 	}
+	// WHERE THE BUDGET WENT. Appended last so the human-readable result stays at
+	// the front of the line. Stages under 100ms are omitted, so a healthy pass
+	// adds a short suffix and a pathological one says which stage to look at.
+	if st := clk.String(); st != "" {
+		detail += " [stages " + st + "]"
+	}
+	// Writer contention accrued by the WHOLE FLEET while the symbol loop ran, and
+	// again across the entire pass. If a 30-minute run shows a loop that is
+	// mostly writer wait, the bottleneck is the single write connection rather
+	// than anything this worker computes.
+	if pw := loopPool.String(); pw != "" {
+		detail += " [loop-poolwait " + pw + "]"
+	}
+	if pw := w.St.PoolWaits().Since(pool0).String(); pw != "" {
+		detail += " [run-poolwait " + pw + "]"
+	}
 	return detail, nil
 }
 
@@ -1320,7 +1375,7 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
-	resolved := 0
+	resolved, twins := 0, 0
 	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
 	if err != nil {
 		return "", err
@@ -1331,7 +1386,15 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 		// identical grading rules is the entire point of tracking the
 		// benchmark as a predictor.
 		for _, hh := range []md.Horizon{h, benchmarkHorizon(h)} {
-			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), horizonSecs(h), 1500)
+			// THE WHOLE QUEUE, not an oldest-first batch of 1500. Rows skipped
+			// below for good (no settled base, or a forward bar past the gap
+			// guard) stay pending and oldest-first, so a fixed head batch
+			// re-read the same stuck rows every pass. From ~2026-09-10 the 1d
+			// head was 1500 such rows (08-04..09-08): 1d resolved 2-166 rows a
+			// day while 44k sat owed, freezing the graded record and its
+			// distinct-day count. The queue is a few tens of thousands of
+			// (symbol, ts, prob) rows — one read, no paging.
+			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), horizonSecs(h), -1)
 			if err != nil {
 				return "", err
 			}
@@ -1366,7 +1429,20 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+				// GAP GUARD. A forward bar over three horizons past target means
+				// missing sessions; grading it would label a multi-session move as
+				// one horizon. A HOLIDAY IS NOT A GAP: from the slackened target a
+				// pre-holiday Friday's next 1d bar (Tuesday) is 3d6h out, so every
+				// such row sat ungraded forever — a silent selection in the 1d
+				// record. For stocks the NYSE calendar decides: no whole session
+				// closed between target and fwd means fwd IS the next session. This
+				// only admits rows the old rule refused (1w cannot reach it: 21 days
+				// always hold sessions); crypto trades every day and keeps the rule.
+				gap := fwd.Ts-target > 3*horizonSecs(h)
+				if gap && marketByID[p.SymbolID] == md.Stocks {
+					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+				}
+				if !okF || base.Close <= 0 || gap {
 					continue
 				}
 				// SETTLEMENT GUARD — the forward bar must be FINISHED.
@@ -1399,14 +1475,31 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				} else if !settled {
 					continue
 				}
-				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
+				ret := fwd.Close/base.Close - 1
+				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, ret); err != nil {
 					return "", err
 				}
 				resolved++
+				// The benchmark twin ("<h>#pm", same symbol, same ts) grades on the
+				// identical base and forward bar, so it resolves HERE, with its
+				// ensemble row. Left to its own pass behind the whole ensemble queue
+				// it starved whenever a restart cut a long pass short: 2026-10-01,
+				// 39k 1d#pm rows unresolved and the prequential-majority (1d) row gone
+				// from the published registry. The #pm pass still picks up any twin
+				// this misses; a twin already labelled is never rewritten.
+				if hh == h {
+					ok, err := w.St.ResolveOpenPrediction(ctx, p.SymbolID, benchmarkHorizon(h), p.Ts, ret)
+					if err != nil {
+						return "", err
+					}
+					if ok {
+						twins++
+					}
+				}
 			}
 		}
 	}
-	return fmt.Sprintf("resolved %d predictions", resolved), nil
+	return fmt.Sprintf("resolved %d predictions (+%d benchmark twins)", resolved, twins), nil
 }
 
 // ── RegimeRunner: label + change detection ──────────────────────────────

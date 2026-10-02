@@ -113,10 +113,54 @@ allowlist accepts it. A `404`/`421`/connection error means the tunnel is running
 but the daemon is refusing the Host — fix `SIGNALDECK_ALLOWED_HOSTS`, not the
 tunnel.
 
-## Still open regardless of this decision
+## DONE - the tunnel is live (2026-09-19)
 
-`ops/lib-portable.sh:188` runs `schtasks //Run` with stdout, stderr **and exit
-status** all discarded, and neither `kick()` nor the `up`/`collect` arms inspect
-the result. So every start path reports success whether or not the tunnel came
-up — which is how a missing task went unnoticed. That is a code defect fixable
-without any of the decisions above, and it is tracked in the backlog.
+Registered, authenticated and verified end to end. Kept here because two steps
+are NOT obvious and cost a round trip each.
+
+**`winget install ngrok.ngrok` gives you a version your account will refuse.**
+The winget package is pinned at 3.3.1 and `winget upgrade` reports "No available
+upgrade found", but ngrok requires agent >= 3.20.0 on a free account. The symptom
+is `ERR_NGROK_121` AFTER the authtoken is accepted, which reads like an auth
+problem and is not. Fix, and it must be run once after install:
+
+```bash
+ngrok update
+```
+
+That self-update replaces the binary behind the WinGet Links shim, so
+`ops/tasks/SignalDeck Tunnel.xml` keeps working without an edit - confirmed by
+running `version` against the exact path the task uses.
+
+**Run `ngrok config add-authtoken` UNELEVATED, as the task's own user.** It
+writes `%LOCALAPPDATA%
+grok
+grok.yml` for whichever profile invoked it; from
+an admin shell the S4U task finds no token and reproduces the original
+ERR_NGROK_105 with a perfectly valid credential.
+
+Verified 2026-09-19: task kick -> Running -> `https://spearfish-dwindle-module.ngrok-free.dev/api/health`
+returns the daemon's health JSON (not an ngrok interstitial, which is why the
+assertion is the BODY and not a 200); stop -> Ready -> 404; and
+`ops/tunnel-guard.ps1` on a Saturday reports "outside the collection window" and
+leaves it down.
+
+## Resolved since this runbook was written (2026-09-19)
+
+The complaint that `ops/lib-portable.sh` discarded `schtasks //Run`'s exit status is
+**stale**. `sd_svc_start` (`lib-portable.sh:277-292`) now probes with `//Query` and
+returns 2 = not registered, 1 = refused, 0 = started, and `kick()`
+(`signaldeck-ctl.sh:61-63`) inspects and reports it. A tunnel that fails to start is
+visible.
+
+Option A's hand-typed `Register-ScheduledTask` one-liner is also superseded. The
+tunnel is now a managed definition at `ops/tasks/SignalDeck Tunnel.xml`, so once
+ngrok is installed and the authtoken is set, standing it up is:
+
+```powershell
+.\ops\install-windows-tasks.ps1 -Install
+```
+
+run from an ELEVATED PowerShell (registering an S4U principal returns
+"Access is denied" otherwise). Everything above about the authtoken, the reserved
+domain and the Host allowlist still applies.

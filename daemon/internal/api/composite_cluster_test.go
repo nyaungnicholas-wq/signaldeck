@@ -51,6 +51,13 @@ func resetFleetSkillCache(t *testing.T) {
 // opposite sides of it.
 func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPerDay int) {
 	t.Helper()
+	seedCompositeClusteredRecordFrom(t, st, store.GradingEpoch/86400, days, symbolsPerDay)
+}
+
+// seedCompositeClusteredRecordFrom is the same fixture anchored at an explicit
+// day index, so a test can place the whole record BEFORE store.GradingEpoch.
+func seedCompositeClusteredRecordFrom(t *testing.T, st *store.Store, startDay int64, days, symbolsPerDay int) {
+	t.Helper()
 	ctx := context.Background()
 	syms := make([]int64, symbolsPerDay)
 	for i := range syms {
@@ -79,8 +86,10 @@ func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPe
 		// Mid-day UTC so ts/86400 is unambiguous. Day index 20000 (2024-10) sat
 		// BEFORE the 2026-07-24 survivorship epoch that
 		// ResolvedPredictionOutcomes now floors on, which emptied the fixture;
-		// 20658 is the epoch's own day index.
-		base := int64(20658+day)*86400 + 43200
+		// 20658 was the epoch's own day index; since the 2026-09-20 window
+		// re-registration the floor is store.GradingEpoch, so the default fixture now
+		// starts ON the epoch's day and follows it through any re-registration.
+		base := (startDay+int64(day))*86400 + 43200
 		i := 0
 		for _, c := range mix {
 			n := c.per100 * symbolsPerDay / 100
@@ -116,6 +125,7 @@ func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPe
 // design effect on the same rows is ~33x — effective N ~36, floor ~44% — which
 // does not clear the baseline. The honest verdict is NOT proven.
 func TestFleetEdgeSkill_RawWilsonFloorCannotUnlockProvenEdge(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 12, 100)
@@ -142,6 +152,7 @@ func TestFleetEdgeSkill_RawWilsonFloorCannotUnlockProvenEdge(t *testing.T) {
 // rule: raw N alone is never a sample size, so the grade must carry the measured
 // design effect, the effective N it implies, and the distinct-day count.
 func TestFleetEdgeGrade_PublishesMeasuredClustering(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 12, 100)
@@ -173,6 +184,7 @@ func TestFleetEdgeGrade_PublishesMeasuredClustering(t *testing.T) {
 // say which floor was missed rather than defaulting to "no measured edge", which
 // is a claim this sample cannot support either.
 func TestFleetEdgeSkill_WithheldBelowDayFloor(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	resetFleetSkillCache(t)
 	_, st := newCompositeServer(t)
 	seedCompositeClusteredRecord(t, st, 4, 100) // 400 obs, 4 days — clears N, misses days

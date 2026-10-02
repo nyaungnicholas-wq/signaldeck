@@ -2,6 +2,8 @@ module github.com/nyaungnicholas-wq/signaldeck
 
 go 1.26.0
 
+toolchain go1.26.6
+
 require (
 	github.com/coder/websocket v1.8.15
 	golang.org/x/crypto v0.53.0

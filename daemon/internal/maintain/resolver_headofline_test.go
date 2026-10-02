@@ -156,3 +156,51 @@ func TestOutcomeResolverStillWaitsForImmatureFreshRow(t *testing.T) {
 		t.Fatalf("live row must wait for its forward window to mature, not be voided; got %+v", outcomes)
 	}
 }
+
+// A HOLIDAY IS NOT A GAP (SD-55). A pre-holiday Friday's next session is
+// Tuesday; from the DST-slackened target that bar is 3d6h out, so the
+// calendar-seconds guard VOIDED every such 1d score outcome for good. For stocks
+// the NYSE calendar decides; crypto trades every day and keeps the rule.
+func TestOutcomeResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	// Labor Day 2026 is Monday 09-07. ET-midnight (EDT) stamps: Fri, Tue, Wed.
+	fri := time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC).Unix()
+	tue, wed := fri+4*86400, fri+5*86400
+
+	outcome := func(ticker string, market md.Market) md.ScoreOutcome {
+		t.Helper()
+		sym, err := st.UpsertSymbol(ctx, ticker, market, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.UpsertBars(ctx, []md.Bar{
+			{SymbolID: sym.ID, TF: md.TF1d, Ts: fri, Open: 100, High: 100, Low: 100, Close: 100},
+			{SymbolID: sym.ID, TF: md.TF1d, Ts: tue, Open: 110, High: 110, Low: 110, Close: 110},
+			{SymbolID: sym.ID, TF: md.TF1d, Ts: wed, Open: 111, High: 111, Low: 111, Close: 111}, // settles Tue
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.InsertScore(ctx, md.Score{SymbolID: sym.ID, Horizon: md.H1d, Ts: fri + 60, Score: 0.5}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (&OutcomeResolver{St: st}).Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.ResolvedOutcomes(ctx, sym.ID, md.H1d, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ResolvedAt == nil {
+			t.Fatalf("%s: want 1 resolved row, got %+v", ticker, got)
+		}
+		return got[0]
+	}
+
+	if row := outcome("HOLI", md.Stocks); row.FwdReturn == nil || *row.FwdReturn < 0.099 || *row.FwdReturn > 0.101 {
+		t.Fatalf("stock row across Labor Day must grade Fri->Tue (+10%%), got %+v", row)
+	}
+	if row := outcome("HOLICOIN", md.Crypto); row.FwdReturn != nil {
+		t.Fatalf("crypto has no holidays: a 4-day hole must still void, got %+v", row)
+	}
+}

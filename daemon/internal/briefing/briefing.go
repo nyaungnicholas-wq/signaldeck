@@ -65,7 +65,7 @@ type TopPrediction struct {
 	Horizon   string  `json:"horizon"`
 	CalProb   float64 `json:"calProb"`
 	NUsed     int     `json:"nUsed"`
-	ResolvedN int     `json:"resolvedN"` // resolved outcomes behind the calibration
+	ResolvedN int     `json:"resolvedN"` // independent (symbol, settled day) resolved outcomes in the graded record
 }
 
 // RegimeShift is one regime transition inside the last 24h.
@@ -215,8 +215,10 @@ func CollectFacts(ctx context.Context, st *store.Store, now time.Time, dayKey st
 	// each carrying the size of the calibration evidence behind it.
 	resolvedN := map[md.Horizon]int{}
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
-		if probs, _, err := st.ResolvedPredictionPairs(ctx, h, 3000); err == nil {
-			resolvedN[h] = len(probs)
+		// Independent (symbol, settled day) observations, the grader's own
+		// count; len() of the raw pairs was rows, capped at 3000.
+		if n, err := st.ResolvedPredictionCount(ctx, h); err == nil {
+			resolvedN[h] = n
 		}
 	}
 	freshCutoff := now.Add(-24 * time.Hour).Unix()

@@ -23,6 +23,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  ApiError,
   pollMs,
   POLL_SLOW,
   signalReport,
@@ -34,6 +35,7 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HelpTip from "@/components/HelpTip";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 /** Reading order: the validated edge first, the un-tradeable trends last. */
 const KIND_ORDER = [
@@ -107,9 +109,14 @@ function volToRow(f: VolRegimeForecast, tradeability?: string): Row {
 export default function ValidatedSignalsPanel({
   symbol,
   market,
+  memberView = false,
 }: {
   symbol: string;
   market: Market;
+  /** Member pages: skip the signal report (it quotes closes and SMAs, and the
+   *  member tier refuses it) and its "full report" links, and build the rows
+   *  from /api/regimes from the first load instead of after a 403 per poll. */
+  memberView?: boolean;
 }) {
   // Per-symbol slices are keyed by symbol|market so a symbol switch invalidates
   // them without a bare setState in the effect body; the fleet-wide kind docs
@@ -137,7 +144,9 @@ export default function ValidatedSignalsPanel({
     const k = `${symbol}|${market}`;
     const load = async () => {
       const [rep, regs, vol] = await Promise.allSettled([
-        signalReport(symbol, market, "overview"),
+        memberView
+          ? Promise.reject(new ApiError(403, "member view"))
+          : signalReport(symbol, market, "overview"),
         structuralRegimes(),
         volRegime(),
       ]);
@@ -155,7 +164,23 @@ export default function ValidatedSignalsPanel({
           rows: rep.value.regimeStack ?? [],
           vol63: rep.value.vol63 ?? null,
         });
-      } else note(rep);
+      } else {
+        // The same per-symbol rows are in /api/regimes. A MEMBER cannot read the
+        // signal report (it quotes closes and SMAs), so build the stack from the
+        // fleet-wide forecasts instead of showing a refusal where the reading
+        // belongs; vol63 falls back to /api/vol-regime below.
+        if (regs.status === "fulfilled") {
+          setStackState({
+            key: k,
+            rows: Object.values(regs.value.forecasts ?? {})
+              .flat()
+              .filter((f) => f.symbol === symbol && f.market === market),
+            vol63: null,
+          });
+        }
+        // A 403 is the member tier working as designed, not a fault to report.
+        if (!(rep.reason instanceof ApiError && rep.reason.status === 403)) note(rep);
+      }
       if (regs.status === "fulfilled") setDocs(regs.value.kinds ?? {});
       else note(regs);
       if (vol.status === "fulfilled") {
@@ -179,7 +204,7 @@ export default function ValidatedSignalsPanel({
       alive = false;
       stop();
     };
-  }, [symbol, market]);
+  }, [symbol, market, memberView]);
 
   // Merge the per-symbol stack with the quarterly vol forecast, then order by
   // EVIDENCE (vol first, trend last) rather than by whatever the API returned.
@@ -209,6 +234,7 @@ export default function ValidatedSignalsPanel({
           measured walk-forward · per-band accuracy
         </span>
       </div>
+      {memberView && <HypotheticalNote short className="px-4 pt-2" />}
 
       {err !== null && rows.length === 0 && (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
@@ -257,13 +283,13 @@ export default function ValidatedSignalsPanel({
               </span>
               <span className="chip">{r.tier}</span>
               <span className="tnum chip">n={r.n.toLocaleString("en-US")}</span>
-              <Link
+              {!memberView && <Link
                 href={`/signals/report/${market}/${encodeURIComponent(symbol)}?kind=${reportKind(r.kind)}`}
                 className="chip ml-auto inline-flex min-h-[36px] cursor-pointer items-center px-3 text-[0.75rem] transition-colors duration-150 hover:border-[var(--accent)]"
                 style={{ color: "var(--accent)" }}
               >
                 full report →
-              </Link>
+              </Link>}
             </div>
 
             {/* TRADEABILITY — optional daemon field; when present it is the most

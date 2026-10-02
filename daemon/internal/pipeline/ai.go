@@ -31,7 +31,7 @@ func (w *AnalystWorker) Run(ctx context.Context) (string, error) {
 	if !w.LLM.Enabled() {
 		return "skipped: no LLM key configured", nil
 	}
-	b, err := analyst.Run(ctx, w.LLM, w.St)
+	b, err := analyst.RunScheduled(ctx, w.LLM, w.St)
 	if err != nil {
 		// A SPENT DAILY BUDGET IS NOT A FAILURE. The cap is a control that is
 		// working when it fires, and this worker ticks hourly, so once the day's

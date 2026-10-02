@@ -411,6 +411,23 @@ func RetentionAnomDays() int   { return envIntOr("SIGNALDECK_ANOM_RETENTION_D", 
 //
 // The runtime behaviour is deliberately unchanged — the default still applies
 // and the daemon still runs. Only the silence is fixed.
+// walTruncateRetrySec is SIGNALDECK_WAL_TRUNCATE_RETRY_SEC: the seconds the
+// governor keeps retrying a BUSY TRUNCATE, default 300. Unlike envIntOr it
+// accepts 0, which disables the retry loop (one attempt per pass).
+func walTruncateRetrySec() int {
+	const key, def = "SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 300
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		envcfg.RejectCritical(key, v, "must be a whole number of seconds >= 0", strconv.Itoa(def))
+		return def
+	}
+	return n
+}
+
 func envIntOr(k string, def int) int {
 	v := os.Getenv(k)
 	if v == "" {
@@ -481,6 +498,14 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	syms, err := o.St.ListSymbols(ctx, false) // inactive included: their rows still resolve
+	if err != nil {
+		return "", err
+	}
+	marketByID := make(map[int64]md.Market, len(syms))
+	for _, s := range syms {
+		marketByID[s.ID] = s.Market
+	}
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
@@ -549,7 +574,17 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			case okFwd && base.Close > 0:
 				// A forward bar far past the target means a data/session hole;
 				// resolving would mislabel a multi-period move as one horizon.
-				if fwd.Ts-target > 3*horizonSeconds(h) {
+				// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
+				// carries): from the slackened target a pre-holiday Friday's next 1d
+				// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
+				// For stocks the NYSE calendar decides; crypto trades every day.
+				// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
+				// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
+				gap := fwd.Ts-target > 3*horizonSeconds(h)
+				if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
+					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+				}
+				if gap {
 					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
 						return "", err
 					}
@@ -796,6 +831,12 @@ type Quiescer interface {
 // every minute and its deadline is 15m).
 const quiesceWindow = 3 * time.Second
 
+// truncateRetryWait is how long each RETRY of a blocked TRUNCATE waits for
+// readers while it holds the write lock and the main-writer connection. Short
+// on purpose: a sign-in or a worker write waits at most this long behind one,
+// and there is a free second between attempts.
+const truncateRetryWait = 100 * time.Millisecond
+
 // walIneffectiveRuns is how many consecutive passes may reclaim ZERO frames
 // while the WAL is still growing before that becomes its own dq event. Distinct
 // from wal_checkpoint_busy, which fires on SIZE: a WAL can sit under the size
@@ -876,12 +917,17 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		minInterval = 24 * time.Hour
 	}
 
-	// OFF-HOURS GATE: a VACUUM rewrites the whole file and briefly stalls the
-	// single writer, so restrict it to a quiet overnight window (2–6am
-	// America/New_York) instead of letting it fire mid-session under load —
-	// UNLESS the file has blown to 2× the threshold, where reclaiming space
-	// outweighs the stall. This is the "schedule VACUUM off-hours" fix.
-	offHours := inETWindow(time.Now(), 2, 6)
+	// OFF-HOURS GATE: a VACUUM rewrites the whole file and holds the write
+	// lock for the whole rewrite, so it runs ONLY in a quiet overnight window
+	// (2–6am America/New_York). There is no size-keyed bypass any more: on
+	// 2026-09-30 the "emergency" branch (file >= 2x threshold) started a
+	// rewrite of the 7.2 GB file at 21:32 ET, held the lock for 40+ minutes,
+	// and sign-ins answered 500 after two 12s busy waits.
+	// Each deploy killed it before it could record storage_last_vacuum, so
+	// every boot started it again. A big FILE is not an emergency — freed
+	// pages are reused by new rows either way; only the disk would be, and a
+	// rewrite needs 1.2x the file in free space, so it cannot relieve that.
+	offHours := inETWindow(g.now(), 2, 6)
 
 	// RECLAIMABLE SPACE, NOT FILE SIZE, IS WHAT JUSTIFIES THE STALL.
 	//
@@ -904,7 +950,6 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		reclaimable, rerr = g.St.ReclaimableBytes(ctx)
 	}
 	worthIt := rerr == nil && reclaimable*20 >= dbBytes // at least 5% free pages
-	emergency := worthIt && dbBytes >= 2*threshold
 
 	if dbBytes >= threshold && rerr == nil && !worthIt {
 		_ = g.St.InsertDQ(ctx, md.DQEvent{
@@ -918,7 +963,7 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	}
 
 	vacuumed := false
-	if dbBytes >= threshold && worthIt && (offHours || emergency) {
+	if dbBytes >= threshold && worthIt && offHours {
 		last, _ := g.St.GetMeta(ctx, "storage_last_vacuum")
 		var lastTs int64
 		if last != "" {
@@ -1050,10 +1095,27 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 		// buys ~70 attempts (~94%) and still costs a fraction of this worker's
 		// 180-minute deadline, and the retries run UNQUIESCED so nothing else
 		// is held up while it waits.
-		retrySec := envIntOr("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 300)
+		//
+		// "Nothing else is held up" is not quite true: each retry waits up to
+		// the checkpoint's busy timeout holding the write lock, and new readers
+		// stall behind it too. With a 1.28 GB WAL the loop slowed every request
+		// for minutes (2026-10-01 00:58-01:07: sign-in 14-40s, health 14-43s).
+		// 0 now really disables it, as the next comment promises; envIntOr
+		// rejects 0, and that rejection is CRITICAL, so writing the documented
+		// value turned fleet health red and ran the 300s default anyway.
+		//
+		// So the retries are SHORT AND SPACED: each waits at most
+		// truncateRetryWait for readers, then the connection and the write lock
+		// are free for a full second before the next. It was a 1s ticker around
+		// 5s attempts, so ticks queued and the attempts ran back to back: the
+		// single main-writer connection and the write lock were held for the
+		// whole budget (up to 5 minutes), and every worker write queued behind
+		// it. A retry only needs the reader-free INSTANT; it does not need to
+		// wait for one.
+		retrySec := walTruncateRetrySec()
 		if retrySec > 0 {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			gap := time.NewTimer(time.Second)
+			defer gap.Stop()
 			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
 			defer deadline.Stop()
 		retryLoop:
@@ -1063,16 +1125,17 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 					break retryLoop
 				case <-deadline.C:
 					break retryLoop
-				case <-ticker.C:
+				case <-gap.C:
 					attempts++
 					prior += trunc.Checkpointed
-					trunc, err = g.St.WALCheckpointTruncate(ctx)
+					trunc, err = g.St.WALCheckpointTruncateWithin(ctx, truncateRetryWait)
 					if err != nil {
 						break retryLoop
 					}
 					if !trunc.Busy {
 						break retryLoop
 					}
+					gap.Reset(time.Second) // the gap starts when the attempt has let go
 				}
 			}
 		}
@@ -1096,7 +1159,16 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	if trunc.Busy {
 		tn += " BUSY — WAL NOT truncated"
 		_, walAfter := g.St.FileSizes()
-		g.trackTruncateStall(ctx, trunc.LogFrames, walAfter)
+		// Key the stall on the CHECKPOINTED frame: that is where a pinned read
+		// snapshot stops the checkpoint. LogFrames is the WAL length, which a
+		// live writer grows between passes, so keyed on it the verdict never
+		// fired: 2026-10-01 the checkpoint sat at frame 1,652,206 for three
+		// hourly passes while the WAL grew 8.6 -> 11.1 GB, zero starved events.
+		// -1 means SQLite reported nothing: another connection held the
+		// checkpoint lock. That is not a pinned reader, so it is not a stall.
+		if trunc.Checkpointed >= 0 {
+			g.trackTruncateStall(ctx, trunc.Checkpointed, walAfter)
+		}
 		if walAfter >= walBusyAlertBytes {
 			_ = g.St.InsertDQ(ctx, md.DQEvent{
 				Ts:   time.Now().Unix(),

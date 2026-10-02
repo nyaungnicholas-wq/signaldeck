@@ -134,14 +134,18 @@ type RVRecord struct {
 	Ungradable   int
 }
 
-// RVLiveRecord aggregates resolved forecasts.
+// RVLiveRecord aggregates the resolved forecasts frozen STRICTLY AFTER
+// createdAfter (unix seconds): the registered start rule, the same bound
+// RVGradeRows applies, so these pooled counts and means describe the live
+// window the verdict is graded on and never a row frozen at or before the
+// registration. createdAfter 0 reads every row.
 //
 // It reports DistinctDays beside N because they are not the same evidence.
 // Forecasts resolving on one day share a market shock, so the day count is the
 // number of independent observations and N is not. Returning only N would
 // invite exactly the inflation this platform has already retired predictors
 // for.
-func (s *Store) RVLiveRecord(ctx context.Context, horizon int) (RVRecord, error) {
+func (s *Store) RVLiveRecord(ctx context.Context, horizon int, createdAfter int64) (RVRecord, error) {
 	r := RVRecord{Horizon: horizon}
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*),
@@ -150,14 +154,14 @@ func (s *Store) RVLiveRecord(ctx context.Context, horizon int) (RVRecord, error)
 		       COALESCE(AVG(actual/null_rw   - LN(actual/null_rw)   - 1), 0),
 		       COALESCE(AVG(actual/null_ewma - LN(actual/null_ewma) - 1), 0)
 		  FROM rv_forecasts
-		 WHERE horizon=? AND actual IS NOT NULL AND actual > 0`, horizon).
+		 WHERE horizon=? AND actual IS NOT NULL AND actual > 0 AND created_ts > ?`, horizon, createdAfter).
 		Scan(&r.N, &r.DistinctDays, &r.MeanQLIKEHAR, &r.MeanQLIKERW, &r.MeanQLIKEEW)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM rv_forecasts WHERE horizon=? AND ungradable IS NOT NULL`,
-		horizon).Scan(&r.Ungradable); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT COUNT(*) FROM rv_forecasts WHERE horizon=? AND ungradable IS NOT NULL AND created_ts > ?`,
+		horizon, createdAfter).Scan(&r.Ungradable); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
 	return r, nil
@@ -170,4 +174,50 @@ func (s *Store) CountResolvedRV(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM rv_forecasts WHERE actual IS NOT NULL`).Scan(&n)
 	return n, err
+}
+
+// LatestRV is one current forecast as a member may read it: the symbol, the
+// horizon, the call bar and the forecast level. No null, coefficient or
+// outcome travels with it.
+type LatestRV struct {
+	Symbol  string
+	Horizon int
+	Ts      int64
+	RVHat   float64
+}
+
+// LatestRVForecasts returns, per horizon, every stock forecast frozen on that
+// horizon's most recent call bar. A symbol the runner skipped on that bar
+// (thin, stale) has no current forecast and is absent rather than shown an
+// older one as if it were today's.
+func (s *Store) LatestRVForecasts(ctx context.Context) ([]LatestRV, error) {
+	// The newest stock call bar per horizon is computed ONCE (one scan) and
+	// joined back. The correlated MAX(ts) this replaced re-scanned the table
+	// for every row: quadratic, measured at 28s on 40 days of rows on an
+	// uncached member route (TestLatestRVForecastsIsNotQuadratic).
+	rows, err := s.db.QueryContext(ctx, `
+		WITH latest AS (
+		  SELECT f.horizon, MAX(f.ts) AS ts
+		    FROM rv_forecasts f JOIN symbols sy ON sy.id = f.symbol_id
+		   WHERE sy.market = 'stocks'
+		   GROUP BY f.horizon)
+		SELECT sy.symbol, f.horizon, f.ts, f.rv_hat
+		  FROM latest l
+		  JOIN rv_forecasts f ON f.horizon = l.horizon AND f.ts = l.ts
+		  JOIN symbols sy ON sy.id = f.symbol_id
+		 WHERE sy.market = 'stocks'
+		 ORDER BY sy.symbol, f.horizon`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []LatestRV
+	for rows.Next() {
+		var r LatestRV
+		if err := rows.Scan(&r.Symbol, &r.Horizon, &r.Ts, &r.RVHat); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

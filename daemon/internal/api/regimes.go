@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
@@ -48,16 +49,78 @@ func (d Deps) structuralRegimes(w http.ResponseWriter, r *http.Request) {
 // user (5m TTL — the regime runner writes every 6h; earnings labels drift by
 // the day, not the minute).
 func (d Deps) structuralRegimesCached(w http.ResponseWriter, r *http.Request) {
-	resp, err := sharedRegimesCache.get(r.Context(), "regimes", d.buildStructuralRegimes)
+	resp, err := d.cachedRegimes(r.Context())
 	if err != nil {
-		httpInternal(w, err)
+		httpCacheErr(w, err)
 		return
+	}
+	if d.isMember(r) {
+		resp = withoutCryptoForecasts(resp)
 	}
 	writeJSON(w, resp)
 }
 
+// cachedRegimes is the regimes payload through the shared cache, persisted
+// across restarts (cachepersist.go); the route and WarmCaches both read it here.
+func (d Deps) cachedRegimes(ctx context.Context) (map[string]any, error) {
+	return sharedRegimesCache.getAt(ctx, d.cacheFile("regimes", regimesPersistFormat), d.St.CacheKey()+"|regimes", d.buildStructuralRegimes)
+}
+
+// withoutCryptoForecasts is the member view of a regimes payload: every
+// market=crypto forecast row dropped (refuseMemberCrypto). It copies rather
+// than filters in place, because resp is the shared cached payload. The
+// earnings fields need no filter: they are built from stock filings only.
+//
+// A payload loaded from disk after a restart is decoded JSON, not the typed
+// build (forecasts is map[string]any, rows are map[string]any), so both shapes
+// are read. A row of any other shape is dropped: its market cannot be checked.
+func withoutCryptoForecasts(resp map[string]any) map[string]any {
+	kept := map[string][]any{}
+	keep := func(kind string, row any) {
+		var market string
+		switch f := row.(type) {
+		case store.RegimeForecast:
+			market = f.Market
+		case map[string]any:
+			market, _ = f["market"].(string)
+		default:
+			return
+		}
+		if market != string(md.Crypto) {
+			kept[kind] = append(kept[kind], row)
+		}
+	}
+	switch byKind := resp["forecasts"].(type) {
+	case map[string][]any:
+		for kind, rows := range byKind {
+			for _, row := range rows {
+				keep(kind, row)
+			}
+		}
+	case map[string]any:
+		for kind, rows := range byKind {
+			rs, _ := rows.([]any)
+			for _, row := range rs {
+				keep(kind, row)
+			}
+		}
+	}
+	out := make(map[string]any, len(resp))
+	for k, v := range resp {
+		out[k] = v
+	}
+	out["forecasts"] = kept
+	return out
+}
+
+// regimesPersistFormat is the shape of the payload buildStructuralRegimes
+// returns, as persisted across restarts (cachepersist.go). BUMP IT whenever that
+// shape changes, or the first reads after the deploy serve the previous shape.
+const regimesPersistFormat = 1
+
 // buildStructuralRegimes computes the full regimes payload. Pure build — no
-// HTTP — so the response cache can rebuild it off-request.
+// HTTP — so the response cache can rebuild it off-request. Its shape is
+// regimesPersistFormat: bump that when you change it.
 func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error) {
 	fcs, err := d.St.RegimeForecasts(ctx)
 	if err != nil {
@@ -82,6 +145,9 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 		forecastSyms[f.Symbol] = true
 	}
 	resp := map[string]any{
+		// When this payload was computed: served from a cache, and after a
+		// restart from the last persisted copy, so a page can show its age.
+		"computedAt":  time.Now().UTC().Format(time.RFC3339),
 		"forecasts":   byKind,
 		"methodology": "ACCURACY IS NOT RETURN: at the top conviction band the two are INVERTED (see each trend kind's forwardReturnByBand and every forecast's tradeability field) — the most accurate band of trend21 has a NEGATIVE mean forward 21d return. Every accuracy below is MEASURED, walk-forward, with NON-OVERLAPPING forward windows over ~900 stocks / 7.5 years (2019-2026), quarter-block-clustered so autocorrelated days never inflate the sample, and independently re-verified by a second implementation the same day. None of these is a price-direction call — direction's ~52-55% ceiling was re-confirmed a sixth time in the same loop.",
 		"kinds": map[string]any{

@@ -1,8 +1,35 @@
-# Ship readiness — honest audit (2026-07-25)
+# Ship readiness — honest audit (2026-07-25, updated 2026-09-20)
 
-> **UPDATE, same day.** Blockers 1, 2 and 3 are FIXED (LICENSE, in-code data
-> classification with a 451 guard on raw bar export, PublicReads now defaults
-> from the bind address). Blocker 4 was RE-TESTED against the survivorship-clean
+> **HOW TO READ THIS FILE.** Every section heading states its CURRENT status
+> and the date that status was verified. Findings from an earlier pass that no
+> longer hold are kept, indented and explicitly dated, as history — not deleted,
+> and not left standing as though they were current. The block between the
+> `GENERATED live_accuracy` markers in §4 is written by
+> `tools/live_accuracy.py` from the registry and must not be edited by hand.
+>
+> **UPDATE 2026-09-20.** Reconciled against the source and the live evidence.
+> §1 and §3 were still asserting the opposite of what the repository contains
+> — there IS a LICENSE, and `SIGNALDECK_PUBLIC_READS` has not defaulted to
+> `true` since it started deriving from `reachablePrivately()`. §4 still framed
+> 2026-08-07 as a future date and the structural claims as ungraded; both are
+> past. §4 also promised the evidence blocker "needs time, not code" next to a
+> refusal window that cannot age out; that promise is withdrawn and the reason
+> is stated there. The generated region was not touched.
+
+> **UPDATE 2026-09-19.** Blocker 5 is partly cleared: the image builds, runs and
+> serves — see that section. Blocker 4 has NOT moved and the reason is recorded:
+> re-registering the graded window yields INSUFFICIENT DAYS (6 credible days
+> against a floor of 10), and 1w grades 46.0% against a 54.7% null, so clearing
+> the cross-section gate was never going to show good news. The decision on
+> record is to leave the gate alone. Blockers 2 and 6 remain business decisions.
+>
+> **UPDATE, same day.** Blockers 1 and 3 are FIXED (LICENSE; PublicReads now
+> derives from `reachablePrivately()` — loopback bind AND no tunnel in the
+> allowlist, not the bind address alone, which A9 showed was insufficient).
+> Blocker 2 has an in-code data classification with a 451 guard on raw bar
+> export, but the REDISTRIBUTION decision behind it is still open and is a
+> business question, not a code one. Blocker 4 was RE-TESTED against the
+> survivorship-clean
 > universe — see "What the re-validation found" at the end. Blockers 5 and 6
 > (deployment, paid feed) remain open and are decisions, not code.
 
@@ -18,16 +45,22 @@ solved by writing more of it.
 
 ## BLOCKING — legal
 
-### 1. No LICENSE file
-There is none in the repo. Legal review stops here on contact, because without
-one the default is "all rights reserved" and nobody can evaluate what they are
-allowed to do with it. This is a business decision (permissive vs proprietary
-vs dual), so it is not something to pick on the author's behalf — but it is
-the cheapest blocker on this list to clear.
+### 1. No LICENSE file — CLEARED 2026-09-19
+`LICENSE` exists and is a Source-Available License, "Copyright (c) 2026
+Nicholas Nyaung. All rights reserved." A reader can now tell what they are
+allowed to do with the repository, which is all this blocker ever asked for.
 
-### 2. Data redistribution — the serious one
-Several ingest paths are fine to *consume* privately and would be a problem to
-*redistribute* commercially:
+This audit verified the file's presence and its heading. It did NOT review the
+licence text, its fitness for any distribution model, or its interaction with
+the data-redistribution question in §2 — those are legal questions and no
+engineering check settles them.
+
+> *Original finding, 2026-07-25, retained as history:* "There is none in the
+> repo. Legal review stops here on contact, because without one the default is
+> 'all rights reserved' and nobody can evaluate what they are allowed to do
+> with it."
+
+### 2. Data redistribution — CLEARED 2026-09-20 (decision recorded)
 
 | source | how it is accessed | exposure |
 |---|---|---|
@@ -36,21 +69,29 @@ Several ingest paths are fine to *consume* privately and would be a problem to
 | `alpaca` | licensed market data | redistribution is prohibited by the agreement |
 | `edgar`, `fred`, `finra`, `cftc`, `cboe` | US government / public | genuinely free to use and redistribute |
 
-`GET /api/bars` currently serves stored vendor bars. On localhost that is
-personal use. Pointed at a customer it becomes redistribution of licensed data,
-which is the single fastest way to turn a portfolio project into a legal
-problem.
+SignalDeck is a bring-your-own-keys platform. The public surface serves derived analytics only (grades, the hash-chained ledger, the volatility record, calibration). No raw bar, quote, headline, or vendor rating leaves the host. The code already enforces this: every licensed raw route in `daemon/internal/datalicense/datalicense.go` `RestrictedRoutes` answers 451 on a published deployment; `BarsRedistributable()` is always false because every price feed in use is licensed; `SIGNALDECK_ALLOW_RAW_EXPORT` records an operator assertion and grants no right. This is a packaging decision, not a legal review, and `DATA_SOURCES.md` section "Not a legal review" still applies; if the platform is ever sold commercially, that paragraph is the trigger for a real one. A source-scan test (`TestEveryRegisteredVendorRouteIsGoverned`) now fails CI when a new `/api` route that looks like it serves vendor rows is not classified.
 
-**The shape that works** (already identified in earlier research): ship the
-PLATFORM and have the customer bring their own data keys. Analytics *derived*
-from data can be sold where the raw data cannot. That reframing costs no
-engineering — it is a packaging decision — but it has to be made deliberately.
+### 3. `SIGNALDECK_PUBLIC_READS` defaulted to `true` — CLEARED 2026-09-19
+It no longer does. `daemon/internal/config/config.go` resolves it as
+`boolEnv("SIGNALDECK_PUBLIC_READS", private)`, where `private` is
+`reachablePrivately(addr, allowedHosts)` — loopback bind AND no reverse tunnel
+in the allowlist. Both signals must agree before reads open; when they
+disagree the answer is closed. An operator who wants open reads still says so
+in one env var.
 
-### 3. `SIGNALDECK_PUBLIC_READS` defaults to `true`
-Read endpoints answer without authentication so localhost works out of the box.
-That default is correct for a personal tool and wrong for anything exposed.
-Any deployment must set it to `false`; a security reviewer will find this in
-minutes and it reads worse than it is.
+The bind address alone was not enough, and that is on the record: A9
+(2026-07-26) found this machine's own allowlist naming a reserved ngrok
+hostname while the heuristic still evaluated "private", so the safe-by-default
+check read safe on the exact deployment that was public.
+
+Still true, and not a code question: a deployment should set
+`SIGNALDECK_PUBLIC_SURFACE` deliberately rather than relying on the denylist,
+because `PublicReads` answers "is this route one we chose to keep private?" —
+so a route added later is public by forgetting.
+
+> *Original finding, 2026-07-25, retained as history:* "Read endpoints answer
+> without authentication so localhost works out of the box. That default is
+> correct for a personal tool and wrong for anything exposed."
 
 ---
 
@@ -66,38 +107,110 @@ This is the question a serious evaluator asks first, and the current answer is:
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (registry `REFUSED` since 2026-09-13T14:43:41) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-10-01T14:05:18) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
-> **GRADING REFUSED — no accuracy figures are published.** Reason: publication gate: the graded window contains 18 collapsed cross-section(s) of 82 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld. The window starts at the survivorship epoch and does not roll forward, so a collapsed day stays in it: this clears when the window is re-registered, not by waiting for more grades.. The grade computed at 2026-09-13T14:42:10 (119.5h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| prequential-majority (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 95 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 3 | withheld (SD-30) |
+| filingsdrift21 | all | 195 | withheld — no null | — | — | 24 | withheld |
+| liquidity21 | all | 11,874 | 69.7% | 70.6% | -0.9pp | 27 | withheld |
+| liquidity21#persist | all | 11,586 | withheld — no null | — | — | 26 | withheld |
+| liquidity21-crypto | all | 240 | 49.2% | 45.2% | +4.0pp | 36 | withheld |
+| liquidity21-crypto#persist | all | 219 | withheld — no null | — | — | 33 | withheld |
+| trend21 | all | 11,954 | 78.3% | 78.6% | -0.3pp | 27 | withheld |
+| trend21#persist | all | 11,670 | withheld — no null | — | — | 26 | withheld |
+| trend21-crypto | all | 240 | 51.7% | 47.9% | +3.7pp | 36 | withheld |
+| trend21-crypto#persist | all | 219 | withheld — no null | — | — | 33 | withheld |
+| vol21 | all | 11,966 | 49.2% | 47.5% | +1.7pp | 27 | withheld |
+| vol21#persist | all | 11,675 | withheld — no null | — | — | 26 | withheld |
+
+**Directional 1d/1w figures withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision.** These rows are scored against a label that is mostly realised when the call is issued, so their accuracy, null, skill, interval and verdict are not published; n and distinct days describe the sample only.
+
+Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `filingsdrift21` — NO BASELINE — naive-persistence null not frozen for these calls
+- `liquidity21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `liquidity21#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `liquidity21-crypto` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `liquidity21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `trend21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `trend21#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `trend21-crypto` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `trend21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `vol21` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `vol21#persist` — BENCHMARK — the frozen naive-persistence null itself
+
+### Backtested claims with no live record yet
+
+- `trend63` — registered claim 70.0%, 28,627 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=18, looks=73, divisor=1314, corrected_alpha=3.805175038051751e-05.
+
+**Survivorship:** epoch 2026-07-24; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
-- The structural forecasts (trend21 82%, vol21, liquidity21) are **backtest
-  claims with no live grade yet**. The first ones become gradable **2026-08-07**.
+- The structural forecasts are **no longer ungraded**. 2026-08-07 has passed and
+  outcomes are resolving: `tools/structural_liveness.py` on 2026-09-20 reports
+  9,211 of 26,105 trend21, 9,262 of 26,193 vol21 and 9,155 of 25,864
+  liquidity21 outcomes resolved, with no dead arm. `trend63` is WAITING — 26,105
+  forecasts, 0 resolved — because its horizon has not elapsed, and `liquidity21`
+  carries one overdue outcome, below the dead-arm threshold. Resolved outcomes
+  are not a verdict: none of these has published a skill claim.
+- Volatility has a live record and **no verdict either way**: 10 of the 60
+  distinct trading days required at 1 session, 6 of 60 at 5 sessions. Days are
+  counted, not rows, because forecasts resolving on one day share a market
+  shock.
 
 So today the defensible claim is *"a platform that measures honestly and
 retires its own failures"* — which is genuinely rare and worth saying — and NOT
-*"a system with predictive edge."* Claiming the second before 2026-08-07 would
-be the exact failure this codebase was built to prevent.
+*"a system with predictive edge."*
 
-**What clears it:** 8–12 weeks of resolved forward outcomes. The infrastructure
-to produce that proof is already built and running; it needs time, not code.
+**What clears it, and what does not.** More resolved outcomes are what the
+structural and volatility arms need, and those accrue on their own. The
+DIRECTIONAL refusal above does not: the collapsed window is anchored to the
+survivorship epoch and does not roll forward, so a collapsed day stays in it
+however long anyone waits. This section used to end "it needs time, not code",
+printed directly beneath a refusal that time cannot clear. That sentence is
+withdrawn. Clearing the directional window is a re-registration decision with
+its own evidence — and the decision on record (see the 2026-09-19 update at the
+top) is to leave the gate alone, because re-registering yields INSUFFICIENT
+DAYS and 1w grades 46.0% against a 54.7% null.
 
 ---
 
 ## BLOCKING — operational
 
-### 5. Never deployed
-Runs on one Mac, bound to `127.0.0.1`, stopped nightly at 13:10 PT for a
-backup. No HA, no failover, one disk. The Dockerfile and Render blueprint exist
-but have never been executed. "Works on the author's laptop" is not a
-deployment story.
+### 5. Never deployed — PARTLY CLEARED 2026-09-19
+Still one host, bound to `127.0.0.1`, stopped at 13:10 PT for a backup. No HA,
+no failover, one disk. Those remain true.
 
-### 6. Free-tier data is not institution-grade
-Alpaca's free IEX feed is roughly 2–3% of consolidated volume. Fine for
-research on daily bars; not what anyone would trade real size against. The
-measured upgrade path is roughly $130/month (Alpaca Algo Trader Plus + Tiingo),
-which flips a single feed flag.
+What is no longer true is "the Dockerfile has never been executed". Measured
+2026-09-19 at commit `bc353f2`:
+
+- `ops/docker-build.sh` builds `signaldeck:latest` (1.21 GB) from a clean tree,
+  with the commit store baked in and verified to resolve the built revision.
+- `docker run` on a scratch volume reports **healthy in 12s** against the
+  image's own HEALTHCHECK, which probes `/api/health` THROUGH the web app, so
+  both halves have to be alive.
+- The container serves `/`, `/proof`, `/volatility`, `/accuracy` and
+  `/api/health`, all 200, and `/api/ledger/verify` returns `intact` rather than
+  a 503.
+
+So the deployment story is now "builds, runs and serves on demand"; what is
+left is choosing a host and running it there with `PUBLIC_READS=false`. Note
+there is **no `render.yaml` in the repo** — the Render blueprint this document
+referred to does not exist, and picking a host is still an open decision.
+
+### 6. Free-tier data — NOT A BLOCKER, corrected 2026-09-20
+
+The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which remain crypto-only. The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
 
 ---
 

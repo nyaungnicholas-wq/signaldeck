@@ -26,7 +26,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passHash string, isAdm
 	if isAdmin {
 		admin = 1
 	}
-	res, err := s.w.ExecContext(ctx,
+	res, err := s.authW().ExecContext(ctx,
 		`INSERT INTO users (username, pass_hash, created_ts, is_admin) VALUES (?,?,?,?)`,
 		username, passHash, time.Now().Unix(), admin)
 	if err != nil {
@@ -110,13 +110,35 @@ func hashSessionToken(token string) string {
 	return sessionTokenScheme + hex.EncodeToString(sum[:])
 }
 
+// maxSessionsPerUser bounds one account's live sessions. Every sign-in adds a
+// row that lives its full TTL, so an account looping logins (2/s under the
+// write-tier limiter) grew the table ~170k rows a day, and PruneSessions —
+// run inside every sign-in — scans the whole table. Beyond the cap the
+// account's OLDEST sessions end; twenty is far more devices than anyone signs
+// in from at once.
+const maxSessionsPerUser = 20
+
 // CreateSession stores a browser session. Only the token's digest is written —
 // the caller keeps the plaintext for the Set-Cookie header.
 func (s *Store) CreateSession(ctx context.Context, token string, userID int64, expiresTs int64) error {
-	_, err := s.w.ExecContext(ctx,
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sessions (token, user_id, created_ts, expires_ts) VALUES (?,?,?,?)`,
-		hashSessionToken(token), userID, time.Now().Unix(), expiresTs)
-	return err
+		hashSessionToken(token), userID, time.Now().Unix(), expiresTs); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM sessions WHERE token IN (
+		  SELECT token FROM sessions WHERE user_id = ?
+		  ORDER BY created_ts DESC, token LIMIT -1 OFFSET ?)`,
+		userID, maxSessionsPerUser); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SessionUser resolves a presented cookie value to its (unexpired) user id
@@ -150,7 +172,7 @@ func (s *Store) SessionUser(ctx context.Context, token string) (int64, bool, err
 
 // DeleteSession removes one session (logout), given the plaintext cookie value.
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
-	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, hashSessionToken(token))
+	_, err := s.authW().ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, hashSessionToken(token))
 	return err
 }
 
@@ -160,7 +182,9 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 // is what stops a stale bearer credential sitting in the DB file (and in every
 // backup and iCloud copy of it) for the rest of its 30-day TTL.
 func (s *Store) PruneSessions(ctx context.Context) error {
-	_, err := s.w.ExecContext(ctx,
+	// authW, not w: this runs inside sign-in while the caller holds Priority,
+	// so on w the gate would hold this very statement off for its full 3s.
+	_, err := s.authW().ExecContext(ctx,
 		`DELETE FROM sessions WHERE expires_ts<=? OR token NOT LIKE ?`,
 		time.Now().Unix(), sessionTokenScheme+"%")
 	return err
@@ -194,9 +218,35 @@ func (s *Store) SymbolWatcherCount(ctx context.Context, symbolID int64) (int, er
 
 // ListUserSymbols returns the symbols on one user's watchlist.
 func (s *Store) ListUserSymbols(ctx context.Context, userID int64) ([]md.Symbol, error) {
+	return s.listWatched(ctx, "user_symbols", userID)
+}
+
+// AddMemberSymbol, RemoveMemberSymbol and ListMemberSymbols keep a MEMBER's
+// watchlist in member_symbols, which no worker reads (see schema.sql): a
+// member's list is a bookmark, not an instruction to fetch anything.
+func (s *Store) AddMemberSymbol(ctx context.Context, userID, symbolID int64) error {
+	_, err := s.w.ExecContext(ctx,
+		`INSERT OR IGNORE INTO member_symbols (user_id, symbol_id, added_ts) VALUES (?,?,?)`,
+		userID, symbolID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) RemoveMemberSymbol(ctx context.Context, userID, symbolID int64) error {
+	_, err := s.w.ExecContext(ctx,
+		`DELETE FROM member_symbols WHERE user_id=? AND symbol_id=?`, userID, symbolID)
+	return err
+}
+
+func (s *Store) ListMemberSymbols(ctx context.Context, userID int64) ([]md.Symbol, error) {
+	return s.listWatched(ctx, "member_symbols", userID)
+}
+
+// listWatched reads one user's list from user_symbols or member_symbols. The
+// table name is one of those two constants, never caller input.
+func (s *Store) listWatched(ctx context.Context, table string, userID int64) ([]md.Symbol, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.symbol, s.market, s.name, s.active, s.added_at
-		FROM user_symbols us JOIN symbols s ON s.id=us.symbol_id
+		FROM `+table+` us JOIN symbols s ON s.id=us.symbol_id
 		WHERE us.user_id=? ORDER BY s.market, s.symbol`, userID)
 	if err != nil {
 		return nil, err

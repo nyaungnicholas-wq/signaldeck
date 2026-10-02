@@ -75,14 +75,59 @@ SCHEMA = "signaldeck/build-manifest/1"
 # pre-registration chain and it refuses to run when its own bytes change. This
 # manifest is a second, independent place that notices -- the grader's guard
 # protects the grader, and this protects everything around it.
+# THE TRUST BOUNDARY, stated because it was previously only implied (audit R03).
+#
+# COVERED: every file whose bytes can change what gets published, or whether
+# anything gets published at all. That is wider than "the grader": it includes
+# the two modules selection_honesty IMPORTS -- skillpower decides `supported`
+# and skillschema builds the typed `result` record, so swapping either rewrites
+# a verdict without touching a file this manifest used to pin -- and the wrapper
+# and entrypoint, which decide whether the gates run and what happens when one
+# refuses. ops/grade.sh alone can publish a registry no gate approved.
+#
+# NOT COVERED, and this is not a gap to be closed by adding hashes: an operator
+# who can replace the image can replace the manifest and this verifier along
+# with it, and a self-contained check cannot survive that. Only an attestation
+# signed outside the build -- an image digest a registry vouches for -- does.
+# The value here is against DRIFT and against a swap INSIDE a running container,
+# which is what it has always caught and all it should ever claim.
+#
+# tools/accuracy_registry.py is first for a reason: its sha256 is pinned in the
+# pre-registration chain and it refuses to run when its own bytes change. This
+# manifest is a second, independent place that notices -- the grader's guard
+# protects the grader, and this protects everything around it.
 SOURCE_ARTIFACTS = (
     "tools/accuracy_registry.py",
     "tools/selection_honesty.py",
+    # Imported by selection_honesty.py, so their bytes decide a verdict exactly
+    # as much as its own do.
+    "tools/skillpower.py",
+    "tools/skillschema.py",
     "tools/publication_gate.py",
     "tools/grader_heartbeat.py",
     "tools/live_accuracy.py",
+    # Measures the survivorship bound published beside the numbers.
+    "tools/backfill_delistings.py",
+    # The wrapper that decides whether any of the above reaches the served file,
+    # and the entrypoint that decides whether the wrapper ever runs.
+    "ops/grade.sh",
+    "ops/docker-entrypoint.sh",
     "PREREGISTRATION.md",
 )
+
+# Artifacts the image does NOT keep at their repository path. Verified where
+# they actually RUN: pinning /app/ops/grade.sh while /usr/local/bin/grade.sh is
+# the file the schedule executes would check a copy nothing invokes.
+RELOCATED_ARTIFACTS = {
+    "ops/grade.sh": "usr/local/bin/grade.sh",
+    "ops/docker-entrypoint.sh": "usr/local/bin/docker-entrypoint.sh",
+}
+
+
+def artifact_path(rel: str, root: Path, bin_root: Path) -> Path:
+    """Where `rel` lives at VERIFY time (inside the image)."""
+    moved = RELOCATED_ARTIFACTS.get(rel)
+    return (bin_root / moved) if moved else (root / rel)
 
 # Compiled during the image build, so the host cannot know them at emit time.
 # Sealed by the `seal` step and re-checked at grade time, which catches a binary
@@ -207,7 +252,9 @@ def verify(manifest: dict, root: Path, bin_root: Path) -> dict:
     checked = 0
 
     for rel, want in sorted((manifest.get("source_artifacts") or {}).items()):
-        got = sha256_file(root / rel)
+        # Hash where the file RUNS, not where it was authored: the wrapper and
+        # entrypoint are copied to /usr/local/bin inside the image.
+        got = sha256_file(artifact_path(rel, root, bin_root))
         checked += 1
         if got is None:
             absent.append(rel)
@@ -366,10 +413,16 @@ def _selfcheck() -> None:
         root = Path(td) / "app"
         (root / "tools").mkdir(parents=True)
         (root / "usr/local/bin").mkdir(parents=True)
+        # emit() reads the REPOSITORY layout; verify() reads the IMAGE layout,
+        # where the wrapper and entrypoint live under usr/local/bin. Both are
+        # written, because a fixture that only had the repo copy would never
+        # exercise the relocation and would pass while verify checked a file
+        # nothing runs.
         for rel in SOURCE_ARTIFACTS:
-            p = root / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(f"content of {rel}\n", encoding="utf-8")
+            body = f"content of {rel}\n"
+            for p in {root / rel, artifact_path(rel, root, root)}:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(body, encoding="utf-8")
         for rel in BINARY_ARTIFACTS:
             (root / rel).write_text(f"ELF-ish {rel}\n", encoding="utf-8")
 
@@ -421,6 +474,46 @@ def _selfcheck() -> None:
         assert not verify(forged, root, root)["ok"], "a forged label must not rescue swapped bytes"
         (root / "tools/selection_honesty.py").write_text(
             "content of tools/selection_honesty.py\n", encoding="utf-8")
+
+        # ── R03: the widened boundary, exercised ──────────────────────────────
+        # Each of these could rewrite a published verdict without touching any
+        # file the manifest pinned before 2026-09-20.
+        for rel, where in (
+            # imported by selection_honesty: decides `supported` and builds the
+            # typed `result` record
+            ("tools/skillpower.py", root / "tools/skillpower.py"),
+            ("tools/skillschema.py", root / "tools/skillschema.py"),
+            # measures the survivorship bound published beside the numbers
+            ("tools/backfill_delistings.py", root / "tools/backfill_delistings.py"),
+            # THE WRAPPER: it alone can publish a registry no gate approved, and
+            # it is verified at the path it RUNS from, not at its repo path
+            ("ops/grade.sh", root / "usr/local/bin/grade.sh"),
+            ("ops/docker-entrypoint.sh", root / "usr/local/bin/docker-entrypoint.sh"),
+        ):
+            original = where.read_text(encoding="utf-8")
+            where.write_text("swapped after the build\n", encoding="utf-8")
+            r = verify(m, root, root)
+            assert not r["ok"] and r["usable"] and rel in r["reason"], (rel, r)
+            where.write_text(original, encoding="utf-8")
+            assert verify(m, root, root)["ok"], rel
+
+        # A relocated artifact present only at its REPOSITORY path is not
+        # present in the image. Pinning /app/ops/grade.sh while the schedule
+        # runs /usr/local/bin/grade.sh would check a copy nothing invokes.
+        moved = root / "usr/local/bin/grade.sh"
+        body = moved.read_text(encoding="utf-8")
+        moved.unlink()
+        r = verify(m, root, root)
+        assert not r["ok"] and "ops/grade.sh" in r["reason"], r
+        moved.write_text(body, encoding="utf-8")
+        assert verify(m, root, root)["ok"]
+
+        # MISSING REQUIRED EVIDENCE: a manifest that simply omits the wrapper
+        # must not verify by checking what is left.
+        thin = dict(m, source_artifacts={
+            k: v for k, v in m["source_artifacts"].items() if k != "ops/grade.sh"})
+        r = verify(thin, root, root)
+        assert not r["ok"] and "ops/grade.sh" in r["reason"], r
 
         # an empty manifest binds nothing and must NOT pass
         empty = dict(m, source_artifacts={}, binary_artifacts={})

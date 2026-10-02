@@ -14,6 +14,8 @@ import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import useDashboardProof from "@/hooks/useDashboardProof";
 import RefusalNotice from "@/components/RefusalNotice";
+import HypotheticalNote from "@/components/HypotheticalNote";
+import { ledgerHeadline } from "@/lib/ledgerHeadline";
 
 export default function ProofStrip() {
   const { tr, err } = useDashboardProof();
@@ -42,6 +44,9 @@ export default function ProofStrip() {
 
   const threshold = tr.gate?.threshold ?? tr.minIndependentN;
   const paper = tr.paper;
+  // The /proof headline's verdict, not `intact` alone: a regenerated chain is
+  // consistent too, and only a failing signed anchor tells them apart.
+  const ledger = tr.ledger ? ledgerHeadline(tr.ledger) : null;
   return (
     <section className="panel" aria-label="forecast track record">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
@@ -156,25 +161,30 @@ export default function ProofStrip() {
           )}
         </div>
 
+        {/* The paper figure is hypothetical performance; say so in the regulator's words, not only in a tip. */}
+        <HypotheticalNote className="basis-full" />
+
         {/* ledger integrity — the record grades the record that was made */}
-        {tr.ledger && (
+        {tr.ledger && ledger && (
           <span className="inline-flex items-center gap-1">
             <span
               className="chip"
               style={
-                tr.ledger.intact
+                ledger.tone === "ok"
                   ? { color: "var(--ok)", borderColor: "var(--ok)" }
                   : { color: "var(--bad)", borderColor: "var(--bad)" }
               }
             >
-              {tr.ledger.intact ? "ledger intact" : "ledger BROKEN"}
+              {ledger.tone === "ok" ? "ledger intact" : ledger.text}
               <span className="tnum ml-1.5 font-normal" style={{ color: "var(--faint)" }}>
                 {tr.ledger.count.toLocaleString("en-US")}
               </span>
             </span>
             <HelpTip label="What ledger intact means">
-              Every flagship prediction is hash-chained append-only — “intact” means no prediction
-              was silently edited or deleted after the fact.
+              Every flagship prediction is hash-chained append-only — “intact” means the stored rows
+              are internally consistent: editing, deleting or reordering any one of them breaks a full
+              recomputation of the chain. It does not prove when they were written — deleting every row and re-appending
+              a fabricated chain also verifies intact.
             </HelpTip>
           </span>
         )}

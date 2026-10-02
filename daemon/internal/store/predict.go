@@ -231,6 +231,10 @@ func (s *Store) PredictionBefore(ctx context.Context, symbolID int64, h md.Horiz
 // They are skipped, never resolved and never deleted: the outcome for a symbol
 // that stopped printing bars is genuinely unknown, and inventing one (or
 // dropping the row) would quietly improve the measured record.
+//
+// limit < 0 reads the whole queue (SQLite LIMIT -1). The EXISTS check cannot
+// see every reason the resolver skips a row, so a caller that only ever read
+// the head re-read the same skipped rows forever — the resolver reads it all.
 func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff, horizonSecs int64, limit int) ([]struct {
 	SymbolID int64
 	Ts       int64
@@ -281,20 +285,37 @@ func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff,
 // or before the prediction — so the two agree by construction; if no such bar
 // exists it stays NULL and the fold degrades honestly.
 func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
+	_, err := s.resolvePrediction(ctx, symbolID, h, ts, fwdReturn, "")
+	return err
+}
+
+// ResolveOpenPrediction is ResolvePrediction for a row that may already carry a
+// label: it writes only while resolved_at is NULL, so a frozen label is never
+// rewritten. It reports whether a row was resolved (false: no such row, or
+// already resolved).
+func (s *Store) ResolveOpenPrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) (bool, error) {
+	return s.resolvePrediction(ctx, symbolID, h, ts, fwdReturn, " AND resolved_at IS NULL")
+}
+
+func (s *Store) resolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64, guard string) (bool, error) {
 	up := 0
 	if fwdReturn > 0 {
 		up = 1
 	}
-	_, err := s.w.ExecContext(ctx, `
+	res, err := s.w.ExecContext(ctx, `
 		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?,
 		  settle_ts = (
 		    SELECT MAX(b.ts) FROM bars b
 		    WHERE b.symbol_id = prediction_outcomes.symbol_id
 		      AND b.tf = '1d' AND b.ts <= prediction_outcomes.ts
 		  )
-		WHERE symbol_id=? AND horizon=? AND ts=?`,
+		WHERE symbol_id=? AND horizon=? AND ts=?`+guard,
 		up, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // ResolvedPredictionPairs returns (PUBLISHED prob, up) pairs — the calibrated
@@ -306,25 +327,41 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 // probability, and prob here is the map's own previous output, so fitting on
 // it is both a coordinate error and a recursion (2026-07-26 review, C3). Use
 // ResolvedRawPredictionPairs to fit; use this to grade.
-func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
+//
+// ONE PAIR PER (SYMBOL, SETTLED TRADING DAY), over the grader's own population
+// (gradeableDedupSQL: the graded window, settlement quarantine, stale-feed
+// exclusion), newest first, so len(probs) is the same independent N that
+// LiveDirectionalRecord counts. It used to return every raw resolved row: the
+// runner re-scores a symbol many times a day and every one of those rows
+// resolves against the same forward move, so /api/calibration published
+// "n": 10,000 rows as its sample. days[i] is pair i's settled trading-day
+// index, so a caller can count distinct days. A negative limit reads them all.
+func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs, ups []float64, days []int64, err error) {
+	applicable, err := s.SettlementApplicable(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	rows, qerr := s.db.QueryContext(ctx, `
-		SELECT prob, up FROM prediction_outcomes
-		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
+		SELECT prob, up, `+settleDayFold("settle_ts", "ts")+`
+		FROM (`+gradeableDedupSQL(applicable)+`)
+		WHERE rn = 1 AND horizon = ? ORDER BY ts DESC LIMIT ?`,
 		string(h), limit)
 	if qerr != nil {
-		return nil, nil, qerr
+		return nil, nil, nil, qerr
 	}
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var p float64
 		var u int
-		if err := rows.Scan(&p, &u); err != nil {
-			return nil, nil, err
+		var d int64
+		if err := rows.Scan(&p, &u, &d); err != nil {
+			return nil, nil, nil, err
 		}
 		probs = append(probs, p)
 		ups = append(ups, float64(u))
+		days = append(days, d)
 	}
-	return probs, ups, rows.Err()
+	return probs, ups, days, rows.Err()
 }
 
 // ResolvedRawPredictionPairs returns (RAW blend prob, realized up, UTC day)
@@ -360,6 +397,19 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // about what one observation is. That mismatch was the whole bug: the registry
 // had already been corrected, the calibration fit had not.
 //
+// THE SAME POPULATION, IN TIME AS WELL AS IN UNITS (2026-09-23). The graded
+// window starts at GradingEpochTS (re-registered, prereg seq 117) and every
+// grading consumer was repointed to it; this fit was not, and the same mismatch
+// reopened one axis over. Measured on the live db: the 1d map was fit on 12,439
+// pairs over 53 days of which 687 (19 days) were inside the graded window. The
+// rest - the survivor-seeded July universe and the 07-27..08-06 collapse - fit a
+// near-flat map that squeezed every 1d pass into a 1.8pp band, all on one side
+// of 0.5 (agreement 1.000), which the cross-section gate then refused, every
+// pass. On the graded window alone isotonic wins the holdout, globalCalibration
+// refuses a ranking-collapsing map, and the same raws go out with their 0.23
+// spread - uncalibrated and saying so, which is the documented answer.
+// Evidence the grader declared inadmissible must not train the map either.
+//
 // The day is md.TradingDay via the trading_day() SQLite function, NOT ts/86400.
 // A US extended session closes at 20:00 ET — 00:00Z under EDT — so a UTC-midnight
 // fold splits one session in two and counts its tail as a second independent
@@ -385,10 +435,11 @@ func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, li
 			JOIN predictions p
 			  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
 			WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
+			  AND o.ts >= ?
 		)
 		WHERE rn=1
 		ORDER BY day DESC LIMIT ?`,
-		string(h), limit)
+		string(h), GradingEpochTS, limit)
 	if qerr != nil {
 		return nil, nil, nil, qerr
 	}

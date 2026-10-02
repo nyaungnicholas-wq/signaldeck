@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -30,10 +31,19 @@ var schemaSQL string
 // go through w, a single-connection handle, so concurrent writers queue in Go
 // instead of racing for the SQLite write lock (no SQLITE_BUSY under load).
 type Store struct {
-	db   *sql.DB // read pool
-	w    *sql.DB // dedicated single-connection write path
-	path string  // database file path (for size accounting in DataStats)
-	dsn  string  // connection string (so a reader clone opens identically)
+	db *sql.DB // read pool
+	w  *sql.DB // dedicated single-connection write path
+	// aw is a SECOND single-connection writer used only for account writes
+	// (sign-up, email confirmation, sessions, password reset). Those are tiny
+	// and a person is waiting on them, but on w they queue behind 103 workers:
+	// measured 2026-09-30, an email confirmation sat >90s in that queue and the
+	// page never answered. SQLite still serialises the actual writes (WAL, one
+	// writer at a time, busy_timeout 5s); this only skips Go's pool queue.
+	aw *sql.DB
+	// gate gives aw priority over w at w's transaction boundaries (prioritygate.go).
+	gate *priorityGate
+	path string // database file path (for size accounting in DataStats)
+	dsn  string // connection string (so a reader clone opens identically)
 	// borrowedWriter marks a ReaderClone: it shares the parent's write
 	// connection, so Close must not close the writer out from under the parent.
 	borrowedWriter bool
@@ -117,13 +127,43 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	// Read pool: WAL readers don't block each other.
-	db.SetMaxOpenConns(4)
+	//
+	// 16, raised from 4 on 2026-09-20. Four connections served a fleet of 103
+	// workers. The instrument added that day measured, in ONE prediction-runner
+	// run window, 27,579 waits on this pool totalling 35m28s -- against 14,430
+	// waits on the single WRITE connection. The read pool was the busier
+	// contention point and nobody had looked at it, because "SQLite has one
+	// writer" makes the writer the assumed bottleneck.
+	//
+	// prediction-runner's per-symbol loop is almost entirely reads (loadBars,
+	// Forecasts, ModelForecasts, and LatestScore/Expectancy/SymbolModel per
+	// horizon: ~10 queries x ~329 symbols), which fits a starved read pool
+	// better than writer contention does -- and it explains the slow pass that
+	// recorded ZERO writer waits, which the writer hypothesis could not.
+	//
+	// WAL readers genuinely do not block each other, so this costs concurrency
+	// limits, not correctness. The real risk is WAL growth: a read snapshot
+	// pins old frames, and more simultaneous readers means fewer instants with
+	// no reader active for a TRUNCATE checkpoint -- the failure that once left
+	// a 5,396 MB WAL with 0 of 22 checkpoints succeeding. That is bounded here
+	// rather than assumed away: ReadConnMaxIdleTime (1m) and
+	// ReadConnMaxLifetime (3m) reap read connections, so 16 idle readers cannot
+	// pin frames indefinitely, and journal_size_limit still caps the file.
+	// WATCH THE WAL after changing this; if it stops returning to ~64MB, this
+	// is the first thing to put back.
+	db.SetMaxOpenConns(16)
 	boundReadConns(db)
-	w, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		db.Close() //nolint:errcheck
-		return nil, err
-	}
+	// The main writer goes through the priority gate so account writes on aw
+	// can win the SQLite lock at w's next transaction boundary.
+	gate := &priorityGate{}
+	// _txlock=immediate on the main writer ONLY: its transactions take the write
+	// lock at BEGIN. Deferred, one that reads first (AppendLedger reads the chain
+	// head, then inserts) failed outright with SQLITE_BUSY_SNAPSHOT (517) when the
+	// account writer committed in between; busy_timeout never retries that.
+	// Every main-writer transaction is begun to write (a few, e.g. ApplyPaperStep,
+	// may find nothing to write after one point read); ReadOnly ones stay
+	// deferred (driver), and the read pools (Store.dsn) never begin one.
+	w := openGated(db.Driver(), dsn+"&_txlock=immediate", gate)
 	// SQLite allows exactly one writer — serialize writes on one connection.
 	w.SetMaxOpenConns(1)
 	if _, err := w.Exec(schemaSQL); err != nil {
@@ -147,7 +187,26 @@ func Open(path string) (*Store, error) {
 		w.Close()  //nolint:errcheck
 		return nil, err
 	}
-	st := &Store{db: db, w: w, path: path, dsn: dsn, id: storeSeq.Add(1)}
+	// Account writer: opened AFTER schema + migrate so it never races them.
+	// busy_timeout 12s (the main writer uses 5s): some worker transactions hold
+	// the SQLite write lock past 5s, and a person waiting on a confirmation is
+	// better served by a longer wait than an error. Still under the 15s bound
+	// the account handlers put on each request.
+	//
+	// wal_autocheckpoint(0): a commit with autocheckpoint on runs a PASSIVE
+	// checkpoint of every frame no reader still needs before it returns. After
+	// a long reader releases, that backlog can be millions of frames, and the
+	// first connection to commit copies all of it inside a one-row write (logged
+	// 2026-10-01 as 27-56 s single-row "holds"). A sign-in must never be that
+	// commit; the main writer still autocheckpoints, so the WAL stays bounded.
+	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1)+"&_pragma=wal_autocheckpoint(0)")
+	if err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
+		return nil, err
+	}
+	aw.SetMaxOpenConns(1)
+	st := &Store{db: db, w: w, aw: aw, gate: gate, path: path, dsn: dsn, id: storeSeq.Add(1)}
 	// A worker whose only product is an audit record must not be allowed to
 	// start when it has nowhere to write that record (see AuditRecordWorkers).
 	// verifySchema catches divergence from the DECLARATION; this catches the
@@ -355,6 +414,60 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// THE SETTLE BACKFILL'S OWN WORK QUEUE, indexed.
+	//
+	// These live here rather than in schema.sql because settle_ts is added by
+	// the ALTERs directly above: schema.sql is applied BEFORE migrate(), so a
+	// partial index referencing settle_ts fails on a fresh database with
+	// "no such column". The store's own contract test catches that, which is
+	// how this was found.
+	//
+	// store.backfillSettleFor runs one UPDATE per pass per table with
+	// WHERE settle_ts IS NULL AND resolved_at IS NOT NULL. It is a convergence
+	// task for rows predating the column, and it HAS converged: measured on the
+	// live database 2026-09-20, zero rows match that predicate in any of the
+	// three tables, because the resolver now fills settle_ts at write time.
+	//
+	// It still paid a full scan to discover that. Measured live, the inner
+	// probe alone: prediction_outcomes 50.6ms, score_outcomes 5266.1ms,
+	// confluence_outcomes 1.2ms -- score_outcomes walked idx_outcomes_resolved
+	// across ~6.5M resolved rows testing settle_ts IS NULL on every one and
+	// found none. With the outer scan across all three, prediction-runner's
+	// stage timer measured this stage at 16.3-17.3s per pass: the LARGEST stage
+	// in a healthy 37s pass, bigger than the entire per-symbol loop, every ten
+	// minutes, to do no work.
+	//
+	// Each index IS the work queue: a row enters when it resolves without a
+	// settle_ts and leaves when the backfill fills it. Normally empty, so
+	// maintenance is near free and the probe becomes an empty index scan
+	// (measured 105.3ms -> 0.0ms on a seeded 400k-row replica).
+	//
+	// Checked before shipping that this does not make the query fast by HIDING
+	// rows: with a seeded backlog the same query still returns the full backlog
+	// through the index. A partial index that silently stopped the backfill
+	// would be far worse than the scan it replaces.
+	//
+	// The backfill is KEPT, not deleted: it is the safety net if any future
+	// path writes a resolved row without a settle_ts, and indexed it costs
+	// nothing to leave armed.
+	for _, ddl := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_predoutcomes_settle_backfill
+		   ON prediction_outcomes (symbol_id, horizon, ts)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_score_outcomes_settle_backfill
+		   ON score_outcomes (symbol_id, horizon, ts)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+		// Key order (symbol_id, ts, horizon) is deliberate here and mirrors
+		// settle.go's keyCols for this table; do not "fix" it to match the
+		// other two.
+		`CREATE INDEX IF NOT EXISTS idx_confl_outcomes_settle_backfill
+		   ON confluence_outcomes (symbol_id, ts, horizon)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+	} {
+		if _, err := w.Exec(ddl); err != nil {
+			return err
+		}
+	}
 	// confluence pseudo-replication wave (2026-08-21): two columns that make the
 	// published confluence population defensible.
 	//
@@ -517,7 +630,8 @@ func migrate(w *sql.DB) error {
 	if err := migrateRegimeOutcomesToSettleDay(w); err != nil {
 		return err
 	}
-	return nil
+	// Public accounts: users.email / email_verified and auth_tokens (accounts.go).
+	return migrateAccounts(w)
 }
 
 // migrateRegimeOutcomesToSettleDay re-folds regime_outcomes.day a second time,
@@ -720,7 +834,7 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 	}
 	db.SetMaxOpenConns(maxConns)
 	boundReadConns(db)
-	return &Store{db: db, w: s.w, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
+	return &Store{db: db, w: s.w, aw: s.aw, gate: s.gate, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
 }
 
 // Close closes the database. A ReaderClone closes only its own read pool — the
@@ -735,10 +849,22 @@ func (s *Store) Close() error {
 	if s.borrowedWriter {
 		return err
 	}
+	if s.aw != nil {
+		_ = s.aw.Close()
+	}
 	if werr := s.w.Close(); err == nil {
 		err = werr
 	}
 	return err
+}
+
+// authW is the writer for account writes (see Store.aw); it falls back to the
+// main writer for any Store built without one.
+func (s *Store) authW() *sql.DB {
+	if s.aw != nil {
+		return s.aw
+	}
+	return s.w
 }
 
 // DB exposes the raw handle for read-only ad-hoc queries (export endpoints).
@@ -829,6 +955,34 @@ func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, 
 	return out, rows.Err()
 }
 
+// ActiveSymbolByTicker is the first ACTIVE symbol whose symbol equals ticker
+// or whose base before the first '/' does, ASCII case-insensitively ("BTC"
+// finds "BTC/USD"), preferring any non-crypto row and otherwise in
+// ListSymbols order (market, symbol). ok=false when none. A stock "BTC" thus
+// wins over the pair "BTC/USD": crypto is not part of the member product, so
+// resolving a ticker to the crypto row would refuse a member the stock.
+// ponytail: NOCASE cannot use the BINARY (symbol, market) index, so SQLite
+// still scans the small symbols table in-engine; a seek needs a NOCASE index.
+func (s *Store) ActiveSymbolByTicker(ctx context.Context, ticker string) (md.Symbol, bool, error) {
+	prefix := "" // a ticker holding '/' can never equal a base
+	if !strings.Contains(ticker, "/") {
+		prefix = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(ticker) + "/%"
+	}
+	var sym md.Symbol
+	var active, stream int
+	var mkt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, symbol, market, name, active, added_at, stream FROM symbols
+		WHERE active=1 AND (symbol = ? COLLATE NOCASE OR (? != '' AND symbol LIKE ? ESCAPE '\'))
+		ORDER BY (market = 'crypto'), market, symbol LIMIT 1`, ticker, prefix, prefix).
+		Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream)
+	if errors.Is(err, sql.ErrNoRows) {
+		return md.Symbol{}, false, nil
+	}
+	sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
+	return sym, err == nil, err
+}
+
 // SetSymbolActive toggles the live subscription flag (history is kept).
 func (s *Store) SetSymbolActive(ctx context.Context, id int64, active bool) error {
 	v := 0
@@ -841,8 +995,26 @@ func (s *Store) SetSymbolActive(ctx context.Context, id int64, active bool) erro
 
 // ── bars ────────────────────────────────────────────────────────────────
 
-// UpsertBars writes bars idempotently (REPLACE on the composite key).
+// upsertBarsChunk caps the bars one UpsertBars transaction writes.
+const upsertBarsChunk = 1000
+
+// UpsertBars writes bars idempotently (REPLACE on the composite key), at most
+// upsertBarsChunk per transaction. One transaction per call held the write
+// lock for up to 2 minutes on a large backfill (2026-09-30: 11 holds over 12s
+// in two hours), failing every sign-in meanwhile; between chunks the priority
+// gate lets account writes in. Chunks commit independently, so a failure
+// part-way leaves earlier chunks written, which an idempotent upsert's caller
+// simply repeats.
 func (s *Store) UpsertBars(ctx context.Context, bars []md.Bar) error {
+	for start := 0; start < len(bars); start += upsertBarsChunk {
+		if err := s.upsertBarsTx(ctx, bars[start:min(start+upsertBarsChunk, len(bars))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	if len(bars) == 0 {
 		return nil
 	}
@@ -978,20 +1150,42 @@ func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timefra
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
+	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
+}
+
+// rollupSelect computes one symbol's coarse bars; rollupArgs binds it.
+//
+// The open/close probes pick the bucket by RANGE (ts from the bucket start, below
+// the next one), not by ts/bucket = b.ts/bucket. The division cannot seek, so
+// each probe walked every bar of the symbol's timeframe once per bucket: 60
+// days of minutes per hour bucket. Over the 72h window for all 2,950 symbols on
+// the 10-01 backup that was 18.3 s in the C CLI against 0.57 s by range, with
+// identical output (28,056 buckets); the Downsampler hit its 15m deadline on
+// every pass (rollup SHMD: context deadline exceeded, 2026-10-02 01:07).
+const rollupSelect = `
 		SELECT symbol_id, ?, (ts/?)*? AS bts,
 		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
-		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
+		     AND b2.ts >= b.ts/?*? AND b2.ts < b.ts/?*? + ? ORDER BY b2.ts LIMIT 1),
 		  MAX(high), MIN(low),
 		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
-		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
+		     AND b3.ts >= b.ts/?*? AND b3.ts < b.ts/?*? + ? ORDER BY b3.ts DESC LIMIT 1),
 		  SUM(volume)
 		FROM bars b
 		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
-		GROUP BY bts`,
-		string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-		symbolID, string(src), from, to)
+		GROUP BY bts`
+
+// rollupArgs binds rollupSelect.
+func rollupArgs(symbolID int64, src, dst md.Timeframe, bucket, from, to int64) []any {
+	b := bucket
+	return []any{string(dst), b, b, b, b, b, b, b, b, b, b, b, b, symbolID, string(src), from, to}
+}
+
+// rollup computes the coarse bars on the read pool and writes them with verb
+// ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
+// per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
+func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
+	_, err := s.readThenWrite(ctx, rollupSelect, rollupArgs(symbolID, src, dst, bucket, from, to),
+		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
 	return err
 }
 
@@ -1001,21 +1195,7 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 // the source) is authoritative and must not be replaced by an aggregate of
 // possibly-partial finer bars.
 func (s *Store) RollupMissing(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		INSERT OR IGNORE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
-		SELECT symbol_id, ?, (ts/?)*? AS bts,
-		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
-		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
-		  MAX(high), MIN(low),
-		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
-		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
-		  SUM(volume)
-		FROM bars b
-		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
-		GROUP BY bts`,
-		string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-		symbolID, string(src), from, to)
-	return err
+	return s.rollup(ctx, "INSERT OR IGNORE", symbolID, src, dst, bucket, from, to)
 }
 
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
@@ -1025,11 +1205,42 @@ func (s *Store) PruneBars(ctx context.Context, tf md.Timeframe, cutoff int64) (i
 	if tf == md.TF1d {
 		return 0, fmt.Errorf("store: daily bars are never pruned (permanence guarantee)")
 	}
-	res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
+	// One DELETE per symbol (a primary-key range seek), not one over the whole
+	// timeframe: `tf=? AND ts<?` has no ts-leading index, so the single statement
+	// walked every bar of tf inside the write lock on each archive batch (47.7 s
+	// live, 2026-10-01). The symbol list is read on the pool, outside the lock;
+	// the deleted set is the same.
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT symbol_id FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() //nolint:errcheck
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close() //nolint:errcheck
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, id := range ids {
+		res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE symbol_id=? AND tf=? AND ts<?`, id, string(tf), cutoff)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // ── crypto 1s snapshots ─────────────────────────────────────────────────
@@ -1069,13 +1280,13 @@ func (s *Store) Snaps(ctx context.Context, symbolID int64, from, to int64, limit
 	return out, rows.Err()
 }
 
-// PruneSnaps enforces the snapshot ring retention.
+// PruneSnaps enforces the snapshot ring retention, in short batches so account
+// writes get in between (deleteInBatches): the Downsampler hands it up to a
+// 50k-row archive batch per call.
 func (s *Store) PruneSnaps(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM snapshots_1s WHERE ts<?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM snapshots_1s WHERE (symbol_id, ts) IN (
+		  SELECT symbol_id, ts FROM snapshots_1s WHERE ts < ? LIMIT ?)`, cutoff)
 }
 
 // ── scores & outcomes ───────────────────────────────────────────────────
@@ -1360,11 +1571,33 @@ func (s *Store) StartWorkerRun(ctx context.Context, worker string) (int64, error
 	return res.LastInsertId()
 }
 
-// FinishWorkerRun closes a run record.
+// FinishWorkerRun closes a run record, stamping the current time as its completion.
+// This is correct only when the caller closes the run at the moment it actually ended.
+// For more precise control over the completion timestamp, use FinishWorkerRunAt.
 func (s *Store) FinishWorkerRun(ctx context.Context, id int64, status, detail string) error {
+	return s.FinishWorkerRunAt(ctx, id, status, detail, time.Now().Unix())
+}
+
+// FinishWorkerRunAt closes a run record, using the provided timestamp for its completion.
+// The `finished_at` field in `worker_runs` used to be `time.Now()` evaluated wherever the UPDATE ran,
+// and the UPDATE does not run where the worker run ended. The run journal (internal/workers/journal.go)
+// hands every worker start and finish to one goroutine draining over this store's single write connection,
+// shared by the whole fleet, so a completion is stamped whenever the queue reaches it.
+// That made `(finished_at - started_at)` equal the run's duration PLUS the journal backlog,
+// with nothing recording the split. Measured on the live table 2026-09-20 across 7 days of
+// prediction-runner rows whose detail carries the worker's own in-process elapsed time:
+// inflation p50 302s, p90 2132s, max 2611s. The worst rows read as 59 to 73 minute runs;
+// each was a 30m0s run plus up to 43 minutes of queue. Two separate investigations read a
+// capacity trend and a machine-sleep artefact off that field before anyone checked it
+// against the worker's own clock. A zero or negative `finishedAt` falls back to `time.Now().Unix()`
+// rather than writing an epoch timestamp, because a nonsense duration is how this was missed the first time.
+func (s *Store) FinishWorkerRunAt(ctx context.Context, id int64, status, detail string, finishedAt int64) error {
+	if finishedAt <= 0 {
+		finishedAt = time.Now().Unix()
+	}
 	_, err := s.w.ExecContext(ctx,
 		`UPDATE worker_runs SET finished_at=?, status=?, detail=? WHERE id=?`,
-		time.Now().Unix(), status, detail, id)
+		finishedAt, status, detail, id)
 	return err
 }
 
@@ -1393,7 +1626,8 @@ func (s *Store) ReconcileOrphanRuns(ctx context.Context, bootUnix int64) (int, e
 	return int(n), err
 }
 
-// LastWorkerRunAt returns when the named worker last STARTED a run, or the zero
+// LastWorkerRunAt returns when the named worker last STARTED a run that was not
+// interrupted (see the query), or the zero
 // time if it never has (or the row has been pruned). It is what lets a calendar
 // worker's NextFire survive a daemon restart: without it, every restart looks
 // like a first boot and a weekly job would re-fire on each one.
@@ -1404,7 +1638,15 @@ func (s *Store) ReconcileOrphanRuns(ctx context.Context, bootUnix int64) (int, e
 func (s *Store) LastWorkerRunAt(ctx context.Context, worker string) (time.Time, error) {
 	var started sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT MAX(started_at) FROM worker_runs WHERE worker = ?`, worker).Scan(&started)
+		// A run that did not finish its work is not a served slot: one swept
+		// 'orphaned' at boot, still 'running' from a dead process, or stopped by
+		// a shutdown. Counting them pushed a calendar worker's next fire a whole
+		// period out (finra-shorts +33h, congress-poller +19h after kills; a
+		// killed Sunday weekly-report waited a week). Errors still count, so a
+		// failing worker keeps its period instead of retrying every boot.
+		`SELECT MAX(started_at) FROM worker_runs WHERE worker = ?
+		   AND status NOT IN ('orphaned', 'running')
+		   AND NOT (status = 'ok' AND detail LIKE 'stopped (shutdown)%')`, worker).Scan(&started)
 	if err != nil || !started.Valid {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
@@ -1762,12 +2004,37 @@ type WALCheckpointResult struct {
 // Truncated reports whether the WAL was actually flushed AND truncated.
 func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 
+// checkpointBusy is how long a RESTART/TRUNCATE checkpoint may wait for
+// readers to finish. It holds the WRITE lock while it waits, so it must stay
+// well under the account writer's 12s busy_timeout (the priority gate then lets
+// a waiting sign-in in before the next attempt). And it must be long enough for
+// in-flight readers to drain, or TRUNCATE never meets its reader-free instant
+// and the WAL grows without bound. Measured both ways on 2026-09-30: 5s kept
+// the WAL at 0-64 MB for weeks; 200ms (d63f47b) did not truncate once in 18
+// runs and the WAL reached 1.28 GB within five hours.
+var checkpointBusy = 5 * time.Second
+
 // walCheckpoint runs one PRAGMA wal_checkpoint(<mode>) on the WRITE connection
-// and returns the pragma's own result row. mode is a fixed literal chosen by
-// the callers below — never user input.
-func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointResult, error) {
+// and returns the pragma's own result row; RESTART and TRUNCATE wait up to wait
+// for readers. mode is a fixed literal chosen by the callers below — never user
+// input.
+func (s *Store) walCheckpoint(ctx context.Context, mode string, wait time.Duration) (WALCheckpointResult, error) {
+	conn, err := s.w.Conn(ctx)
+	if err != nil {
+		return WALCheckpointResult{}, err
+	}
+	defer conn.Close() //nolint:errcheck
+	// RESTART and TRUNCATE take the WRITE lock and then sit in the busy handler
+	// waiting for readers, blocking every writer meanwhile, so the wait is set
+	// here explicitly (wait) rather than inherited.
+	if mode != "PASSIVE" {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA busy_timeout=%d`, wait.Milliseconds())); err != nil {
+			return WALCheckpointResult{}, err
+		}
+		defer conn.ExecContext(context.Background(), `PRAGMA busy_timeout=5000`) //nolint:errcheck
+	}
 	var busy, logFrames, ckpt int
-	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`).Scan(&busy, &logFrames, &ckpt)
+	err = conn.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`).Scan(&busy, &logFrames, &ckpt)
 	if err == sql.ErrNoRows {
 		return WALCheckpointResult{}, nil
 	}
@@ -1789,7 +2056,7 @@ func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointRe
 // ~97 workers on a shared read pool plus the API's ReaderClone never provides,
 // so the ONLY checkpoint the daemon ever ran was the one that could not run.
 func (s *Store) WALCheckpointPassive(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "PASSIVE")
+	return s.walCheckpoint(ctx, "PASSIVE", 0)
 }
 
 // WALCheckpointRestart runs PRAGMA wal_checkpoint(RESTART): like FULL, it
@@ -1799,7 +2066,7 @@ func (s *Store) WALCheckpointPassive(ctx context.Context) (WALCheckpointResult, 
 // the middle rung, reachable when readers are merely busy rather than
 // permanently present.
 func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "RESTART")
+	return s.walCheckpoint(ctx, "RESTART", checkpointBusy)
 }
 
 // WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE): it flushes the
@@ -1815,7 +2082,14 @@ func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, 
 // the WAL frozen at exactly 254.1MB). Reporting an action the return value
 // says did not happen is precisely the honesty failure this codebase forbids.
 func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "TRUNCATE")
+	return s.walCheckpoint(ctx, "TRUNCATE", checkpointBusy)
+}
+
+// WALCheckpointTruncateWithin is WALCheckpointTruncate waiting at most wait for
+// readers, for callers that retry: each attempt holds the write lock (and the
+// single main-writer connection) only that long.
+func (s *Store) WALCheckpointTruncateWithin(ctx context.Context, wait time.Duration) (WALCheckpointResult, error) {
+	return s.walCheckpoint(ctx, "TRUNCATE", wait)
 }
 
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention

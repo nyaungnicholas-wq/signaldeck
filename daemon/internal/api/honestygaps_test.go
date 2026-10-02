@@ -117,6 +117,7 @@ func TestReturnForecastEndpointServesStoredDistribution(t *testing.T) {
 }
 
 func TestCanaryAndDatasetEndpointsServeStoredRows(t *testing.T) {
+	sd30Off(t) // stored rows served as stored: the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newHonestyGapServer(t, nil)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")

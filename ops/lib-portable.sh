@@ -38,14 +38,41 @@ sd_py() {
   printf '%s' "${SD_PY:-}"
 }
 
+# SD_LIB_DIR is this library's own directory, so sd_nosleep can find its
+# sidecar regardless of the caller's cwd.
+SD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # sd_nosleep runs its arguments, inhibiting sleep where the platform can.
 # On macOS that is caffeinate; elsewhere the command simply runs.
 sd_nosleep() {
   if command -v caffeinate >/dev/null 2>&1; then
     caffeinate -i "$@"
-  else
-    "$@"
+    return $?
   fi
+
+  # WINDOWS. caffeinate is macOS-only, so this used to fall through to running
+  # the command bare -- the inhibition silently became nothing on the move to
+  # Windows, which is the same shape as the lost launchd log redirection: the
+  # wrapper still looked like it was wrapping something. Measured 2026-09-19,
+  # this machine's AC standby-idle is 600s, so a backup or a VACUUM INTO that
+  # runs longer than the idle timeout could be suspended half-written while the
+  # task still exits 0.
+  #
+  # A SIDECAR, not a wrapper: the keeper holds ES_CONTINUOUS|ES_SYSTEM_REQUIRED
+  # for its own lifetime and the real command runs here under bash unchanged.
+  # Passing "$@" through PowerShell would mean quoting an arbitrary argv across
+  # two shells, which is how the arguments get mangled.
+  local keeper="" rc=0
+  local keeper_script="$SD_LIB_DIR/nosleep-keeper.ps1"
+  if [ -f "$keeper_script" ] && command -v powershell >/dev/null 2>&1; then
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$(sd_winpath "$keeper_script")" >/dev/null 2>&1 &
+    keeper=$!
+  fi
+  "$@"
+  rc=$?
+  # Releasing the lock is just killing the holder; nothing to unwind if we died.
+  if [ -n "$keeper" ]; then kill "$keeper" >/dev/null 2>&1 || true; fi
+  return $rc
 }
 
 # sd_winpath PATH — a path the NATIVE (non-MSYS) tools will resolve identically.
@@ -275,15 +302,6 @@ sd_titlecase() {
 # because //Run returns 1 for both "no such task" and "task exists but refused"
 # (measured), and those are not the same problem.
 sd_svc_start() {
-  if command -v launchctl >/dev/null 2>&1; then
-    local plist="$HOME/Library/LaunchAgents/$1.plist"
-    [ -f "$plist" ] || return 2
-    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null
-    # bootstrap fails when already loaded, which is fine; kickstart is the
-    # operation whose status actually says whether the job is running.
-    launchctl kickstart "gui/$(id -u)/$1" >/dev/null 2>&1 || return 1
-    return 0
-  fi
   local task
   task="$(sd_task_name "$1")"
   schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
@@ -292,12 +310,22 @@ sd_svc_start() {
 }
 
 sd_svc_stop() {
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl kill TERM "gui/$(id -u)/$1" 2>/dev/null
-    return 0
+  # /End is NOT a SIGTERM. It is TerminateProcess: the daemon's signal handler
+  # never runs, so every in-flight worker run was left 'orphaned' and swept at
+  # the next boot. Measured 2026-09-23: nine boots in three clusters, each one a
+  # Market-Close or Daily-Refresh /End, 3-35 orphaned runs per kill, and
+  # congress-poller orphaned twice in a row (53h without a good run). So the
+  # daemon is asked first through the stop file it polls (daemon/cmd/signaldeckd/
+  # stopfile.go), which cancels the same context SIGTERM would; /End below is
+  # only the fallback for a drain that has not finished in SD_STOP_GRACE seconds
+  # (150: ShutdownGrace 75s + run-journal close 30s + the WAL checkpoint).
+  if [ "$1" = com.signaldeck.daemon ] && sd_is_running signaldeckd; then
+    : > "$SD_LIB_DIR/../data/.stop-request"
+    local waited=0
+    while [ "$waited" -lt "${SD_STOP_GRACE:-150}" ] && sd_is_running signaldeckd; do
+      sleep 3; waited=$((waited + 3))
+    done
   fi
-  # /End stops what the task launched; it is the Scheduled Task equivalent of
-  # SIGTERM to the job, and the daemon's own signal handler does the draining.
   #
   # A task that does not EXIST is reported as 2, the same contract sd_svc_start
   # already honours. Ending a task that merely is not RUNNING stays 0 — callers

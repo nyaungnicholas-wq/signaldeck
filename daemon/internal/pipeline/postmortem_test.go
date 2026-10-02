@@ -122,3 +122,22 @@ func TestPostmortemWorker_RegimeAttribution(t *testing.T) {
 		t.Fatalf("want regime_shift primary, got %+v", recent)
 	}
 }
+
+// CAL-N: a calibration bucket's rate is trusted only over minBucket pairs on
+// minBucketDays distinct days; forty symbols on one day are one market move.
+func TestCalibBucketsNeedDistinctDays(t *testing.T) {
+	var probs, ups []float64
+	var days []int64
+	for i := 0; i < 40; i++ {
+		probs, ups, days = append(probs, 0.75), append(ups, 1), append(days, 100)
+	}
+	if _, ok := calibBucketsFrom(probs, ups, days).deficit(0.75); ok {
+		t.Fatal("40 pairs on ONE day were trusted as a bucket rate")
+	}
+	for i := range days {
+		days[i] = int64(100 + i%10)
+	}
+	if def, ok := calibBucketsFrom(probs, ups, days).deficit(0.75); !ok || def != 0.25 {
+		t.Fatalf("40 pairs over 10 days: deficit %v, known %v; want 0.25, true", def, ok)
+	}
+}

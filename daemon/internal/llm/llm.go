@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -373,7 +374,7 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// Bound the prompt so the model stays fast + reliable no matter how much
 	// the watchlist grows. Agents put their (large) data in the last message,
 	// so we trim that one, preserving the system charter intact.
-	trimToBudget(all, maxPromptChars)
+	trimToBudget(all, MaxPromptChars)
 
 	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2,
 		TemplateKw: templateKwargs(model, c.deepModel)})
@@ -390,6 +391,7 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// it retries the same key after a short backoff. Permanent errors (bad
 	// request / unknown model) are not retryable and return immediately.
 	var lastErr error
+	providerFlaked := false // an earlier attempt timed out / hit 5xx / 429 / the network
 	for i := 0; i < maxAttempts; i++ {
 		if i > 0 {
 			select {
@@ -404,7 +406,19 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 		}
 		lastErr = err
 		if !retryable {
+			// A permanent-looking answer AFTER the provider flaked is the same
+			// request re-sent to a provider that just timed out on it (live:
+			// two 75s timeouts, then an instant 400). File it as transient so
+			// the worker resumes next pass. Not after a 401/403 key rotation:
+			// that 400 is the request's own fault and must surface. A 400 on
+			// the FIRST attempt is permanent and not retried.
+			if providerFlaked {
+				return "", fmt.Errorf("%w: %w", ErrTransient, err)
+			}
 			return "", err
+		}
+		if !errors.As(err, new(keyRejected)) {
+			providerFlaked = true
 		}
 	}
 	if lastErr == nil {
@@ -445,13 +459,22 @@ func (c *httpClient) attempt(ctx context.Context, key string, body []byte, timeo
 		msg := fmt.Sprintf("HTTP %d", res.StatusCode)
 		if cr.Error != nil {
 			msg = cr.Error.Message
+		} else if body := strings.TrimSpace(string(raw)); body != "" {
+			// Not the OpenAI {"error":{...}} shape (NVIDIA answers {"detail":..}).
+			// Without the body a 400 said only "HTTP 400" and its cause was
+			// unknowable; sanitize below still redacts keys and clips it.
+			msg += ": " + body
 		}
 		c.record(0, 0, now, sanitize(msg))
 		// 429 (rate limit), 5xx (server), 401/403 (this key may be bad — try
 		// another) are all worth a failover; 400/404 (bad request/model) are
 		// not. Never surface the provider's raw error verbatim.
 		retryable := res.StatusCode == 429 || res.StatusCode >= 500 || res.StatusCode == 401 || res.StatusCode == 403
-		return "", retryable, fmt.Errorf("llm: provider error: %s", sanitize(msg))
+		perr := fmt.Errorf("llm: provider error: %s", sanitize(msg))
+		if res.StatusCode == 401 || res.StatusCode == 403 {
+			return "", retryable, keyRejected{perr} // retry on another key, but not "the provider was busy"
+		}
+		return "", retryable, perr
 	}
 	c.record(cr.Usage.PromptTokens, cr.Usage.CompletionTokens, now, "")
 	if len(cr.Choices) == 0 {
@@ -499,7 +522,9 @@ func extractAnswer(content, reasoning string) string {
 // tier can produce a full report while the fast tier stays tight per its own
 // requested maxTokens. Retry/timeout policy:
 const (
-	maxPromptChars  = 24000
+	// MaxPromptChars is exported so an agent can size its digest to land whole
+	// (analyst.BuildContext) instead of having its tail cut mid-record.
+	MaxPromptChars  = 24000
 	maxOutputTokens = 2000
 	maxAttempts     = 3
 	// defaultTimeout: 45s produced a steady trickle of "context deadline
@@ -536,6 +561,11 @@ func trimToBudget(msgs []Message, budget int) {
 
 // sanitize strips anything key-shaped from an error string before it can be
 // stored or returned.
+// keyRejected marks a 401/403: the key, not the provider, failed.
+type keyRejected struct{ error }
+
+func (k keyRejected) Unwrap() error { return k.error }
+
 func sanitize(s string) string {
 	for _, tok := range strings.Fields(s) {
 		if strings.HasPrefix(tok, "nvapi-") || strings.HasPrefix(tok, "sk-") || len(tok) > 40 {

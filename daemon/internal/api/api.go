@@ -44,6 +44,9 @@ type Deps struct {
 	// production). Mirrors ModelHealthWorker.RegistryPath, and exists for the
 	// same reason: without it a test reads the LIVE registry.
 	RegistryPath string
+	// CollapseCache memoizes REFUSED collapse verdicts (see collapsecache.go).
+	// nil = recompute every call, which is what tests and the gate tool get.
+	CollapseCache *CollapseRefusalCache
 	LLM          llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
@@ -85,11 +88,36 @@ func (d Deps) now() time.Time {
 
 // Serve runs the API server until ctx is canceled.
 func Serve(ctx context.Context, d Deps) error {
+	// One limiter for the HTTP middleware and the MCP mount, so a client cannot
+	// get two budgets by using two doors.
+	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
+	srv := d.httpServerWith(d.routes(limiter), limiter)
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// routes registers every API route on a fresh mux: the production route set.
+// It is split out of Serve so a test can serve exactly this mux behind the
+// real middleware (membersurface_test.go) instead of a hand-copied subset,
+// which is how most member-reachable routes went untested.
+func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", d.health)
 	mux.HandleFunc("GET /api/ready", d.ready)     // can it serve CORRECT answers, not just answers
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
+	d.registerAlertPrefs(mux)                     // member daily-read opt-ins + one-click unsubscribe (alertprefs.go)
+	d.registerJournal(mux)                        // member call journal: the member's own calls, graded (journal.go)
+	d.registerAsk(mux)                            // ask the data: cited answers from the copilot catalog (ask.go)
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	// Body-cached (60s SWR): under worker load the uncached build queued behind
 	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404
@@ -120,10 +148,11 @@ func Serve(ctx context.Context, d Deps) error {
 	// cold, measured 2026-09-08) and it changes once a day, so the first
 	// visitor — and the /volatility page's 15s server-side fetch — must never
 	// be the one to build it. WarmCaches keeps it hot.
-	mux.HandleFunc("GET /api/vol-forecast/record", func(w http.ResponseWriter, r *http.Request) {
-		sharedVolRecordSWR.serve("record", w, r, d.volForecastRecord)
-	})
+	mux.HandleFunc("GET /api/vol-forecast/record", d.serveVolRecord)
+	mux.HandleFunc("GET /api/vol-forecast/latest", d.serveVolLatest) // member: current HAR forecasts, derived fields only (plan step 9)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
+	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
+	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed
 	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)        // analyst, chat, filingmind, debate, status
 	d.registerCapstones(mux) // scenario simulation, portfolio optimizer
@@ -263,21 +292,8 @@ func Serve(ctx context.Context, d Deps) error {
 	// client, behind six independently-tested defense layers. Off unless
 	// SIGNALDECK_MCP_ENABLED is set; the limiter instance is shared with the
 	// rest of the API so a client cannot get two budgets by using two doors.
-	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
 	d.registerMCP(mux, limiter)
-
-	srv := d.httpServerWith(mux, limiter)
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
-	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	return mux
 }
 
 // Connection deadlines. The 2026-07-26 review held a connection open for 60s
@@ -474,7 +490,18 @@ func httpErr(w http.ResponseWriter, code int, msg string) {
 // leak came back last time. There is one 500 body and it says nothing. Use
 // httpErr directly for 4xx, where the text is the point — a client CAN act on
 // "need symbol= and market=crypto|stocks".
+//
+// A CANCELLED request is not a server failure: the client hung up (a web
+// release stopping the web tier cancelled three /api/track-record builds at
+// 2026-10-01 20:35:46, each logged ERROR and counted as a 500). It answers 499,
+// nginx's "client closed request", the same code the access log uses for an
+// undelivered response (security.go), and logs at Info.
 func httpInternal(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		slog.Info("request cancelled by the client", "err", err)
+		httpErr(w, 499, "request cancelled")
+		return
+	}
 	slog.Error("request failed", "err", err)
 	httpErr(w, http.StatusInternalServerError, "internal error")
 }
@@ -564,7 +591,7 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// worker names map the internal architecture and the revision names the
 	// exact source a reader can go and audit for holes. `degraded` alone is
 	// enough for a monitor to alert on, and an operator who signs in sees why.
-	if userID(r) == 0 {
+	if !d.isOperator(r) {
 		writeJSON(w, map[string]any{
 			"degraded": len(failing) > 0 || len(refusals) > 0 || werr != nil || !remoteAlerts,
 			"time":     time.Now().Unix(),
@@ -575,6 +602,12 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// POSTing to /api/auth/register reveals the same thing.
 			"openSignup": d.Cfg.OpenSignup,
 			"detail":     "sign in or send the API token for the full breakdown",
+			// Public by design: Turnstile site keys are embedded in every page that
+			// renders the widget. Served here so no rebuild is needed to set one.
+			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
+			// Same reasoning: Google's button embeds the client ID in the page.
+			// Empty = the sign-up and sign-in pages show no Google button.
+			"googleClientId": d.Cfg.GoogleClientID,
 		})
 		return
 	}
@@ -781,7 +814,7 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 		// a load balancer acts on 503, not on the prose. The reasons name
 		// workers, schema gaps and missing credentials, so they go only to a
 		// caller who has identified themselves.
-		if userID(r) == 0 {
+		if !d.isOperator(r) {
 			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
 				"ready":  false,
 				"detail": "sign in or send the API token for the reasons",
@@ -792,7 +825,7 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
 		return
 	}
-	if userID(r) == 0 {
+	if !d.isOperator(r) {
 		writeJSON(w, map[string]any{"ready": true})
 		return
 	}
@@ -821,9 +854,47 @@ type watchRow struct {
 	TierThreshold int                     `json:"tierThreshold"`
 }
 
+// memberWatchRow is a MEMBER's watchlist row: identity and data freshness only.
+// watchRow carries the last close, the day change, up to 30 daily closes and
+// score components whose notes quote close/SMA/VWAP -- Alpaca rows its terms
+// forbid redistributing -- plus the retired directional ensemble's P(up).
+// Members read each symbol's validated regimes from /api/regimes instead.
+type memberWatchRow struct {
+	md.Symbol
+	LatestBarTs int64 `json:"latestBarTs"`
+}
+
 // watchlist returns the session user's watchlist rows (auth enforced by the
-// middleware, so userID is always non-zero here).
+// middleware, so userID is always non-zero here). A member's rows come from
+// member_symbols and carry no vendor fields.
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
+	if d.isMember(r) {
+		// A member's list lives in member_symbols, which no worker reads.
+		all, err := d.St.ListMemberSymbols(r.Context(), userID(r))
+		if err != nil {
+			httpInternal(w, err)
+			return
+		}
+		// Crypto is not covered for members (refuseMemberCrypto); a crypto
+		// row watched before that rule is kept in the table but not served.
+		syms := all[:0]
+		for _, s := range all {
+			if s.Market != md.Crypto {
+				syms = append(syms, s)
+			}
+		}
+		rows, err := d.buildWatchRows(r.Context(), syms)
+		if err != nil {
+			httpInternal(w, err)
+			return
+		}
+		out := make([]memberWatchRow, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, memberWatchRow{Symbol: row.Symbol, LatestBarTs: row.LatestBarTs})
+		}
+		writeJSON(w, out)
+		return
+	}
 	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
 	if err != nil {
 		httpInternal(w, err)
@@ -1056,7 +1127,13 @@ func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
 	}
 	// localProxyAsserted (localproxy.go): the keyed private-launcher assertion,
 	// the only header-carrying request that may count as local.
-	if d.Cfg.ReachablePrivately() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
+	// !published(), not ReachablePrivately(): the public quick tunnel reaches
+	// this daemon THROUGH the keyed loopback web proxy (Web task, port 8323),
+	// so on a tunnelled box every visitor arrives "local". ReachablePrivately()
+	// read false only because a stale ngrok host sat in ALLOWED_HOSTS; removing
+	// it would have served licensed bars to the internet. published() also
+	// counts PUBLIC_URL and the tunnel log (the member-tier fix, 0dfa718).
+	if !d.published() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
 		return false
 	}
 	httpErr(w, 451, datalicense.RawDataNotice())
@@ -1392,7 +1469,29 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": d.backupOps(ctx)})
+	ops := d.backupOps(ctx)
+	if d.isOperator(r) {
+		writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": ops})
+		return
+	}
+	// /api/quality is in publicRoutes. A DQ detail is raw provider error text
+	// (measured: an internal URL, SEC XML bodies), and the backup file and
+	// offsite destination are paths or URLs, which is where an internal host or
+	// a query-string key leaks. Everyone but the operator gets the incident
+	// kind, symbol and time, and the backup timestamps and verdicts.
+	type publicEvent struct {
+		ID     int64  `json:"id"`
+		Symbol string `json:"symbol,omitempty"`
+		Ts     int64  `json:"ts"`
+		Kind   string `json:"kind"`
+	}
+	pub := make([]publicEvent, 0, len(events))
+	for _, ev := range events {
+		pub = append(pub, publicEvent{ID: ev.ID, Symbol: ev.Symbol, Ts: ev.Ts, Kind: ev.Kind})
+	}
+	delete(ops, "lastBackupFile")
+	delete(ops, "offsiteDir")
+	writeJSON(w, map[string]any{"symbols": out, "events": pub, "ops": ops})
 }
 
 // backupOps surfaces the off-machine backup state (from the meta keys the
@@ -1602,6 +1701,71 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		s.Active = false
 	}
 	writeJSON(w, s) // history is kept by design; only the live feed stops
+}
+
+// watch puts an already-tracked symbol on the caller's own watchlist and does
+// nothing else: the member-safe half of /api/subscribe, which also starts a
+// backfill and a live feed for a symbol it has not seen. A member's list goes
+// to member_symbols, so it never widens the news, attention or alerts scope
+// (all read user_symbols fleet-wide) or keeps a feed alive.
+func (d Deps) watch(w http.ResponseWriter, r *http.Request) {
+	s, ok := d.watchTarget(w, r)
+	if !ok {
+		return
+	}
+	if !s.Active {
+		httpErr(w, 422, s.Symbol+" is not currently tracked")
+		return
+	}
+	if s.Market == md.Crypto && d.isMember(r) {
+		httpErr(w, http.StatusBadRequest, cryptoNotForMembers)
+		return
+	}
+	add := d.St.AddUserSymbol
+	if d.isMember(r) {
+		add = d.St.AddMemberSymbol
+	}
+	if err := add(r.Context(), userID(r), s.ID); err != nil {
+		httpInternal(w, err)
+		return
+	}
+	writeJSON(w, s)
+}
+
+// unwatch takes a symbol off the caller's own watchlist and nothing else.
+// Unlike /api/unsubscribe it never deactivates ingestion, so a member cannot
+// switch a feed off by being its last watcher.
+func (d Deps) unwatch(w http.ResponseWriter, r *http.Request) {
+	s, ok := d.watchTarget(w, r)
+	if !ok {
+		return
+	}
+	remove := d.St.RemoveUserSymbol
+	if d.isMember(r) {
+		remove = d.St.RemoveMemberSymbol
+	}
+	if err := remove(r.Context(), userID(r), s.ID); err != nil {
+		httpInternal(w, err)
+		return
+	}
+	writeJSON(w, s)
+}
+
+func (d Deps) watchTarget(w http.ResponseWriter, r *http.Request) (md.Symbol, bool) {
+	var body struct {
+		Symbol string    `json:"symbol"`
+		Market md.Market `json:"market"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpErr(w, 400, "bad json: "+err.Error())
+		return md.Symbol{}, false
+	}
+	s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(body.Symbol)), body.Market)
+	if err != nil {
+		httpErr(w, 404, "unknown symbol")
+		return md.Symbol{}, false
+	}
+	return s, true
 }
 
 // ── CSV exports ─────────────────────────────────────────────────────────

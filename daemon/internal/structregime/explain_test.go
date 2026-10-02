@@ -68,7 +68,14 @@ func TestOpposingEvidenceIsShownNotHidden(t *testing.T) {
 	}
 	ex, ok := AuditTrend(closes)
 	if !ok {
-		t.Skip("predictor refused this synthetic series")
+		t.Fatal("the predictor refused this fixture, so nothing below would be tested")
+	}
+	var volOpposes bool
+	for _, c := range ex.Opposes {
+		volOpposes = volOpposes || c.Name == "recent volatility"
+	}
+	if !volOpposes {
+		t.Fatalf("heavy chop must list volatility as opposing evidence, got opposes=%+v", ex.Opposes)
 	}
 	total := len(ex.Supports) + len(ex.Opposes)
 	if total < 4 {
@@ -122,14 +129,21 @@ func TestAnalogReportsARealOutcomeOrNone(t *testing.T) {
 
 func TestAnalogMatchesTheSameRegimeSide(t *testing.T) {
 	// Comparing an uptrend state to a downtrend precedent would be a category
-	// error, so the analog search is side-constrained.
-	closes := rising(400, 100, 0.002)
-	ex, ok := AuditTrend(closes)
-	if !ok || !ex.Analog.Found {
-		t.Skip("no analog found for this series")
+	// error, so the analog search is side-constrained. The fixture plants a
+	// below-average state (-0.2%) CLOSER to today's +1% than any above-average
+	// one (+2.5%), so only the side constraint keeps it out.
+	const n, horizon = 260, 21
+	closes, sma := make([]float64, n), make([]float64, n)
+	for i := range closes {
+		closes[i], sma[i] = 102.5, 100
 	}
-	if ex.Regime == "uptrend" && ex.Analog.PriorDistPct < 0 {
-		t.Fatal("an uptrend call matched a below-average precedent")
+	closes[210] = 99.8
+	an := findAnalog(closes, sma, 0.01, horizon)
+	if !an.Found {
+		t.Fatalf("a same-side state 1.5pp away must be found: %+v", an)
+	}
+	if an.PriorDistPct < 0 {
+		t.Fatalf("an uptrend call matched a below-average precedent: %+v", an)
 	}
 }
 

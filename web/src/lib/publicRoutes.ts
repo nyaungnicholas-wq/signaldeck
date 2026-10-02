@@ -24,6 +24,11 @@ export const PUBLIC_ROUTES = [
   "/glossary", // plain-English terms; static, no daemon call
   "/health", // reads the static ux-score.json + localStorage only; needs no session
   "/login",
+  // Account flows: reachable before a session exists (daemon: /api/auth/* is alwaysOpen).
+  "/signup",
+  "/verify",
+  "/forgot",
+  "/reset",
 ] as const;
 
 export function isPublicRoute(pathname: string): boolean {

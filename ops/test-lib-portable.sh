@@ -15,11 +15,81 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fails=0
 check() { if [ "$2" = "1" ]; then echo "  ok   $1"; else echo "  FAIL $1"; fails=$((fails + 1)); fi; }
 
+# Count live nosleep keepers.
+#
+# The obvious filter -- CommandLine -like '*nosleep-keeper*' -- MATCHES ITSELF:
+# the powershell process running the query carries that literal string in its
+# own command line, so the count never drops below 1 and a PID read twice comes
+# back different every time. A probe that finds itself reports a leak that is
+# not there and hides one that is. Require -File (how the keeper is launched)
+# and exclude the query.
+# Kill any keeper still standing, by command line rather than by job id.
+#
+# The keeper is a NATIVE process launched with `powershell ... &`; killing the
+# bash job did not reliably reap it, and each survivor holds
+# ES_CONTINUOUS|ES_SYSTEM_REQUIRED forever. Seven had accumulated from repeated
+# runs of this very suite before it was noticed - a test that strands a system
+# wake lock is worse than no test.
+sd_kill_stray_keepers() {
+  powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { \$_.CommandLine -match '-File' -and \$_.CommandLine -match 'nosleep.keeper' -and \$_.CommandLine -notmatch 'CimInstance' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" >/dev/null 2>&1 || true
+}
+
+sd_ps_count_keepers() {
+  powershell -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { \$_.CommandLine -match '-File' -and \$_.CommandLine -match 'nosleep.keeper' -and \$_.CommandLine -notmatch 'CimInstance' }).Count" 2>/dev/null | tr -d '[:space:]' || echo 0
+}
+
 # sd_nosleep must run the command whether or not caffeinate exists.
 out="$(sd_nosleep echo portable-ok 2>/dev/null || true)"
 check "sd_nosleep runs its command" "$([ "$out" = "portable-ok" ] && echo 1 || echo 0)"
 sd_nosleep false && rc=0 || rc=1
 check "sd_nosleep propagates a non-zero status" "$rc"
+
+# The Windows inhibitor. The two checks above pass whether or not sleep is
+# actually inhibited -- they only prove the command RAN -- which is exactly how
+# the caffeinate wrapper went on looking like a wrapper after the move to
+# Windows while inhibiting nothing.
+#
+# powercfg /requests would be the direct observation, but it REQUIRES ELEVATION
+# and prints an error rather than an empty list without it, so reading it
+# unelevated reports "no wake locks" for both a held and an unheld lock. These
+# assert what can be honestly measured unelevated: the keeper reports that
+# SetThreadExecutionState accepted the assertion (it exits non-zero if the API
+# returns 0), and sd_nosleep does not leak the holder.
+KEEPER="$SD/ops/nosleep-keeper.ps1"
+if [ -f "$KEEPER" ] && command -v powershell >/dev/null 2>&1; then
+  kout="$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(sd_winpath "$KEEPER")" 2>&1 &
+          kpid=$!; sleep 4; kill $kpid 2>/dev/null; wait $kpid 2>/dev/null; true)"
+  check "nosleep keeper asserts a wake lock (SetThreadExecutionState accepted)"         "$(echo "$kout" | grep -q 'NOSLEEP HELD' && echo 1 || echo 0)"
+  # The launch above leaks its keeper on Windows; reap it before measuring, or
+  # the baseline drifts up by one on every run of this suite.
+  sd_kill_stray_keepers
+  sleep 1
+
+  base="$(sd_ps_count_keepers)"
+  sd_nosleep sleep 6 >/dev/null 2>&1 &
+  job=$!
+  sleep 3
+  during="$(sd_ps_count_keepers)"
+  wait "$job" 2>/dev/null
+  sleep 1
+  after="$(sd_ps_count_keepers)"
+  check "sd_nosleep HOLDS a keeper while the command runs (base=$base during=$during)"         "$([ "${during:-0}" -gt "${base:-0}" ] && echo 1 || echo 0)"
+  check "sd_nosleep RELEASES it afterwards (after=$after)"         "$([ "${after:-1}" -le "${base:-0}" ] && echo 1 || echo 0)"
+else
+  # NOT a failure off Windows. sd_nosleep's inhibitor is caffeinate on macOS and
+  # the PowerShell keeper on Windows; on Linux there is neither and running the
+  # command bare is the correct behaviour. CI runs this job on ubuntu, where an
+  # unconditional `check ... 0` here reported "FAIL nosleep keeper present" and
+  # turned a platform that has nothing to inhibit into a red build.
+  #
+  # On Windows their ABSENCE is still a real failure, so only that case fails.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      check "nosleep keeper present on Windows (it is required there)" 0 ;;
+    *)
+      echo "  skip nosleep keeper checks - no PowerShell on $(uname -s); sd_nosleep runs bare here by design" ;;
+  esac
+fi
 
 # sd_sqlite must create and query a database with no sqlite3 CLI present.
 TMPDB="$(mktemp -u)".db
@@ -190,6 +260,20 @@ con.close()
     "$([ "$GOT" = "1" ] && echo 1 || echo 0)"
   rm -f "$LOCKDB"
 fi
+
+# sd_svc_stop asks the daemon to drain through its stop file BEFORE /End (which
+# is TerminateProcess and orphans every in-flight run). Stubbed: a fake daemon
+# that "exits" once the stop file appears, and a schtasks that records /End.
+STOPTMP="$(mktemp -d)"; mkdir -p "$STOPTMP/ops" "$STOPTMP/data"
+OUT="$(
+  SD_LIB_DIR="$STOPTMP/ops"; SD_STOP_GRACE=9
+  sd_is_running() { [ ! -e "$STOPTMP/data/.stop-request" ]; }
+  schtasks() { case "$1" in //End) echo "END-AFTER-STOPFILE=$([ -e "$STOPTMP/data/.stop-request" ] && echo 1 || echo 0)" > "$STOPTMP/end" ;; esac; return 0; }
+  sd_svc_stop com.signaldeck.daemon; echo "rc=$?"; cat "$STOPTMP/end" 2>/dev/null
+)"
+check "sd_svc_stop writes the daemon stop file before falling back to /End" \
+  "$(printf '%s' "$OUT" | grep -q 'END-AFTER-STOPFILE=1' && printf '%s' "$OUT" | grep -q 'rc=0' && echo 1 || echo 0)"
+rm -rf "$STOPTMP"
 
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

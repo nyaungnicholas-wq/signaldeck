@@ -38,6 +38,7 @@ func callCalibration(t *testing.T, d Deps, horizon string) map[string]any {
 }
 
 func TestCalibrationPayloadCarriesBrierSkill(t *testing.T) {
+	sd30Off(t) // the behaviour the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	ctx := context.Background()
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 
@@ -53,7 +54,7 @@ func TestCalibrationPayloadCarriesBrierSkill(t *testing.T) {
 		if up {
 			prob, fwd = 0.2, 1.0
 		}
-		ts := int64(1_700_000_000 + i*86400)
+		ts := int64(store.GradingEpochTS + 14*3600 + i*86400) // one per day, inside the graded window
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 			RawProb: prob, CalProb: prob, NUsed: 3, Components: "{}",
@@ -101,6 +102,7 @@ func TestCalibrationPayloadCarriesBrierSkill(t *testing.T) {
 // With no gradable history the skill score must be WITHHELD (null), never 0 —
 // a skill of exactly 0 is the real verdict "as good as the base rate".
 func TestCalibrationWithholdsUngradableSkill(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	_, _, d := newTestServer(t, func(c *config.Config) {})
 	body := callCalibration(t, d, "1d")
 	if v, present := body["brierSkill"]; !present {
@@ -120,6 +122,7 @@ func TestCalibrationWithholdsUngradableSkill(t *testing.T) {
 // reference. Skill is undefined there and must be withheld, not reported as a
 // finite number — the guard that stops "skill = 1 - brier/0" nonsense.
 func TestCalibrationWithholdsSkillOnDegenerateOutcomes(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	ctx := context.Background()
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 	sym, err := st.UpsertSymbol(ctx, "ALLUP", md.Stocks, "Degenerate Fixture")
@@ -127,7 +130,7 @@ func TestCalibrationWithholdsSkillOnDegenerateOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 40; i++ {
-		ts := int64(1_700_000_000 + i*86400)
+		ts := int64(store.GradingEpochTS + 14*3600 + i*86400) // one per day, inside the graded window
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 			RawProb: 0.55, CalProb: 0.55, NUsed: 3, Components: "{}",

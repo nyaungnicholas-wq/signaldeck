@@ -23,10 +23,13 @@ import (
 //
 // The fragments mirror accuracy_registry.py one-for-one; keep them in sync.
 
-// SurvivorshipEpochTS is 2026-07-24T00:00:00Z — accuracy_registry.py
-// SURVIVORSHIP_EPOCH_TS. symbols.delisted_at only exists from that wave on, so
-// everything earlier is survivor-seeded and is not gradeable evidence.
-const SurvivorshipEpochTS = 1784851200
+// GradingEpochTS is 2026-09-25T00:00:00Z — accuracy_registry.py
+// GRADING_EPOCH_TS, the same instant as GradingEpoch (survivorship.go), kept as
+// an untyped constant because it is spliced into SQL. Rows before it are
+// survivor-seeded (before 2026-07-24), inside the 2026-07-27..08-06 collapse, or
+// from the squeezed-calibration period ended 2026-09-25 (see GradingEpoch);
+// none is gradeable evidence.
+const GradingEpochTS = 1790294400 // == GradingEpoch; untyped so strconv.Itoa accepts it
 
 const (
 	// tradingDayOffsetSecs / secondsPerDay mirror the grader's trading_day():
@@ -121,13 +124,13 @@ func settlementAtSQL() string {
 // takes the same position for the same reason (settlement_clause() returns ""
 // when there is nothing to reconstruct against). See SettlementApplicable.
 func gradeableDedupSQL(withReconstruction bool) string {
-	q := "SELECT symbol_id, horizon, prob, up, ts, settle_ts," +
+	q := "SELECT symbol_id, horizon, prob, up, ts, settle_ts, fwd_return," +
 		" ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, " +
 		settleDayFold("po.settle_ts", "po.ts") +
 		" ORDER BY ts DESC) rn" +
 		" FROM prediction_outcomes po" +
 		" WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL" +
-		" AND ts >= " + strconv.Itoa(SurvivorshipEpochTS)
+		" AND ts >= " + strconv.Itoa(GradingEpochTS)
 
 	if !withReconstruction {
 		return q

@@ -11,23 +11,55 @@ import { siteUrl } from "@/lib/site";
  * indexing a login-walled research surface produces search results that 401
  * for everyone who clicks them.
  */
+// AI list is advisory.
+// src/proxy.ts refuses the same agents with a 403.
+
 export default function robots(): MetadataRoute.Robots {
+  const site = siteUrl();
   return {
-    rules: {
-      userAgent: "*",
-      // Blanket deny with explicit allows on top - what the comment above has
-      // always specified, and what the code did NOT do. It shipped a list of
-      // private prefixes instead, so /advanced, /welcome and /signals/report/*
-      // were crawlable by forgetting: the exact defect this comment warns
-      // about. Allow is matched most-specifically-first by every major crawler,
-      // so the public pages stay indexable and everything else is denied by
-      // default, including a route added next month. The homepage allow is "/$"
-      // (end-of-URL anchor), NOT "/": a bare "/" Allow is EXACTLY as specific as
-      // the "/" Disallow, and crawlers break specificity ties toward the LEAST
-      // restrictive rule - which would have re-opened the entire site.
-      allow: ["/$", "/accuracy", "/proof", "/glossary", "/volatility"],
-      disallow: ["/"],
-    },
-    sitemap: `${siteUrl()}/sitemap.xml`,
+    rules: [
+      {
+        userAgent: [
+          "GPTBot",
+          "ChatGPT-User",
+          "OAI-SearchBot",
+          "ClaudeBot",
+          "Claude-Web",
+          "anthropic-ai",
+          "Claude-SearchBot",
+          "Claude-User",
+          "CCBot",
+          "Google-Extended",
+          "PerplexityBot",
+          "Perplexity-User",
+          "Bytespider",
+          "Amazonbot",
+          "Applebot-Extended",
+          "meta-externalagent",
+          "Meta-ExternalFetcher",
+          "FacebookBot",
+          "Diffbot",
+          "cohere-ai",
+          "cohere-training-data-crawler",
+          "AI2Bot",
+          "YouBot",
+          "Timpibot",
+          "omgili",
+          "ImagesiftBot",
+          "PetalBot",
+          "img2dataset",
+          "DuckAssistBot",
+          "MistralAI-User",
+        ],
+        disallow: ["/"],
+      },
+      {
+        userAgent: "*",
+        allow: ["/$", "/accuracy", "/proof", "/glossary", "/volatility", "/signup", "/login"],
+        disallow: ["/"],
+      },
+    ],
+    // No site URL, no Sitemap line: it must be absolute (see lib/site.ts).
+    ...(site ? { sitemap: `${site}/sitemap.xml` } : {}),
   };
 }

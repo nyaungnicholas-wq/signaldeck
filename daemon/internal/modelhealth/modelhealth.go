@@ -51,6 +51,12 @@ const (
 	VerdictDegraded Verdict = "degraded"
 	// VerdictRetired — STOP emitting. The live record does not support it.
 	VerdictRetired Verdict = "retired"
+	// VerdictReadmitted — a retired model whose LIVE shadow record has since
+	// cleared the coded re-admission threshold (canary.Readmit): >= 20 distinct
+	// days and a day-clustered Wilson lower bound above the prequential null.
+	// Emitting again. Written only by the model-health worker, never by a
+	// handler, so the stored record and the served one cannot disagree.
+	VerdictReadmitted Verdict = "readmitted"
 	// VerdictProvisional — not enough evidence to judge either way.
 	VerdictProvisional Verdict = "provisional"
 	// VerdictUnattributable — STOP emitting, but claim nothing about the
@@ -72,7 +78,7 @@ type Inputs struct {
 	// one forward move) must be deduped before they reach this struct.
 	Observations int
 
-	Accuracy     float64 // realized directional accuracy over the record
+	Accuracy     float64 // realized directional accuracy over the LIFETIME record (SD-31)
 	BaselineAcc  float64 // best naive constant predictor (majority class)
 	RecentAcc    float64 // accuracy over the most recent window
 	RecentN      int     // observations behind RecentAcc
@@ -148,7 +154,7 @@ func Grade(in Inputs) Score {
 	edge := in.Accuracy - in.BaselineAcc
 	comp["skill"] = clamp01(0.5 + edge/0.10)
 	if edge < 0 {
-		reasons = append(reasons, "accuracy is BELOW the naive baseline — no measured edge")
+		reasons = append(reasons, "lifetime accuracy is BELOW the naive baseline — no measured edge over the whole live record")
 	}
 
 	// CALIBRATION — combine reliability with Brier skill. A model can be
@@ -156,7 +162,7 @@ func Grade(in Inputs) Score {
 	cal := clamp01(1 - in.CalibrationErr/0.20)
 	if in.BrierSkill < 0 {
 		cal *= 0.5
-		reasons = append(reasons, "Brier skill negative — worse than forecasting the base rate")
+		reasons = append(reasons, "lifetime Brier skill negative — worse than forecasting the base rate")
 	}
 	comp["calibration"] = cal
 
@@ -166,7 +172,7 @@ func Grade(in Inputs) Score {
 		delta := in.RecentAcc - in.Accuracy
 		comp["drift"] = clamp01(0.5 + delta/0.10)
 		if delta < -0.05 {
-			reasons = append(reasons, "recent accuracy has decayed materially vs its own record")
+			reasons = append(reasons, "recent accuracy has decayed materially vs its own lifetime record")
 		}
 	} else {
 		comp["drift"] = 0.5
@@ -230,7 +236,7 @@ func Grade(in Inputs) Score {
 		s.Verdict = VerdictProvisional
 		s.Emitting = true
 		s.Reasons = append(s.Reasons,
-			"insufficient independent observations to judge — emitting as experimental")
+			"insufficient independent observations in the lifetime record to judge — emitting as experimental")
 		return s
 	}
 

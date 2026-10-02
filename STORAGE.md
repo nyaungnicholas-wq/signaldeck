@@ -103,6 +103,18 @@ Growth is visible + provable on **/quality → "DATA GROWTH — NOTHING IS THROW
 AWAY"**: per-table row counts and spans, `db`/`wal`/`archive` byte sizes, and the
 active retention windows, all served from `/api/datastats`.
 
+**DB budget and the gap-fill gate.** `SIGNALDECK_BUDGET_DB_MB` (default **10240**,
+one Go constant, `pipeline.DefaultBudgetDBMB`) is a tripwire, not a target:
+nothing shrinks the file toward it. The nightly sweep (`ops/signaldeck-refresh.sh`
+-> `sdmaint storage-report`) pages when the DB is over it, and the backfill
+reconciler gap-fills missing 1m sessions for streamed symbols only while the DB
+keeps 512 MB of headroom under it (otherwise it logs `gap-fill paused: db X MB of
+Y MB budget`). Sessions older than the hot 1m window (`SIGNALDECK_1M_RETENTION_D`)
+can never be gap-filled, so a budget below the post-VACUUM floor silently loses
+data: it was raised from 6144 on 2026-09-30 after the floor reached 6,160 MB and
+the gate had been shut 7+ days. The sweep's backups default (35840) is derived
+from it; `TestBudgetDBDefaultMatchesRefreshScript` fails if either drifts.
+
 ---
 
 ## Capacity math (why SQLite is fine for a long time)
@@ -175,6 +187,7 @@ statement, so nothing about today's format blocks that future.
 | `SIGNALDECK_POSTMORTEM_RETENTION_D` | `180` | prediction_postmortems hot window (days) |
 | `SIGNALDECK_RESEARCH_WEEKS_RETENTION_D` | `2555` | research_weeks active window (days, ~7y) |
 | `SIGNALDECK_VACUUM_THRESHOLD_MB` | `2048` | DB size above which the governor VACUUMs |
+| `SIGNALDECK_BUDGET_DB_MB` | `10240` | DB budget: nightly report pages above it; 1m gap-fill needs 512 MB headroom under it |
 
 Daily bars have no retention knob by design: `store.PruneBars` refuses `tf=1d`,
 so the permanent record cannot be pruned by any caller, present or future.

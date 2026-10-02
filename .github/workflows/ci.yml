@@ -189,6 +189,11 @@ jobs:
       - run: npm ci
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
+      # src/lib/*.test.mjs (node --test, TypeScript type-stripping) had the same
+      # shape as H7: the files existed, nothing ran them. plain.test.mjs sat
+      # uninvoked, and the refusal, binding and receipts regressions added
+      # 2026-09-20 would have joined it.
+      - run: npm test
       - run: npm run build
       # Dependency vulnerabilities. CI had NO such gate in either language, so
       # the next@16.3.0 advisories and a moderate DoS in
@@ -237,6 +242,11 @@ jobs:
       # CI, so the day-resampling discipline could regress silently. This is
       # the discovery command the test file's own header documents.
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # The Go HAR-RV grader's parity fixture must be what the reference
+      # implementation (tools/rv_forecast_backtest.py) actually computes;
+      # TestParityWithPythonReference then holds Go to it.
+      - name: RV grader parity fixture is the reference's own output
+        run: python3 tools/rv_grader_parity.py --check
       # Script-style test files are INVISIBLE to the discovery above. A file
       # that exposes a main() instead of a TestCase contributes ZERO tests to
       # `unittest discover` and zero to pytest, so it looks covered and is not:
@@ -464,6 +474,7 @@ jobs:
         run: |
           bash ops/test-no-bare-pkill.sh
           bash ops/test-lib-portable.sh
+          bash ops/test-market-close-keeps-web.sh
           bash ops/test-offsite-newest-tag.sh
 
   docs-gate:

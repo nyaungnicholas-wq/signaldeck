@@ -203,3 +203,46 @@ func TestNewsFetcher_ScopeGracefulWithoutRankingOrUsers(t *testing.T) {
 		t.Errorf("requested = %v, want only HOT", requested)
 	}
 }
+
+// A pass stops at the first failing symbol (a 429 means stop calling) — but the
+// next pass must not restart at the alphabetical top, or a symbol that always
+// fails starves every symbol behind it forever.
+func TestNewsFetcher_NextPassResumesAfterTheFailure(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	t.Setenv("SIGNALDECK_NEWS_TOP_RANKED", "0")
+	uid, err := st.CreateUser(ctx, "u", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sym := range []string{"AAA", "BBB"} { // watched => in scope
+		s, err := st.UpsertSymbol(ctx, sym, md.Stocks, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AddUserSymbol(ctx, uid, s.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requested := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sym := r.URL.Query().Get("symbols")
+		requested[sym]++
+		if sym == "AAA" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"news":[],"next_page_token":null}`)
+	}))
+	t.Cleanup(srv.Close)
+	w := &NewsFetcher{St: st, Client: &news.Client{Base: srv.URL, HTTP: srv.Client()}}
+	for pass := 0; pass < 2; pass++ {
+		if _, err := w.Run(ctx); err == nil {
+			t.Fatalf("pass %d: want the AAA 429 reported", pass)
+		}
+	}
+	if requested["BBB"] == 0 {
+		t.Fatalf("BBB never fetched in two passes (requested=%v) — AAA's 429 starves it", requested)
+	}
+}

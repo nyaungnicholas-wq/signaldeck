@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -119,12 +120,16 @@ var sharedCurrentStateCache = newSWRCache(2 * time.Minute)
 const currentStateField = "states"
 
 // currentStateFor returns the live expectancy state keys for one symbol, cached.
-// A miss or a build failure yields "" — the same unmatched-state fallback the
-// handler already took when CurrentState errored, which downgrades the prior to
-// the N-weighted base rate rather than inventing a match.
-func (d Deps) currentStateFor(ctx context.Context, symbolID int64) map[md.Horizon]string {
+// A build failure yields "" — the same unmatched-state fallback the handler
+// already took when CurrentState errored, which downgrades the prior to the
+// N-weighted base rate rather than inventing a match.
+//
+// errWarming is returned, not swallowed (review #8): no build ran (no slot was
+// free, or it is still running), so there is nothing to fall back FROM, and a
+// 200 built on it would publish slot exhaustion as evidence.
+func (d Deps) currentStateFor(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 	if d.CurrentState == nil {
-		return nil
+		return nil, nil
 	}
 	payload, err := sharedCurrentStateCache.get(ctx, fmt.Sprintf("%s|%d", d.St.CacheKey(), symbolID),
 		func(c context.Context) (map[string]any, error) {
@@ -134,27 +139,34 @@ func (d Deps) currentStateFor(ctx context.Context, symbolID int64) map[md.Horizo
 			}
 			return map[string]any{currentStateField: states}, nil
 		})
+	if errors.Is(err, errWarming) {
+		return nil, err
+	}
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	states, _ := payload[currentStateField].(map[md.Horizon]string)
-	return states
+	return states, nil
 }
 
 // attributionLiveFor returns one symbol's live evidence from the shared cache.
 // A build failure yields zero evidence — exactly what the uncached handler did
 // when the ledger read failed, and attribution.Assess already reports N=0 as
-// underpowered rather than as a measured absence of edge.
-func (d Deps) attributionLiveFor(ctx context.Context, h md.Horizon, symbolID int64) attribution.Evidence {
+// underpowered rather than as a measured absence of edge. errWarming is
+// returned, for the reason currentStateFor gives.
+func (d Deps) attributionLiveFor(ctx context.Context, h md.Horizon, symbolID int64) (attribution.Evidence, error) {
 	payload, err := sharedAttributionLiveCache.get(ctx, attributionCacheKey(d.St, h),
 		func(c context.Context) (map[string]any, error) {
 			return d.buildAttributionLive(c, h)
 		})
+	if errors.Is(err, errWarming) {
+		return attribution.Evidence{}, err
+	}
 	if err != nil {
-		return attribution.Evidence{}
+		return attribution.Evidence{}, nil
 	}
 	byID, _ := payload[attributionLiveField].(attributionLive)
-	return byID[symbolID]
+	return byID[symbolID], nil
 }
 
 func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +202,12 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("attribution: expectancy prior unreadable, band will withhold as if there were no analogs",
 			"symbol", s.Symbol, "horizon", string(h), "err", expErr)
 	}
-	currentState := d.currentStateFor(ctx, s.ID)[h]
+	states, err := d.currentStateFor(ctx, s.ID)
+	if err != nil {
+		writeWarming(w)
+		return
+	}
+	currentState := states[h]
 	for _, e := range expRows {
 		if currentState != "" && e.StateKey == currentState {
 			prior = attribution.Evidence{HitRate: e.HitRate, N: e.N}
@@ -213,7 +230,11 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 	// Read out of the fleet-wide cache above — per-symbol live N is almost always
 	// thin, which is exactly why the prior must carry the confidence until it
 	// grows.
-	live := d.attributionLiveFor(ctx, h, s.ID)
+	live, err := d.attributionLiveFor(ctx, h, s.ID)
+	if err != nil {
+		writeWarming(w)
+		return
+	}
 
 	// ── regime context ──
 	regime := ""

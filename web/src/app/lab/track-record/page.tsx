@@ -24,7 +24,7 @@ import {
   type RegimePostmortems,
   type TrackRecordWithGate,
 } from "@/lib/api";
-import { ago, fmtDate, fmtPct } from "@/lib/format";
+import { ago, fmtDate, fmtPct, signColor } from "@/lib/format";
 import { metricLabel, readMetric, type MetricKey, type PlainCtx } from "@/lib/plain";
 import Plain, { useViewMode } from "@/components/Plain";
 import GradeMeter from "@/components/viz/GradeMeter";
@@ -36,6 +36,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
 import HelpTip from "@/components/HelpTip";
+import { ledgerHeadline } from "@/lib/ledgerHeadline";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -107,6 +108,8 @@ export default function TrackRecordPage() {
   }, [horizon, retryTick]);
 
   const current = data && data.horizon === horizon ? data : null;
+  // Same verdict as the /proof headline: `intact` alone reads a regenerated chain green.
+  const ledgerHead = current?.ledger ? ledgerHeadline(current.ledger) : null;
   const loading = !current && !err;
   const gated = current?.gated ?? true;
 
@@ -273,7 +276,9 @@ export default function TrackRecordPage() {
                   independent (symbol, trading day) resolutions
                 </p>
                 <p className="m-0 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
-                  {current.gate == null
+                  {/* A refusal or a collapse does not clear by waiting, so it
+                      states its reason instead of an unlock ETA (SD-30 is one). */}
+                  {current.gate == null || (current.gateReason && current.gateReason !== "sample")
                     ? (current.note ?? "not yet significant")
                     : current.gate.estDaysToUngate == null
                       ? "unlock ETA unknown — nothing resolved in the last 7 days to measure an accrual rate from"
@@ -566,9 +571,10 @@ export default function TrackRecordPage() {
                         </td>
                         <td
                           className="px-4 py-2 text-right tnum"
-                          style={{ color: m.meanFwd >= 0 ? "var(--bid)" : "var(--ask)" }}
+                          style={{ color: signColor(m.meanFwd) }}
+                          title={m.meanFwd == null ? "withheld: fewer than 10 resolved rows" : undefined}
                         >
-                          {fmtPct(m.meanFwd * 100)}
+                          {m.meanFwd == null ? "—" : fmtPct(m.meanFwd * 100)}
                         </td>
                       </tr>
                     ))}
@@ -598,12 +604,12 @@ export default function TrackRecordPage() {
                       <span
                         className="chip"
                         style={
-                          current.ledger.intact
+                          ledgerHead?.tone === "ok"
                             ? { color: "var(--ok)", borderColor: "var(--ok)" }
                             : { color: "var(--bad)", borderColor: "var(--bad)" }
                         }
                       >
-                        {current.ledger.intact ? "chain intact" : "chain BROKEN"}
+                        {ledgerHead?.tone === "ok" ? "chain intact" : ledgerHead?.text}
                       </span>
                       <span className="tnum" style={{ color: "var(--dim)" }}>
                         {current.ledger.count.toLocaleString("en-US")} entries
@@ -611,8 +617,10 @@ export default function TrackRecordPage() {
                     </div>
                     <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       Every flagship prediction is hash-chained (append-only). A verified
-                      chain means no historical prediction was silently edited or deleted —
-                      the record you&rsquo;re grading is the record that was made.
+                      chain means the stored rows are internally consistent — editing, deleting
+                      or reordering any one of them breaks a full recomputation. It does not prove when they were
+                      written: deleting every row and re-appending a fabricated chain also
+                      verifies intact. The proof page shows what the signed anchors add.
                     </p>
                     {current.ledger.head && (
                       <p className="tnum break-all text-[0.75rem]" style={{ color: "var(--faint)" }}>

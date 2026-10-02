@@ -37,6 +37,7 @@ import type {
   StructRegimeForecast,
 } from "@/lib/api";
 import { structuralRegimes } from "@/lib/api";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 function symbolHref(symbol: string, market?: Market): string {
   const m: Market = market ?? (symbol.includes("/") ? "crypto" : "stocks");
@@ -106,7 +107,17 @@ function pct(x: number): string {
   return `${Math.round(x * 100)}%`;
 }
 
-export default function TodaysRead({ dash }: { dash: DashboardResponse }) {
+// `dash` is the operator dashboard's roundup. The member home (/today) has no
+// roundup -- /api/dashboard carries vendor prices -- so it passes its own
+// watchSymbols instead, and gets no directional footnote (members are not
+// shown the retired P(up) at all).
+export default function TodaysRead({
+  dash,
+  watchSymbols: watchList,
+}: {
+  dash?: DashboardResponse;
+  watchSymbols?: string[];
+}) {
   const [byKind, setByKind] = useState<Record<string, Forecast[]> | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -127,15 +138,15 @@ export default function TodaysRead({ dash }: { dash: DashboardResponse }) {
   }, []);
 
   const watchSymbols = useMemo(
-    () => new Set((dash.watchlist?.sparks ?? []).map((s) => s.symbol)),
-    [dash],
+    () => new Set(watchList ?? (dash?.watchlist?.sparks ?? []).map((s) => s.symbol)),
+    [dash, watchList],
   );
   const best = useMemo(
     () => (byKind ? pickValidatedRead(byKind, watchSymbols) : null),
     [byKind, watchSymbols],
   );
-  const dir = useMemo(() => directionalNote(dash), [dash]);
-  const watchlistEmpty = (dash.watchlist?.sparks ?? []).length === 0;
+  const dir = useMemo(() => (dash ? directionalNote(dash) : null), [dash]);
+  const watchlistEmpty = watchSymbols.size === 0;
 
   return (
     <section
@@ -193,6 +204,7 @@ export default function TodaysRead({ dash }: { dash: DashboardResponse }) {
             {best.persistenceOnly ? "persistence statistic" : "measured-skill forecast"} about
             market <em>structure</em>, not a price target.
           </p>
+          <HypotheticalNote short />
 
           {/* the accuracy-vs-return disclosure, verbatim when the daemon ships it */}
           {best.fc.tradeability ? (
@@ -230,13 +242,17 @@ export default function TodaysRead({ dash }: { dash: DashboardResponse }) {
                 />
               </svg>
             </Link>
-            <Link
-              href={reportHref(best.fc.symbol, best.fc.market, best.fc.kind)}
-              className="inline-flex min-h-[44px] w-fit cursor-pointer items-center text-[0.75rem] font-semibold tracking-wide transition-colors duration-150"
-              style={{ color: "var(--accent)" }}
-            >
-              why this fired →
-            </Link>
+            {/* The signal report quotes closes and SMAs (operator-only); the
+                member home links the symbol page alone. */}
+            {dash && (
+              <Link
+                href={reportHref(best.fc.symbol, best.fc.market, best.fc.kind)}
+                className="inline-flex min-h-[44px] w-fit cursor-pointer items-center text-[0.75rem] font-semibold tracking-wide transition-colors duration-150"
+                style={{ color: "var(--accent)" }}
+              >
+                why this fired →
+              </Link>
+            )}
           </div>
 
           {/* DEMOTED: the directional probability, carrying its own negative record */}

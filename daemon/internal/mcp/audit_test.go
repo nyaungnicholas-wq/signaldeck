@@ -40,6 +40,22 @@ func TestEveryCallIsAudited(t *testing.T) {
 	}
 }
 
+// A sink that opens but refuses the write (a full disk) must leave its error
+// in lastErr. The request is not failed and the entry stays in the memory tail.
+func TestAuditSinkWriteErrorIsRecorded(t *testing.T) {
+	a := newAuditor(unwritableSink(t), time.Now)
+	a.record(auditEntry{Client: "c", Outcome: "ok"})
+	a.mu.Lock()
+	err := a.lastErr
+	a.mu.Unlock()
+	if err == nil {
+		t.Fatal("a failed sink write left lastErr nil: the entry was lost silently")
+	}
+	if n := len(a.entries()); n != 1 {
+		t.Fatalf("memory tail = %d entries, want 1", n)
+	}
+}
+
 func TestAuditRecordsTheParameterHashNotTheParameter(t *testing.T) {
 	s := newTestServer(t, Options{ReachablePrivately: true}, stubSource{verdicts: sampleVerdicts()})
 	desc := "a study of rolling windows over current constituents, uniquely-worded-marker-42"

@@ -39,11 +39,18 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
           );
         })}
       </nav>
-      {current !== "/login" && (
-        <Link href="/login" className="chip ml-auto">
-          Sign in
-        </Link>
-      )}
+      <div className="ml-auto flex items-center gap-2">
+        {current !== "/login" && (
+          <Link href="/login" className="chip">
+            Sign in
+          </Link>
+        )}
+        {current !== "/signup" && (
+          <Link href="/signup" className="chip chip-cta">
+            Sign up
+          </Link>
+        )}
+      </div>
     </div>
   );
 }

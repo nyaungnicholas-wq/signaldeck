@@ -87,15 +87,18 @@ func (s *Store) LatestPredictionStats(ctx context.Context, h md.Horizon) (avgCon
 	return avgConf, n, err
 }
 
-// ResolvedPredictionCount returns how many prediction outcomes have resolved
-// for one horizon — the honesty gate input for the confidence gauge (below
-// the minimum the gauge is labeled "not significant", mirroring the /honesty
-// independent-N gate).
+// ResolvedPredictionCount returns how many INDEPENDENT graded observations
+// exist for one horizon — the honesty gate input for the confidence gauge and
+// the SIGNALS hub (below the minimum the surface is labeled "not significant",
+// mirroring the /honesty independent-N gate).
+//
+// It is the grader's own population (LiveDirectionalRecord), not a raw row
+// count. It used to be COUNT(*) over every resolved row: measured 2026-09-30,
+// 230,516 resolved 1d rows against 1,300 independent symbol-days, so a floor
+// defined in independent observations was checked against pseudo-replicated
+// rows and published as resolvedN.
 func (s *Store) ResolvedPredictionCount(ctx context.Context, h md.Horizon) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM prediction_outcomes
-		WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL`, string(h)).Scan(&n)
+	n, _, err := s.LiveDirectionalRecord(ctx, h)
 	return n, err
 }
 

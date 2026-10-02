@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
@@ -23,6 +24,7 @@ import (
 const version = "0.1.0-dev"
 
 func main() {
+	processStart := time.Now() // stopfile.go: older stop files are leftovers
 	showVersion := flag.Bool("version", false, "print version and exit")
 	sicBulk := flag.Bool("sic-bulk-sync", false,
 		"run ONE forced SIC bulk sync (SEC EDGAR bulk submissions.zip, ~1.5 GB streamed to SIGNALDECK_TMP) against the configured DB, print the result, and exit — stop the daemon first")
@@ -150,6 +152,12 @@ func main() {
 		fmt.Println(detail)
 		return
 	}
+
+	// Windows maintenance stops arrive as `schtasks /End`, which terminates the
+	// process without reaching the signal handler; see stopfile.go. Armed here,
+	// after the -sic-bulk one-shot returns, so a one-shot never consumes a stop
+	// meant for the running daemon.
+	ctx = stopOnFile(ctx, filepath.Join(filepath.Dir(cfg.DBPath), ".stop-request"), processStart, time.Second)
 
 	slog.Info("signaldeckd started", "db", cfg.DBPath, "http", cfg.HTTPAddr,
 		"alpaca", cfg.HasAlpaca(), "hud", cfg.HudURL)

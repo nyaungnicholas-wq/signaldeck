@@ -76,8 +76,17 @@ func TestLedger_ChainIntegrityManyAppends(t *testing.T) {
 	if v.HeadHash != entries[n-1].EntryHash {
 		t.Errorf("head hash = %q, want %q", v.HeadHash, entries[n-1].EntryHash)
 	}
+	if v.HeadSeq != int64(n) {
+		t.Errorf("head seq = %d, want %d", v.HeadSeq, n)
+	}
 	if v.BrokenAtSeq != nil {
 		t.Errorf("brokenAtSeq = %d, want nil on intact chain", *v.BrokenAtSeq)
+	}
+	if h, ok, err := st.LedgerEntryHash(ctx, 3); err != nil || !ok || h != entries[2].EntryHash {
+		t.Errorf("LedgerEntryHash(3) = %q/%v/%v, want %q", h, ok, err, entries[2].EntryHash)
+	}
+	if _, ok, err := st.LedgerEntryHash(ctx, int64(n)+1); err != nil || ok {
+		t.Errorf("LedgerEntryHash past the head: ok=%v err=%v, want ok=false and no error", ok, err)
 	}
 
 	// LedgerHead must equal the last appended entry.
@@ -120,6 +129,9 @@ func TestLedger_TamperDetectionMidChain(t *testing.T) {
 	}
 	if *v.BrokenAtSeq != tampered {
 		t.Errorf("brokenAtSeq = %d, want %d (the mutated row)", *v.BrokenAtSeq, tampered)
+	}
+	if v.HeadSeq != tampered {
+		t.Errorf("headSeq = %d, want %d: the last row examined is the break", v.HeadSeq, tampered)
 	}
 }
 

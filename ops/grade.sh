@@ -57,6 +57,81 @@ log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG"; }
 
 refusal=""
 
+# --- one writer at a time --------------------------------------------------
+# $STAGE used to be the single fixed name "${OUT}.staging", removed at startup
+# and again at cleanup, with no lock anywhere. The image runs this on a schedule
+# AND an operator can invoke it by hand, so two runs could:
+#   - write the same staging path concurrently, leaving a file that is half one
+#     grade and half another;
+#   - have run A's startup `rm -f` delete the artifact run B had just staged and
+#     was about to check;
+#   - have run A publish bytes that run B's checks had inspected, or vice versa,
+#     so the thing that reached $OUT is not the thing that passed the gates.
+#
+# The lock makes the second run decline instead of racing. mkdir is the POSIX
+# atomic test-and-set -- it succeeds for exactly one caller and needs no flock,
+# which busybox sh does not have. A declining run is NOT an outage and NOT a
+# refusal: it writes no heartbeat and no envelope, because another grader is
+# mid-cycle and about to write both.
+LOCK="${OUT}.lock"
+LOCK_STALE_SECONDS="${SIGNALDECK_GRADE_LOCK_STALE:-7200}"
+
+lock_holder_dead() {
+  # A lock whose owner is gone, and which is older than the grace period, is
+  # debris from a killed container rather than a live writer. Both conditions,
+  # never just age: a slow grade on a large database is not a stale lock.
+  _now=$(date -u +%s)
+  _started=$(cat "$LOCK/started" 2>/dev/null || echo "")
+  _pid=$(cat "$LOCK/pid" 2>/dev/null || echo "")
+
+  # A lock with no readable pid or start time is debris from a process killed
+  # in the gap between mkdir and writing them. Without this branch such a lock
+  # is UNBREAKABLE and every later run declines forever -- a wedge that looks
+  # exactly like a dead grader, which is the failure this whole file exists to
+  # end. Age alone decides here because there is no owner left to ask.
+  # A live owner is never stale, whatever the clock says, and it is asked FIRST
+  # whenever there is a pid to ask -- including in the sliver between writing
+  # the pid and writing the start time, where treating a missing timestamp as
+  # "infinitely old" would break a lock somebody is holding right now.
+  if [ -n "$_pid" ]; then
+    kill -0 "$_pid" 2>/dev/null && return 1
+  fi
+
+  # No pid, or an owner that is gone. Now age decides. An unreadable start time
+  # here means the holder died between mkdir and its first write, so epoch 0
+  # makes it immediately breakable -- without this, such a lock is UNBREAKABLE
+  # and every later run declines forever, a wedge indistinguishable from a dead
+  # grader, which is the failure this whole file exists to end.
+  _started=${_started:-0}
+  [ "$((_now - _started))" -gt "$LOCK_STALE_SECONDS" ]
+}
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+  if lock_holder_dead; then
+    log "breaking a stale grade lock (owner $(cat "$LOCK/pid" 2>/dev/null) is gone, held >${LOCK_STALE_SECONDS}s)"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || {
+      log "grade SKIPPED: another grader took the lock while this one was breaking it"
+      exit 0
+    }
+  else
+    log "grade SKIPPED: another grader holds $LOCK (pid $(cat "$LOCK/pid" 2>/dev/null || echo unknown)). Not an outage and not a refusal: that run writes the heartbeat and the envelope."
+    exit 0
+  fi
+fi
+echo "$$" > "$LOCK/pid"
+date -u +%s > "$LOCK/started"
+
+# Unique, same-directory staging so `mv` stays a rename on one filesystem and
+# cleanup can only ever remove THIS run's file.
+STAGE="${OUT}.staging.$$"
+
+cleanup() {
+  rm -f "$STAGE"
+  rm -rf "$LOCK"
+}
+trap cleanup EXIT HUP INT TERM
+
 # --- the protocol document must be the registered one ----------------------
 # Ported verbatim in intent from ops/accuracy-registry.sh. A verdict graded
 # under a protocol document that is not the one frozen on the chain is a
@@ -160,9 +235,8 @@ fi
 # raw output straight there published ungated rows for as long as the checks
 # below took to run, and selection_honesty.py --merge reopening the same path
 # "w" meant a reader could also catch it truncated. Build in $STAGE, check
-# $STAGE, and replace $OUT with one atomic rename at the end.
-STAGE="${OUT}.staging"
-rm -f "$STAGE"
+# $STAGE, and replace $OUT with one atomic rename at the end. $STAGE is unique
+# per run and the lock above admits one writer; see the lock block for why.
 
 if [ -z "$refusal" ]; then
   if ! "$PY" "$TOOLS/accuracy_registry.py" --db "$DB" --json "$STAGE" >>"$LOG" 2>&1; then
@@ -250,11 +324,103 @@ if [ -z "$refusal" ]; then
 fi
 
 log "GRADE REFUSED: $refusal"
+
+# --- WHICH KIND OF NO IS THIS ----------------------------------------------
+# Every refusal above funnelled through `--failure`, which records success=0:
+# "the grader is broken". But collapsecheck exiting 1 is the opposite claim --
+# the grader RAN, it measured the window, and it declined to publish on the
+# evidence. tools/grader_heartbeat.py has carried `--refused` for exactly this
+# since it was written (success=1, error "REFUSED: <reason>"), and
+# ops/accuracy-registry.sh on the dev box has used it all along. The container
+# did not, so the same measured result was an OUTAGE here and a FINDING there,
+# and an operator comparing the two surfaces saw a grader that was alive on one
+# box and dead on the other.
+#
+# The classification is the dev-box script's, character for character, so the
+# two cannot drift: "CHECK UNAVAILABLE" is the prefix every unrunnable gate in
+# both files uses, and a grader that exited non-zero never produced a verdict.
+# Everything else got as far as a measurement and said no.
+case "$refusal" in
+  "accuracy_registry.py exited"*|"CHECK UNAVAILABLE"*) hb_mode=--failure ;;
+  *) hb_mode=--refused ;;
+esac
+log "recording this refusal as ${hb_mode} ($([ "$hb_mode" = "--refused" ] && echo "a healthy grader declined to publish" || echo "a gate or the grader never produced a verdict"))"
+
 # Best-effort by necessity -- there is nowhere left to escalate -- but no longer
 # silent: if even the refusal cannot be recorded, say so in the log and keep the
 # non-zero exit.
-"$PY" "$TOOLS/grader_heartbeat.py" --failure --error "$refusal" --db "$DB" \
+"$PY" "$TOOLS/grader_heartbeat.py" "$hb_mode" --error "$refusal" --db "$DB" \
   --registry "$OUT" --grader "$TOOLS/accuracy_registry.py" >>"$LOG" 2>&1 \
-  || log "and the failure heartbeat could not be written either; the daemon will fall back to REFUSED_STALE on age alone"
-rm -f "$STAGE"
+  || log "and the refusal heartbeat could not be written either; the daemon will fall back to REFUSED_STALE on age alone"
+
+# --- the refusal envelope ---------------------------------------------------
+# The container used to discard $STAGE and leave $OUT exactly as it was, so a
+# refused cycle was invisible to /api/accuracy: on a SEEDED volume the daemon
+# kept serving the last published rows with nothing saying the newest grade was
+# withheld, and on a FRESH volume there was no file at all, which reads as
+# "registry unavailable" -- an outage -- rather than as a refusal. Same measured
+# result, two different stories, neither of them the true one.
+#
+# So the same structured envelope ops/accuracy-registry.sh writes is written
+# here: status REFUSED, the reason, refused_since preserved across retries so
+# the outage's real age is visible, and NO ROWS. The rejected figures are never
+# published -- the last SUCCESSFUL grade is kept nested under
+# stale_last_registry, never at the top level, so nothing is lost and nothing
+# can be mistaken for a fresh grade.
+"$PY" - "$OUT" "$refusal" <<'PY' >>"$LOG" 2>&1 || log "the refusal envelope could not be written; /api/accuracy will serve the previous state"
+import datetime as dt, json, os, sys, tempfile
+
+out_p, reason = sys.argv[1], sys.argv[2]
+now = dt.datetime.now()
+
+try:
+    with open(out_p, encoding="utf-8") as fh:
+        stale = json.load(fh)
+except Exception:
+    stale = {}
+if not isinstance(stale, dict):
+    stale = {}
+
+# An already-REFUSED registry keeps its original refused_since, so a retry does
+# not reset the outage's age to zero.
+refused_since = stale.get("refused_since") or now.isoformat(timespec="seconds")
+graded_at = stale.get("graded_at") or stale.get("generated")
+if stale.get("status") == "REFUSED":
+    graded_at = stale.get("graded_at")
+    stale = stale.get("stale_last_registry") or {}
+
+age = "unknown"
+if graded_at:
+    try:
+        delta = now - dt.datetime.fromisoformat(graded_at)
+        age = "%.1fh" % (delta.total_seconds() / 3600)
+    except ValueError:
+        pass
+
+envelope = {
+    "status": "REFUSED",
+    "generated": now.isoformat(timespec="seconds"),
+    "graded_at": graded_at,
+    "refused_since": refused_since,
+    "last_successful_grade_age": age,
+    "refusal_reason": reason,
+    "rows": [],
+    "stale_last_registry": stale or None,
+}
+# Atomic, and in $OUT's own directory so the rename stays a rename.
+d = os.path.dirname(os.path.abspath(out_p)) or "."
+fd, tmp = tempfile.mkstemp(dir=d, prefix=".refusal-", suffix=".json")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, indent=1)
+    os.replace(tmp, out_p)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+print("refusal envelope written to %s (refused_since %s)" % (out_p, refused_since))
+PY
+
 exit 1

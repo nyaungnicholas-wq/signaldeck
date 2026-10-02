@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import { visibleInterval } from "@/lib/visibleInterval";
 
 // ── shapes (local; the desk does not import from lib/api) ──
 interface WMDriver {
@@ -134,10 +135,10 @@ export default function WorldModelPanel() {
           if (alive) setWmErr(msg(e));
         });
     load();
-    const id = setInterval(load, 30000);
+    const stopPoll = visibleInterval(load, 30000); // nothing from a hidden tab
     return () => {
       alive = false;
-      clearInterval(id);
+      stopPoll();
     };
   }, []);
 

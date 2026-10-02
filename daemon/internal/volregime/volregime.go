@@ -123,6 +123,19 @@ const evidenceCaveat = "BACKTEST CLAIM, not a live measurement: HistoricalAccura
 	"this quarterly predictor yet, so no first-gradable date is promised here. Treat this number " +
 	"as the platform's best backtest evidence for this predictor, not a live track record."
 
+// Labelled restores Evidence and EvidenceCaveat on a forecast read back from
+// storage: vol_forecasts keeps neither column, so without this every stored
+// forecast an API serves showed historicalAccuracy with no backtest label.
+func Labelled(f Forecast) Forecast {
+	if f.Evidence == "" {
+		f.Evidence = evidenceBacktest
+	}
+	if f.EvidenceCaveat == "" {
+		f.EvidenceCaveat = evidenceCaveat
+	}
+	return f
+}
+
 // maxSaneReturn guards against unadjusted-split corruption: a one-day |simple
 // return| above this inside the prediction window (found on ~130 live symbols
 // by the 2026-07-17 inspection — 2x-44x "jumps" where incremental fetches

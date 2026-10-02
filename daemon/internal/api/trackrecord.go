@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 // ── STAGE 7: LIVE OUT-OF-SAMPLE TRACK RECORD (read route) ────────────────────
@@ -95,11 +98,14 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	if !d.isOperator(r) {
+		resp = withoutThinReturnMeans(resp)
+	}
 	writeJSON(w, resp)
 }
 
 // trackRecordCached serves the same payload through the SWR cache. Perf wave
-// 2026-07-24: the full grade over the 120k-row window costs ~22s per request
+// 2026-07-24: the full grade over the then 120k-row window cost ~22s per request
 // in the pure-Go driver and is identical for every user; the 2m TTL sits well
 // under the 10m resolver cadence that changes the underlying rows, so
 // staleness is bounded by design and nobody waits behind a rebuild.
@@ -108,39 +114,112 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 	if h != md.H1h && h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
-	resp, err := sharedTrackCache.get(r.Context(), string(h),
-		func(ctx context.Context) (map[string]any, error) {
-			return d.buildTrackRecord(ctx, h)
-		})
+	resp, err := d.cachedTrackRecord(r.Context(), h)
 	if err != nil {
-		httpInternal(w, err)
+		httpCacheErr(w, err)
 		return
+	}
+	if !d.isOperator(r) {
+		resp = withoutThinReturnMeans(resp)
 	}
 	writeJSON(w, resp)
 }
 
+// minPublicReturnN is the fewest rows a mean of realized returns is computed
+// over before anyone but the operator is served it (the licence line in
+// datalicense.go): a mean over one row is that row's return.
+const minPublicReturnN = 10
+
+// withoutThinReturnMeans is the non-operator view of a track-record payload:
+// every byMarket row keeps its n and rates and loses meanFwd when that mean
+// is taken over fewer than minPublicReturnN rows (absent, not zero). It
+// copies rather than edits in place, because resp is the cached payload both
+// tiers share (the same rule as withoutCryptoForecasts). A payload loaded
+// from disk after a restart is decoded JSON (rows are map[string]any, n is a
+// json.Number), so both shapes are read; a row of any other shape is dropped,
+// since its n cannot be checked.
+func withoutThinReturnMeans(resp map[string]any) map[string]any {
+	rows, ok := resp["byMarket"]
+	if !ok || rows == nil {
+		return resp
+	}
+	var in []map[string]any
+	switch rs := rows.(type) {
+	case []map[string]any:
+		in = rs
+	case []any:
+		for _, row := range rs {
+			if m, ok := row.(map[string]any); ok {
+				in = append(in, m)
+			}
+		}
+	}
+	pub := make([]map[string]any, 0, len(in))
+	for _, row := range in {
+		c := make(map[string]any, len(row))
+		for k, v := range row {
+			c[k] = v
+		}
+		if n, ok := rowCount(row["n"]); !ok || n < minPublicReturnN {
+			delete(c, "meanFwd")
+		}
+		pub = append(pub, c)
+	}
+	out := make(map[string]any, len(resp))
+	for k, v := range resp {
+		out[k] = v
+	}
+	out["byMarket"] = pub
+	return out
+}
+
+// rowCount reads a row count from a built payload (int) or a decoded one.
+func rowCount(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
+}
+
+// cachedTrackRecord is one horizon's payload through the shared cache, persisted
+// across restarts (cachepersist.go). The route and WarmCaches both read it here,
+// so the warmer fills exactly the entry and file a visitor is served from.
+func (d Deps) cachedTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
+	return sharedTrackCache.getAt(ctx, d.cacheFile("track-record-"+string(h), trackRecordPersistFormat), d.St.CacheKey()+"|"+string(h),
+		func(ctx context.Context) (map[string]any, error) {
+			return d.buildTrackRecord(ctx, h)
+		})
+}
+
+// trackRecordPersistFormat is the shape of the payload buildTrackRecord returns,
+// as persisted across restarts (cachepersist.go). BUMP IT whenever that shape
+// changes (a field added, renamed or re-typed), or the first reads after the
+// deploy serve the previous build's shape.
+const trackRecordPersistFormat = 2 // 2: SD-30 withholding + ledger.tamperEvidence/brokenAtSeq (PROOFSTRIP); a format-1 copy would serve the unwithheld record without the anchor field
+
 // buildTrackRecord computes the full track-record payload for one horizon.
 // Pure build — no HTTP — so the response cache can rebuild it off-request.
+// Its shape is trackRecordPersistFormat: bump that when you change it.
 func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
-	// Same wide window as fleetEdgeSkill: at ~3k resolutions/day a 20k cap spans
-	// only ~7 days and wrongly RE-GATES the record now that the universe is large.
-	rows, err := d.St.ResolvedPredictionOutcomes(ctx, h, fleetSkillWindow)
+	// The whole graded window (the same one fleetEdgeSkill reads), already
+	// collapsed IN SQL to ONE independent observation per (symbol, settled move),
+	// the LATEST of each, ts DESC; rawN is the graded row count behind them. No
+	// skill number is computed on the raw, pseudo-replicated set — and since
+	// SD-48 that set no longer crosses into Go at all (1w: 128,834 rows to keep
+	// 9,120).
+	rows, rawN, err := d.St.IndependentPredictionOutcomes(ctx, h)
 	if err != nil {
 		return nil, err
 	}
-	rawN := len(rows)
 
-	// Collapse to ONE independent observation per (symbol, trading day), keeping the
-	// LATEST prediction that day (rows are ts DESC, so the first seen per key is
-	// the latest). No skill number is computed on the raw, pseudo-replicated set.
-	seen := map[[2]int64]bool{}
 	var pts []trackPt
 	for _, o := range rows {
-		key := [2]int64{o.SymbolID, md.SettleDay(o.SettleTs, o.Ts)}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		pts = append(pts, trackPt{
 			symbolID: o.SymbolID,
 			prob:     o.Prob,
@@ -202,7 +281,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 				" — figures over this graded window are withheld. The window is anchored to the " +
 				"survivorship epoch and does not roll forward, so this clears when the window is " +
 				"re-registered, not by waiting"
-		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, d.now()); cerr == nil && collapsed {
+		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr == nil && collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true
@@ -210,8 +289,22 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			collapseReason = reason
 		}
 	}
+	// SD-30: a label mostly realised at issue is not evidence however many days
+	// it spans. Outside the registry block on purpose: an unreadable registry
+	// must not un-withhold it. The grader's own refusal and a collapse keep
+	// precedence, since each says something about the window itself.
+	withheld, sd30 := publication.DirectionalWithheld(string(h))
+	switch {
+	case sd30 && collapseReason == "":
+		gated, gateReason, collapseReason = true, "refused", withheld
+	case sd30:
+		collapseReason += ". Separately, " + withheld
+	}
 
 	resp := map[string]any{
+		// When this grade was computed: the route serves it from a cache, and
+		// after a restart from the last persisted copy, so a page can show its age.
+		"computedAt":      time.Now().UTC().Format(time.RFC3339),
 		"horizon":         h,
 		"rawN":            rawN,
 		"independentN":    indepN,
@@ -264,8 +357,22 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 
 	// Self-verifying links: ledger integrity (Stage 3, incremental checkpoint
 	// path — cold-load precompute wave) + paper equity (Stage 4).
+	//
+	// The ledger block carries what /proof's headline reads (web ledgerHeadline):
+	// a consistent chain whose signed anchors no longer reproduce is NOT intact
+	// evidence, and a chip that saw `intact` alone read green over a regenerated
+	// chain. Anchors are checked against the stored heads, as the default
+	// /api/ledger/verify does; nothing is signed here. No anchor verdict, no
+	// block: the chip is not shown rather than shown green.
 	if v, _, verr := d.St.VerifyLedgerCached(ctx); verr == nil {
-		resp["ledger"] = map[string]any{"intact": v.Intact, "count": v.Count, "head": v.HeadHash}
+		if av, aerr := d.St.VerifyLedgerAnchors(ctx, 0, false, ledgeranchor.TrustedKeys()); aerr == nil {
+			led := map[string]any{"intact": v.Intact, "count": v.Count, "head": v.HeadHash,
+				"tamperEvidence": map[string]any{"failingAnchors": av.FailingAnchors}}
+			if v.BrokenAtSeq != nil {
+				led["brokenAtSeq"] = *v.BrokenAtSeq
+			}
+			resp["ledger"] = led
+		}
 	}
 	resp["paper"] = d.paperSummaryForTrackRecord(ctx)
 
@@ -273,11 +380,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		resp["winRate"] = nil
 		resp["brier"] = nil
 		resp["ic"] = nil
-		note := notSignificant(indepN, trackMinIndependentN)
-		if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
-			note = "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
-				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
-		}
+		note := independenceGateNote(indepN, distinctDays)
 		// A collapse outranks the sample-size note: the sample is large enough
 		// and is still not evidence, which is a different statement and the one
 		// a reader needs. Same reason string /api/accuracy refuses with, so the
@@ -296,6 +399,14 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		resp["reliability"] = reliabilityCurve(pts)
 		resp["byRegime"] = nil
 		resp["byMarket"] = trackByMarket(pts) // descriptive only; not skill claims
+		if sd30 {
+			// The per-market hit rate and the realised frequency per bin are the
+			// withheld record by another name.
+			resp["reliability"] = []map[string]any{}
+			for _, m := range resp["byMarket"].([]map[string]any) {
+				delete(m, "dirHitRate")
+			}
+		}
 		return resp, nil
 	}
 
@@ -698,6 +809,17 @@ func div(a float64, b int) float64 {
 
 func notSignificant(n, min int) string {
 	return "not yet significant — " + strconv.Itoa(n) + "/" + strconv.Itoa(min) + " independent resolutions"
+}
+
+// independenceGateNote names the floor that holds a record gated on both
+// trackMinIndependentN and trackMinDistinctDays (/api/track-record and
+// /api/calibration share it, so the two cannot word one gate differently).
+func independenceGateNote(indepN, distinctDays int) string {
+	if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
+		return "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
+			strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
+	}
+	return notSignificant(indepN, trackMinIndependentN)
 }
 
 // registerTrackRecord wires the Stage-7 live track-record read route (cached).

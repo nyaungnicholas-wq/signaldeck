@@ -6,6 +6,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 // predictions returns the latest calibrated ensemble prediction per horizon
@@ -32,15 +33,24 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	if h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
-	probs, ups, err := d.St.ResolvedPredictionPairs(r.Context(), h, 10000)
+	// One pair per (symbol, settled trading day) over the grader's population,
+	// uncapped (the graded window is the bound), so n is the independent N the
+	// gate below and liveRecord.independentN both count.
+	probs, ups, days, err := d.St.ResolvedPredictionPairs(r.Context(), h, -1)
 	if err != nil {
 		httpInternal(w, err)
 		return
 	}
 	pairs := make([]ensemble.Pair, len(probs))
+	dayset := make(map[int64]struct{}, len(days))
 	for i := range probs {
 		pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
+		dayset[days[i]] = struct{}{}
 	}
+	// The same two floors as /api/track-record: observations on one day share
+	// one market move, so many symbols over a few days cannot ungate this.
+	distinctDays := len(dayset)
+	gated := len(pairs) < trackMinIndependentN || distinctDays < trackMinDistinctDays
 	// 2026-07-17 inspection: the system HAS accrued a live prequential record
 	// (every point's prob was frozen at prediction time and graded forward).
 	// Once the independent sample clears the gate, "backtested" stops being
@@ -52,7 +62,15 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	}
 	live := liveN >= minIndependentN
 	trackLabel := "backtested / in-sample — not a live track record"
-	if live {
+	var liveWinRate any = liveWin
+	if gated {
+		// liveN is len(pairs) (one population), so a gated record publishes no
+		// win rate anywhere in this payload, label included.
+		liveWinRate = nil
+	}
+	if live && gated {
+		trackLabel = "LIVE prequential record, figures withheld: " + independenceGateNote(len(pairs), distinctDays)
+	} else if live {
 		trackLabel = fmt.Sprintf("LIVE prequential record: win rate %.1f%% over %d independent symbol-days — probabilities were frozen at prediction time and graded forward; a bad number here is the honest product, not a display bug", liveWin*100, liveN)
 	}
 	// A bare Brier score is not interpretable and must never ship alone. The
@@ -67,14 +85,19 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	// it answers "are our 70% calls actually 70%?" about the number users see.
 	skill, baseRate, gradable := ensemble.BrierSkill(pairs)
 	out := map[string]any{
-		"horizon":     h,
-		"n":           len(pairs),
-		"bins":        ensemble.CalibrationCurve(pairs, 10),
-		"brier":       ensemble.BrierScore(pairs),
-		"reliability": ensemble.ReliabilityScore(pairs),
-		"live":        live,
-		"liveRecord":  map[string]any{"independentN": liveN, "winRate": liveWin},
-		"trackLabel":  trackLabel,
+		"horizon": h,
+		// Independent (symbol, settled trading day) observations, not rows.
+		"n":               len(pairs),
+		"distinctDays":    distinctDays,
+		"minIndependentN": trackMinIndependentN,
+		"minDistinctDays": trackMinDistinctDays,
+		"gated":           gated,
+		"bins":            ensemble.CalibrationCurve(pairs, 10),
+		"brier":           ensemble.BrierScore(pairs),
+		"reliability":     ensemble.ReliabilityScore(pairs),
+		"live":            live,
+		"liveRecord":      map[string]any{"independentN": liveN, "winRate": liveWinRate},
+		"trackLabel":      trackLabel,
 		// C-2 (2026-08-02 re-audit): /api/track-record publishes the same
 		// record at a different scope and therefore different numbers. Naming
 		// that here is what stops the pair reading as a contradiction.
@@ -97,7 +120,14 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 				"~9 percentage points, which is wider than the miscalibration these bins exist to show.",
 			calibrationBinMinN, calibrationBinMinN),
 	}
-	if gradable {
+	switch {
+	case gated:
+		// Below either floor every headline figure is withheld, as on
+		// /api/track-record; the bins stay, each carrying its own N.
+		out["brier"], out["reliability"] = nil, nil
+		out["brierSkill"], out["baseRate"], out["brierRef"] = nil, nil, nil
+		out["brierNote"] = independenceGateNote(len(pairs), distinctDays)
+	case gradable:
 		out["brierSkill"] = skill
 		out["baseRate"] = baseRate
 		out["brierRef"] = baseRate * (1 - baseRate)
@@ -108,13 +138,24 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 				true:  "better than forecasting the base rate every day",
 				false: "WORSE than forecasting the base rate every day — no measured probabilistic skill",
 			}[skill > 0])
-	} else {
-		// Gated, with the reason. null, never 0 — a zero skill score is a real
+	default:
+		// Ungradable, with the reason. null, never 0 — a zero skill score is a real
 		// verdict ("exactly as good as the base rate") and must not be faked.
 		out["brierSkill"] = nil
 		out["baseRate"] = nil
 		out["brierRef"] = nil
 		out["brierNote"] = "brier skill not gradable: no resolved history, or every outcome resolved the same way (the base-rate reference has zero variance)"
+	}
+	// SD-30: every number above is scored against a label mostly realised at
+	// issue. Sample sizes stay; the win rate, Brier, skill and bins do not.
+	if why, ok := publication.DirectionalWithheld(string(h)); ok {
+		out["liveRecord"] = map[string]any{"independentN": liveN, "winRate": nil}
+		out["trackLabel"] = why
+		out["bins"] = []any{}
+		out["brier"], out["reliability"] = nil, nil
+		out["brierSkill"], out["baseRate"], out["brierRef"] = nil, nil, nil
+		out["brierNote"] = why
+		out["withheld"] = why
 	}
 	writeJSON(w, out)
 }
@@ -162,7 +203,7 @@ func (d Deps) registerPredict(mux *http.ServeMux) {
 		// C6: keyed on the WHITELISTED horizon, never on r.URL.RawQuery — a raw
 		// query string is attacker-controlled, and every novel one was a cold
 		// build holding one of the store's four read connections for ~22s.
-		sharedCalibrationSWR.serve(calibrationCacheKey(r), w, r, d.calibration)
+		sharedCalibrationSWR.serve(d.St.CacheKey()+"|"+calibrationCacheKey(r), w, r, d.calibration)
 	})
 	mux.HandleFunc("GET /api/regime", d.regimes)
 	mux.HandleFunc("GET /api/ranking", d.ranking)

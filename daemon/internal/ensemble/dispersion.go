@@ -2,6 +2,7 @@ package ensemble
 
 import (
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -65,11 +66,18 @@ const (
 	// universes too small for the proportional rule below to mean anything.
 	MinDistinctFloor = 10
 
-	// DistinctPerSymbols requires one distinct value per this many symbols, so
-	// the bar scales with the universe instead of being satisfiable by a large
-	// fleet landing on a handful of blocks. At the live universe of ~330 symbols
-	// it asks for 17; the collapsed days offered 5-14 and the repaired ones 326.
-	DistinctPerSymbols = 20
+	// MinDistinctRatio is the proportional rule: distinct values as a fraction
+	// of the cross-section, so the bar scales with the universe instead of being
+	// satisfiable by a large fleet landing on a handful of blocks.
+	//
+	// It is the SAME ruler as forecastmon.MinDistinctRatio, the collapse
+	// detector the graded window is judged by (pinned in the 2026-09-20
+	// grading-window amendment). This rule used to be one value per 20 symbols
+	// (5%), so a pass at 5-15% distinct could publish and then be called
+	// collapsed by the detector, which refuses the whole graded window.
+	// Publication must refuse anything grading would; a forecastmon test pins
+	// the two together. Healthy days measure 0.42-0.99, collapsed 0.02-0.10.
+	MinDistinctRatio = 0.15
 )
 
 // CrossSection is the measured shape of one pass's emitted probabilities.
@@ -131,12 +139,12 @@ func (cs CrossSection) Usable() (ok bool, reason string) {
 	if cs.N < MinDistinctFloor {
 		return true, ""
 	}
-	need := cs.N / DistinctPerSymbols
+	need := int(math.Ceil(MinDistinctRatio * float64(cs.N)))
 	if need < MinDistinctFloor {
 		need = MinDistinctFloor
 	}
 	// Never demand more than half the universe be distinct. Without this the
-	// floor is wildly uneven with fleet size — at n=324 it asks for 5% unique
+	// floor is wildly uneven with fleet size — at n=324 it asks for 15% unique
 	// values, at n=12 it asks for 83%. 2026-07-04 published 12 symbols over 8
 	// distinct values spanning the FULL [0,1] range and would have been refused
 	// as "collapsed", which is the opposite of what that day was.

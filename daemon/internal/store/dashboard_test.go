@@ -113,11 +113,16 @@ func TestLatestPredictionStatsAndResolvedCount(t *testing.T) {
 	// NUsed>0 on every row: these are real forecasts. A row with NUsed==0 is an
 	// evidence-only record of what the legs said and is excluded from every
 	// published surface, this one included.
+	//
+	// Anchored AFTER the survivorship epoch: the resolved count is the
+	// grader's population, which starts at GradingEpochTS, so rows at 1970
+	// would be filtered out and the count would assert nothing.
+	epoch := int64(GradingEpochTS)
 	seed := []Prediction{
-		{SymbolID: a.ID, Horizon: md.H1d, Ts: 100, RawProb: 0.9, CalProb: 0.9, NUsed: 1},
-		{SymbolID: a.ID, Horizon: md.H1d, Ts: 200, RawProb: 0.7, CalProb: 0.7, NUsed: 1},
-		{SymbolID: b.ID, Horizon: md.H1d, Ts: 150, RawProb: 0.4, CalProb: 0.4, NUsed: 1},
-		{SymbolID: b.ID, Horizon: md.H1w, Ts: 300, RawProb: 0.99, CalProb: 0.99, NUsed: 1},
+		{SymbolID: a.ID, Horizon: md.H1d, Ts: epoch + 100, RawProb: 0.9, CalProb: 0.9, NUsed: 1},
+		{SymbolID: a.ID, Horizon: md.H1d, Ts: epoch + 200, RawProb: 0.7, CalProb: 0.7, NUsed: 1},
+		{SymbolID: b.ID, Horizon: md.H1d, Ts: epoch + 150, RawProb: 0.4, CalProb: 0.4, NUsed: 1},
+		{SymbolID: b.ID, Horizon: md.H1w, Ts: epoch + 300, RawProb: 0.99, CalProb: 0.99, NUsed: 1},
 	}
 	for _, p := range seed {
 		if err := st.UpsertPrediction(ctx, p); err != nil {
@@ -137,16 +142,20 @@ func TestLatestPredictionStatsAndResolvedCount(t *testing.T) {
 		t.Errorf("avgConf = %v, want %v", avg, want)
 	}
 
-	// Resolve ONE 1d outcome → resolved count 1 for 1d, 0 for 1w untouched.
-	if err := st.ResolvePrediction(ctx, a.ID, md.H1d, 200, 0.01); err != nil {
-		t.Fatalf("resolve: %v", err)
+	// Resolve BOTH of AAA's 1d calls. They settle on the same trading day, so
+	// they are ONE independent observation, not two: the gate is an
+	// independent-N floor and a raw row count pseudo-replicates it. 1w stays 0.
+	for _, ts := range []int64{epoch + 100, epoch + 200} {
+		if err := st.ResolvePrediction(ctx, a.ID, md.H1d, ts, 0.01); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
 	}
 	rn, err := st.ResolvedPredictionCount(ctx, md.H1d)
 	if err != nil {
 		t.Fatalf("ResolvedPredictionCount: %v", err)
 	}
 	if rn != 1 {
-		t.Errorf("resolved 1d = %d, want 1", rn)
+		t.Errorf("resolved 1d = %d, want 1 (two same-day calls are one independent observation)", rn)
 	}
 	if rw, _ := st.ResolvedPredictionCount(ctx, md.H1w); rw != 0 {
 		t.Errorf("resolved 1w = %d, want 0", rw)

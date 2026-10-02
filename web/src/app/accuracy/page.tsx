@@ -18,6 +18,8 @@ import {
   type AccuracyStatus,
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
+import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 export const dynamic = "force-dynamic";
 
@@ -76,8 +78,14 @@ type Calibration = {
 
 type Registry = {
   generated: string;
+  // The binding key between this file and the daemon's publication verdict.
+  // Both are stamped by the same grade; if either disagrees with what
+  // /api/accuracy approved, the two reads saw different artifacts.
+  graded_at?: string;
+  grader_sha256?: string;
   min_independent_n: number;
   survivorship_epoch: string;
+  grading_epoch?: string;
   null_policy: string;
   calibration?: Calibration | null;
   rows: RegistryRow[];
@@ -166,6 +174,11 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
   // and a 6-observation "33.3%" reads as a measurement it is not. The floor is
   // the registry's own min_independent_n; the accuracy renders once n clears it.
   const convictionGated = r.band !== "all" && r.live_n < minN;
+  // SD-30: the daemon withholds this row's figures (its reason leads the
+  // reasons line above), and the file below still holds them, so every
+  // label-derived cell and the grader's own verdict sentence are suppressed.
+  const sd30 = pub?.figures_withheld;
+  const w = (v: string) => (sd30 ? "withheld" : v);
   return (
     <section
       className="panel"
@@ -191,12 +204,12 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
             {pub.reasons.join(" · ")}
           </span>
         ) : null}
-        {pub ? (
+        {pub && !sd30 ? (
           <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             Grader&apos;s sentence: {verdictOf(r)}
           </span>
         ) : null}
-        {unresolved ? (
+        {unresolved && !sd30 ? (
           <span className="text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
             Not resolved by this sample: {unresolved}
           </span>
@@ -204,27 +217,27 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <Cell
             label="LIVE ACC"
-            value={convictionGated ? `insufficient, n=${r.live_n}/${minN}` : pct(r.live_acc)}
+            value={w(convictionGated ? `insufficient, n=${r.live_n}/${minN}` : pct(r.live_acc))}
           />
           <Cell
             label="SKILL VS BASELINE"
-            value={
+            value={w(
               convictionGated || r.skill == null
                 ? "—"
-                : `${r.skill >= 0 ? "+" : ""}${(r.skill * 100).toFixed(1)}pp`
-            }
+                : `${r.skill >= 0 ? "+" : ""}${(r.skill * 100).toFixed(1)}pp`,
+            )}
           />
-          <Cell label="BASELINE (STRICTER NULL)" value={pct(drivingBaseline(r))} />
+          <Cell label="BASELINE (STRICTER NULL)" value={w(pct(drivingBaseline(r)))} />
           <Cell
             label="95% CI (DAY-CLUSTERED)"
-            value={r.ci ? `${pct(r.ci[0])}–${pct(r.ci[1])}` : r.ci_method === "withheld" ? "withheld" : "—"}
+            value={w(r.ci ? `${pct(r.ci[0])}–${pct(r.ci[1])}` : r.ci_method === "withheld" ? "withheld" : "—")}
           />
           <Cell
             label="EFFECTIVE N"
             value={r.effective_n != null ? r.effective_n.toLocaleString() : `${r.live_n.toLocaleString()} raw`}
           />
         </div>
-        {convictionGated ? (
+        {convictionGated && !sd30 ? (
           <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--warn)" }}>
             Accuracy withheld: this conviction slice is below the {minN}-observation evidence
             floor, and its early record runs worse than the base row (anti-calibrated). See the
@@ -239,6 +252,12 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
       </div>
     </section>
   );
+}
+
+// The bins are the withheld record by another name (realised frequency per
+// predicted band), so a horizon the daemon withholds is dropped from them.
+function withoutHorizons(cal: Calibration, drop: Set<string>): Calibration {
+  return { ...cal, horizons: Object.fromEntries(Object.entries(cal.horizons).filter(([h]) => !drop.has(h))) };
 }
 
 /** Reliability diagram as a table: per bin of predicted P(up), what actually
@@ -326,8 +345,10 @@ async function loadPublicationStatus(): Promise<{
   status: AccuracyStatus;
   reason?: string;
   gradedAt?: string;
+  graderSha256?: string;
   refusedSince?: string;
   rows: PublishedRow[];
+  withheldHorizons?: string[];
 } | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   try {
@@ -349,6 +370,10 @@ async function loadPublicationStatus(): Promise<{
     const res = await fetch(`${daemon}/api/accuracy`, {
       cache: "no-store",
       headers: cookie ? { cookie } : undefined,
+      // Unbounded until 2026-10-01: a daemon slowed by a restart held this
+      // page open for as long as it took. A timeout lands in the catch below,
+      // which renders the outage path.
+      signal: AbortSignal.timeout(8_000),
     });
     const body = await res.json();
     if (!res.ok || body?.status !== "OK") {
@@ -372,7 +397,13 @@ async function loadPublicationStatus(): Promise<{
       return { status: (body?.status ?? "REFUSED") as AccuracyStatus,
                reason: body?.reason, gradedAt: body?.graded_at, refusedSince: body?.refused_since, rows: [] };
     }
-    return { status: "OK", gradedAt: body.graded_at, rows: (body.rows ?? []) as PublishedRow[] };
+    return {
+      status: "OK",
+      gradedAt: body.graded_at,
+      graderSha256: body.grader_sha256,
+      rows: (body.rows ?? []) as PublishedRow[],
+      withheldHorizons: (body.withheld_horizons ?? []) as string[],
+    };
   } catch {
     // Unreachable daemon is not "no news". It is an unknown, and an unknown
     // about whether these numbers are current resolves to not publishing them.
@@ -389,6 +420,7 @@ type PublishedRow = {
   retirement_sticky: boolean;
   reasons?: string[];
   evidence_refs?: string[];
+  figures_withheld?: string; // SD-30: why the daemon nulled this row's figures
 };
 
 export default async function AccuracyPage() {
@@ -466,16 +498,54 @@ export default async function AccuracyPage() {
   const flagged = pub.rows.filter((r) => r.publication_status !== "OK");
   // The registry labels rows "predictor (horizon, variant)"; the daemon splits
   // them. Rebuild the label so each registry row finds its publication verdict.
-  const labelOf = (x: PublishedRow) =>
-    x.predictor + (x.horizon ? ` (${x.horizon}${x.variant ? `, ${x.variant}` : ""})` : "");
-  const pubFor = (label: string) => pub.rows.find((x) => labelOf(x) === label);
+  const pubFor = (label: string) => pub.rows.find((x) => labelOfPublished(x) === label);
 
   const reg = await loadRegistry();
+
+  // BIND THE TWO READS (audit R01). The approval above came from the daemon;
+  // the figures below come from a separate read of a file the grader rewrites.
+  // Nothing tied them together, so a grade landing between the two calls paired
+  // an old approval with new numbers. Both sides stamp graded_at and
+  // grader_sha256; if they disagree — or either is missing — this page saw two
+  // artifacts and publishes neither.
+  const mismatch = bindingMismatch(reg, pub);
+  if (mismatch) {
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+        </header>
+        <RefusalNotice
+          status="REFUSED_UNVERIFIED"
+          title="Figures withheld — approval and figures did not match"
+          reason={
+            "the daemon's publication approval could not be matched to the registry these " +
+            "figures would come from: " + mismatch + ". Nothing is shown rather than pairing " +
+            "an approval with numbers it was not issued for."
+          }
+          gradedAt={pub.gradedAt}
+          testId="accuracy-status-banner"
+        />
+      </div>
+    );
+  }
+
   const rows = reg?.rows ?? [];
+  // A registry row the daemon never judged has no verdict to render. It used to
+  // fall back to the grader's own sentence from the file, which is the single
+  // verdict path this page exists to enforce, bypassed.
+  const unapproved = unapprovedLabels(
+    rows.filter((r) => r.family === "direction" || r.family === "structure"),
+    pub.rows,
+  );
+  // Only rows the daemon judged. An unapproved row is disclosed by name below
+  // rather than dropped silently — a reader must be able to tell "withheld"
+  // from "there was never such a row".
+  const approved = (r: RegistryRow) => !unapproved.includes(r.predictor);
   const directional = rows
-    .filter((r) => r.family === "direction")
+    .filter((r) => r.family === "direction" && approved(r))
     .sort((a, b) => Number(verdictOf(b).startsWith("FAILED")) - Number(verdictOf(a).startsWith("FAILED")));
-  const structural = rows.filter((r) => r.family === "structure");
+  const structural = rows.filter((r) => r.family === "structure" && approved(r));
   const pendingCount = structural.filter((r) => verdictOf(r).startsWith("PENDING")).length;
 
   return (
@@ -569,13 +639,33 @@ export default async function AccuracyPage() {
         </section>
       )}
 
+      {/* Rows in the file that the daemon's publication path never judged.
+          Named, never rendered: the verdict path is the daemon's, and falling
+          back to the file's own sentence is what let an unapproved row publish
+          its metrics (audit R01). */}
+      {unapproved.length > 0 ? (
+        <section className="panel px-5 py-4" aria-label="unapproved rows withheld">
+          <div className="mono text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--warn)" }}>
+            {unapproved.length} row(s) withheld — no publication verdict
+          </div>
+          <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            {unapproved.join(", ")} {unapproved.length === 1 ? "is" : "are"} present in the graded
+            registry but carries no verdict from the publication path, so no figure for{" "}
+            {unapproved.length === 1 ? "it" : "them"} is shown. This is a withholding, not an
+            absence.
+          </p>
+        </section>
+      ) : null}
+
       {/* ── LIVE DIRECTIONAL ROWS, FAILED FIRST ── */}
       {directional.map((r) => (
         <DirectionalRow key={`${r.predictor}|${r.band}`} r={r} minN={reg?.min_independent_n ?? 30} pub={pubFor(r.predictor)} />
       ))}
 
       {/* ── RELIABILITY BINS: where the probabilities are actually wrong ── */}
-      {reg?.calibration ? <CalibrationPanel cal={reg.calibration} /> : null}
+      {reg?.calibration ? (
+        <CalibrationPanel cal={withoutHorizons(reg.calibration, withheldHorizons(pub.rows, pub.withheldHorizons))} />
+      ) : null}
 
       {/* ── STRUCTURAL CLAIMS: PENDING means backtest, not evidence ── */}
       {structural.length > 0 && (
@@ -609,6 +699,7 @@ export default async function AccuracyPage() {
           <div className="border-t px-5 py-2 text-[0.72rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
             A PENDING claim is a backtested number, not a live record — it becomes evidence on the
             first-grade date in its status, never before.
+            <HypotheticalNote short className="mt-1" />
           </div>
         </section>
       )}
@@ -616,8 +707,10 @@ export default async function AccuracyPage() {
       {reg && (
         <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           Regenerated {reg.generated} · minimum {reg.min_independent_n} independent observations
-          for any verdict · survivorship epoch {reg.survivorship_epoch} (earlier rows were graded
-          against a survivor-seeded universe and are excluded) · intervals resample days, not rows.
+          for any verdict · directional window starts {reg.grading_epoch ?? reg.survivorship_epoch}
+          (re-registered 2026-09-20 past the 2026-07-27..08-06 collapsed cross-sections) ·
+          survivorship epoch {reg.survivorship_epoch} (earlier rows were graded against a
+          survivor-seeded universe and are excluded) · intervals resample days, not rows.
         </p>
       )}
 

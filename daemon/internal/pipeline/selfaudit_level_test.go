@@ -30,7 +30,8 @@ func TestSelfAuditFlagsCalibrationAtChance(t *testing.T) {
 	// 40 independent resolved 1d predictions, every one of them called at
 	// cal_prob 0.50 — the definition of no information. Half resolve up, half
 	// down, so reliability lands at 0.50 and bias stays ~0.
-	predTs := time.Now().Add(-10 * 24 * time.Hour).Unix()
+	// Ten days back, but never before the graded window the audit reads.
+	predTs := max(time.Now().Add(-10*24*time.Hour).Unix(), int64(store.GradingEpochTS)+3600)
 	for i := 0; i < 40; i++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("CHANCE%d", i), md.Stocks, "")
 		if err != nil {
@@ -90,7 +91,8 @@ func TestSelfAuditDoesNotFlagInformativeCalibration(t *testing.T) {
 
 	// 40 confident calls that are mostly RIGHT: cal_prob 0.90, 36 of 40 resolve
 	// up. Reliability ~0.14 — far from chance.
-	predTs := time.Now().Add(-10 * 24 * time.Hour).Unix()
+	// Ten days back, but never before the graded window the audit reads.
+	predTs := max(time.Now().Add(-10*24*time.Hour).Unix(), int64(store.GradingEpochTS)+3600)
 	for i := 0; i < 40; i++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("GOOD%d", i), md.Stocks, "")
 		if err != nil {

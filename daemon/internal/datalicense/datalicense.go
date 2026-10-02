@@ -52,6 +52,10 @@ var Sources = map[string]Source{
 		Note:      "market data under the Alpaca agreement; redistribution prohibited",
 		Redistrib: false,
 	},
+	// Crypto forecasts built from these bars still appear in the public proof
+	// record (api.publicRoutes); members get no crypto rows on memberRoutes
+	// (api.refuseMemberCrypto). Whether Kraken's "derived works included"
+	// reaches those public forecasts is an open question for the owner.
 	"cryptohist": {
 		Name: "cryptohist", Class: Licensed, Provider: "Kraken",
 		Note:      "exchange OHLC; terms restrict redistribution, derived works included",
@@ -159,6 +163,27 @@ func RawDataNotice() string {
 // those providers' terms and the ratings are their IP -- so they are governed
 // here even though they are not price bars and BarsRedistributable does not
 // speak to them.
+//
+// THE LICENCE LINE, for every route a member or an anonymous caller reaches:
+//   - RAW is a vendor price, OHLC, volume, quote, rating, headline or message
+//     text, OR a per-row value keyed to a symbol and a time from which a vendor
+//     price or return series can be recovered by arithmetic alone (e.g. a
+//     realized forward return between two vendor closes).
+//   - DERIVED is forecasts, scores, probabilities, regime labels, indicator
+//     values such as close-vs-own-200d-mean, volatility forecasts, and
+//     aggregates over many rows. An aggregate of realized returns KEYED to a
+//     symbol, or to a group a caller can narrow (a market, a postmortem
+//     cluster, a symbol), counts as derived only over >= 10 rows. The score-
+//     bucket means on /api/honesty (buckets[].meanFwd) are exempt for the
+//     reason its points[] are: neither carries a symbol, and a point's ts is
+//     the scoring pass's minute, which every symbol scored in that pass
+//     shares, so nothing joins back to one symbol's closes (see
+//     stripHonestyPoints in the api tests). Differencing successive snapshots
+//     is a known limit of publishing any running aggregate.
+//
+// Members and anonymous callers get DERIVED and public-domain data only.
+// api.TestMemberResponsesCarryNoVendorSentinels holds every member-reachable
+// route to this line with seeded sentinel values.
 var RestrictedRoutes = map[string]string{
 	"/api/bars":       "alpaca",
 	"/api/snaps":      "cryptolive",
@@ -180,7 +205,12 @@ var RestrictedRoutes = map[string]string{
 	// which is the case the release instruction says to withhold on rather than
 	// guess. Loopback operators are unaffected: the guard also requires the
 	// daemon to be reachable beyond localhost before it refuses.
-	"/api/crypto-perp":         "hyperliquid",
+	"/api/crypto-perp": "hyperliquid",
+	// /api/stream/snaps is /api/snaps over SSE: the same cryptolive rows on a
+	// push socket instead of a poll. Found 2026-09-20 by the route scan
+	// (TestEveryRegisteredVendorRouteIsGoverned); a second door for the same
+	// vendor rows with no policy on it, exactly the shape the CSV exports had.
+	"/api/stream/snaps":        "cryptolive",
 	"/api/tv-quote":            "tvscanner",
 	"/api/tv-rating":           "tvscanner",
 	"/api/tv-signals":          "tvscanner",

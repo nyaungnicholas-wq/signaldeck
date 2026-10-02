@@ -157,13 +157,13 @@ export default function CalibrationPanel({
             <div className="flex flex-col gap-4 lg:justify-center">
               <Stat
                 label="reliability"
-                value={n && Number.isFinite(data?.reliability ?? NaN) ? (data!.reliability).toFixed(3) : "—"}
+                value={n && data?.reliability != null && Number.isFinite(data.reliability) ? data.reliability.toFixed(3) : "—"}
                 valueColor={reliabilityColor(data?.reliability ?? NaN, n)}
                 sub="0…1, higher = forecasts land where they claim"
               />
               <Stat
                 label="Brier score"
-                value={n && Number.isFinite(data?.brier ?? NaN) ? (data!.brier).toFixed(4) : "—"}
+                value={n && data?.brier != null && Number.isFinite(data.brier) ? data.brier.toFixed(4) : "—"}
                 sub="mean squared error of P(up); lower = sharper, 0.25 = coin-flip"
               />
               {/* Brier SKILL, always beside the raw Brier. Alone, 0.302 reads
@@ -183,7 +183,9 @@ export default function CalibrationPanel({
                 }
                 sub={
                   data?.brierSkill == null
-                    ? "not gradable yet — needs resolved outcomes on both sides"
+                    ? data?.gated && data.brierNote
+                      ? data.brierNote
+                      : "not gradable yet — needs resolved outcomes on both sides"
                     : `vs always forecasting the ${((data.baseRate ?? 0) * 100).toFixed(1)}% base rate; ` +
                       (data.brierSkill > 0 ? "positive = real probabilistic skill" : "negative = worse than the constant")
                 }
@@ -192,7 +194,7 @@ export default function CalibrationPanel({
                 label="resolved"
                 value={n.toLocaleString("en-US")}
                 valueColor={thin ? "var(--warn)" : "var(--text)"}
-                sub={`prediction → outcome pairs at the ${horizon} horizon`}
+                sub={`independent symbol-day outcomes at the ${horizon} horizon`}
               />
             </div>
           </div>

@@ -41,10 +41,11 @@ func (d Deps) secure(next http.Handler) http.Handler {
 // mount can share the SAME bucket instance rather than getting a second full
 // budget by arriving through a different door (see mcpmount.go).
 func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
-	allowedOrigins := d.Cfg.WebOrigins
 	allowedHosts := d.Cfg.AllowedHosts
 
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Per request: a quick-tunnel URL changes on every restart (accounts.go).
+		allowedOrigins := d.originsNow()
 		// 1. Host allowlist — the request's Host must be one we serve.
 		if !hostAllowed(r.Host, allowedHosts) {
 			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
@@ -93,7 +94,9 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// 4. Rate limit per client key (user id / token / IP), two tiers.
 		writeTier := (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
 			strings.HasPrefix(r.URL.Path, "/api/ai/")
-		if !limiter.allow(d.clientKey(r, uid), writeTier) {
+		// acctKey folds an IPv6 client to its /64: one subscriber line holds
+		// 2^64 addresses, so a per-address bucket was no limit at all there.
+		if !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
 			w.Header().Set("Retry-After", "1")
 			httpErr(w, http.StatusTooManyRequests, "rate limit exceeded — retry in a second")
 			return
@@ -104,7 +107,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// webhook is exempt — TradingView's servers cannot send the header;
 		// that endpoint is authenticated by its own shared secret instead.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) {
+			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) && !csrfExemptUnsubscribe(r) {
 			if r.Header.Get(csrfHeader) == "" {
 				httpErr(w, http.StatusForbidden, "missing "+csrfHeader+" header — every non-GET "+
 					"request must carry it; this is the CSRF guard, not a credential problem")
@@ -125,13 +128,22 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			return
 		}
 
+		// 6b. MEMBER TIER. On a published deployment a non-admin account reaches
+		// the public surface plus memberRoutes and nothing else. Without this,
+		// open sign-up hands any stranger the operator's console (accounts.go).
+		if uid != 0 && d.published() && !d.memberMay(r.URL.Path) && !d.isAdminUID(r.Context(), uid) {
+			httpErr(w, http.StatusForbidden, "not available to member accounts")
+			return
+		}
+
 		// 7. LICENCE. Defence in depth behind publicRoutes, for the route
 		// somebody adds next month and forgets to think about. Gated on
-		// ReachablePrivately() for the same reason rawDataRefused is: the
-		// operator's own unpublished box may read its own data, and a
-		// request-level test can only narrow a config-level answer, never
-		// supply one.
-		if !d.Cfg.AllowRawExport && !d.Cfg.ReachablePrivately() {
+		// published() for the same reason rawDataRefused is: the operator's own
+		// unpublished box may read its own data, while a tunnelled box's
+		// visitors arrive through the loopback web proxy looking local, so
+		// ReachablePrivately() alone cannot tell the two apart. A request-level
+		// test can only narrow a config-level answer, never supply one.
+		if !d.Cfg.AllowRawExport && d.published() {
 			if src, ok, governed := datalicense.RouteRedistributable(r.URL.Path); governed && !ok {
 				httpErr(w, 451, datalicense.RawDataNotice()+
 					" (route governed by the "+src+" licence)")
@@ -169,12 +181,21 @@ func (d Deps) withAccessLog(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+		// A failed body write (responseWriteTimeout firing on a client that
+		// stopped reading: "write tcp ...: i/o timeout") means the response never
+		// arrived, whatever status line went out first. Logged as the handler's
+		// 200, a status-counting monitor scored it a success. 499 is nginx's
+		// client-closed-request code; the handler's own status rides alongside.
+		status, failed := sw.code, []any(nil)
+		if sw.writeErr != nil {
+			status, failed = 499, []any{"handler_status", sw.code, "write_err", sw.writeErr.Error()}
+		}
+		slog.Info("request", append([]any{
 			"method", r.Method,
 			"path", r.URL.Path,
-			"status", sw.code,
+			"status", status,
 			"uid", sw.uid,
-			"ms", time.Since(start).Milliseconds())
+			"ms", time.Since(start).Milliseconds()}, failed...)...)
 	})
 }
 
@@ -183,9 +204,10 @@ func (d Deps) withAccessLog(next http.Handler) http.Handler {
 // the first Write), which is why code is seeded to 200 rather than 0.
 type statusWriter struct {
 	http.ResponseWriter
-	code    int
-	written bool
-	uid     int64 // filled by the guard chain once identity is resolved
+	code     int
+	written  bool
+	writeErr error // first failed body write: the client did not get the response
+	uid      int64 // filled by the guard chain once identity is resolved
 }
 
 func (s *statusWriter) WriteHeader(code int) {
@@ -197,7 +219,11 @@ func (s *statusWriter) WriteHeader(code int) {
 
 func (s *statusWriter) Write(b []byte) (int, error) {
 	s.written = true
-	return s.ResponseWriter.Write(b)
+	n, err := s.ResponseWriter.Write(b)
+	if err != nil && s.writeErr == nil {
+		s.writeErr = err
+	}
+	return n, err
 }
 
 // Flush keeps streaming handlers (SSE) working through the wrapper — without
@@ -278,6 +304,11 @@ var publicRoutes = map[string]bool{
 	// ledger/anchors?recompute=1 already self-gate on userID != 0.
 	"/api/prereg": true, "/api/ledger": true,
 	"/api/ledger/verify": true, "/api/ledger/anchors": true,
+	// The whole chain by seq range, so tools/verify_public_record.py can
+	// recompute it against the heads published in the public anchors repo.
+	// The same entries /api/ledger already serves per symbol: forecasts, no
+	// vendor rows. Paged and capped by maxLedgerRangePerRequest.
+	"/api/ledger/range": true,
 
 	// The only anonymous WRITE. It takes an email and nothing else, it is
 	// behind the write-tier rate limiter and the CSRF header like every other
@@ -285,16 +316,32 @@ var publicRoutes = map[string]bool{
 	// stored -- saying "already subscribed" would let anyone test whether a
 	// given person signed up.
 	"/api/waitlist": true,
+	// One-click unsubscribe from a digest email (plan step 5). The mail client
+	// has no session, so the emailed token is the authority, and all it can do
+	// is turn that one user's email digest OFF. Serves a fixed sentence.
+	"/api/alerts/unsubscribe": true,
 
 	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
 	// the new forecast and is useless if a visitor cannot read it.
 	"/api/vol-forecast/record": true,
 }
 
+// csrfExemptUnsubscribe: the digest unsubscribe POST, by exact path and
+// method only. Its senders (the confirm page's plain form, a mail client's
+// RFC 8058 one-click POST) cannot set the CSRF header, and the emailed token
+// is the credential; a forged POST without it changes nothing.
+func csrfExemptUnsubscribe(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/alerts/unsubscribe"
+}
+
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
-// must work before a credential exists. /api/auth/register is reachable here
-// but still refuses unless Cfg.OpenSignup, which is false on any published
-// deployment.
+// must work before a credential exists. /api/auth/register (and Google
+// sign-up) is reachable here but still refuses unless Cfg.OpenSignup. That
+// defaults to false when the daemon is tunnelled, has a PUBLIC_URL, or
+// allowlists a non-loopback host (config.go `private`); an explicit
+// SIGNALDECK_OPEN_SIGNUP=true opens it anyway, and a stranger's sign-up then
+// gets a member account confined by the member tier (step 6b of secureWith).
+// It never bootstraps the admin over the public site (authRegister).
 func alwaysOpen(path string) bool {
 	return path == "/api/health" || path == "/api/ready" ||
 		strings.HasPrefix(path, "/api/auth/") ||
@@ -363,7 +410,10 @@ func (d Deps) requiresAuth(path string) bool {
 	//     them when the sample is too thin;
 	//   - ledger/verify is CPU-bound (~2.5s), and its resource-exhaustion lever
 	//     was already closed by A11: ledgerVerifyConcurrency caps concurrent
-	//     walks at 2 and ledgerVerifyTimeout bounds each at 30s.
+	//     walks at 2. The default verify is served from a cache, and the build
+	//     behind it is bounded by ledgerVerifyBuildTimeout (2m); ?full=1 and
+	//     /api/ledger/anchors run per request, bounded by ledgerVerifyTimeout
+	//     (30s).
 	//
 	// Known and accepted: verify may APPEND a signed anchor on a cadence (see
 	// maybeAnchor), so this is a public read with a bounded write side effect.
@@ -396,6 +446,30 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/accuracy" || path == "/api/prereg" {
 		return false
 	}
+	// /api/ledger/range joins them (2026-09-30, Nicholas: "make the proof
+	// public"). The public anchors repo's verify.py pages it to recompute the
+	// ledger chain to each published head; measured through the live tunnel it
+	// answered 401 anonymously, which makes that check impossible for exactly the
+	// stranger it is for. Forecasts and hashes only, capped at 5000 rows a
+	// request. Deliberately ONLY this path: /api/ledger and /api/ledger/anchors
+	// stay closed on this posture (TestProofReceiptsArePublicButNarrowly), since
+	// the verifier needs neither and opening them was never decided.
+	if path == "/api/ledger/range" {
+		return false
+	}
+	// The digest email's one-click unsubscribe: tokened, off-switch only (see
+	// publicRoutes). Exact path, BEFORE the /api/alerts prefix below closes it.
+	if path == "/api/alerts/unsubscribe" {
+		return false
+	}
+	// The landing page's waitlist form posts here anonymously. It was opened
+	// only in publicRoutes, so on a daemon published WITHOUT
+	// SIGNALDECK_PUBLIC_SURFACE (the live quick-tunnel posture) every visitor
+	// got 401 and "That didn't go through". Only POST is routed; see the
+	// publicRoutes note for why it is safe to leave open.
+	if path == "/api/waitlist" {
+		return false
+	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than
 	// this gate does: a signed, expiring, revocable per-client key, with
 	// anonymous access permitted only on a privately-reachable bind. Letting
@@ -414,9 +488,15 @@ func (d Deps) requiresAuth(path string) bool {
 	case path == "/api/watchlist",
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
+		// Per-user writes: anonymous, these would file rows under user 0.
+		path == "/api/watch",
+		path == "/api/unwatch",
 		strings.HasPrefix(path, "/api/portfolio"),
 		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),
+		strings.HasPrefix(path, "/api/alert-prefs"),
+		strings.HasPrefix(path, "/api/journal"),
+		path == "/api/ask", // spends LLM budget and reads the caller's own journal
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",

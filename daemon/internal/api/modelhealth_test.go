@@ -154,6 +154,10 @@ func TestModelHealthUngradedWhenResolutionIsOverdue(t *testing.T) {
 		SymbolID: sym.ID, Kind: structregime.Kind(kind),
 		Ts:          time.Now().AddDate(0, 0, -60).Unix(),
 		HorizonDays: 21, Regime: "up", Conviction: 0.8, HistoricalAccuracy: 0.7,
+		// A post-amendment structural call must carry its frozen naive baseline
+		// (store.InsertRegimeOutcome refuses otherwise). Without one this fixture
+		// broke the day now-60d crossed NullAmendmentEpoch (2026-09-24).
+		NaiveLabel: "up",
 	}); err != nil {
 		t.Fatalf("insert outcome: %v", err)
 	}

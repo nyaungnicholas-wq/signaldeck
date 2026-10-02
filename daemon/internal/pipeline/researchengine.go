@@ -387,7 +387,7 @@ func (w *ResearchEngineWorker) gradeHypEras(ctx context.Context, hyp rl.Hypothes
 			WindowFrom: spanFrom, WindowTo: spanTo,
 		})
 		for _, e := range evidence {
-			if err := w.St.InsertLedgerEvidence(ctx, e); err != nil {
+			if err := insertLedgerEvidence(ctx, w.St, e); err != nil {
 				return grades, err
 			}
 		}
@@ -615,7 +615,7 @@ func (w *ResearchEngineWorker) insertCandidate(ctx context.Context, c researchx.
 		WindowFrom: winFrom, WindowTo: winTo,
 	})
 	for _, e := range evidence {
-		if err := w.St.InsertLedgerEvidence(ctx, e); err != nil {
+		if err := insertLedgerEvidence(ctx, w.St, e); err != nil {
 			return err
 		}
 	}

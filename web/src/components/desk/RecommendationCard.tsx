@@ -226,7 +226,9 @@ export default function RecommendationCard({
   }
 
   const d = data;
-  const accuracy = Number.isFinite(d.measuredAccuracyPct) ? `${d.measuredAccuracyPct.toFixed(0)}%` : "—";
+  // 0 is the daemon's "unknown" (gated, or withheld under SD-30), never a measured 0%.
+  const accuracy =
+    Number.isFinite(d.measuredAccuracyPct) && d.measuredAccuracyPct > 0 ? `${d.measuredAccuracyPct.toFixed(0)}%` : "withheld";
 
   return (
     <section className="panel">

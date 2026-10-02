@@ -37,12 +37,26 @@ cp "$(pwd)/tools/build_manifest.py" "$repo/tools/build_manifest.py"
 # a manifest that pins nothing would verify everything, which is the fail-open
 # shape the whole gate exists to close -- so the fixture has to stand in for
 # them. Contents are irrelevant; only that each exists and hashes to something.
-for f in accuracy_registry.py selection_honesty.py publication_gate.py          grader_heartbeat.py live_accuracy.py; do
-  printf 'stub for the fixture
-' > "$repo/tools/$f"
+#
+# The list is READ from build_manifest.SOURCE_ARTIFACTS, not copied here. A
+# hand-kept copy went stale on 2026-09-20 (8b65747 pinned five more files) and
+# every good-build case refused "pinned=6 missing=5" -- CI red on every push
+# for three days. Same python resolution as the guard.
+fx_py=""
+for cand in python3 python py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    fx_py="$cand"; break
+  fi
 done
-printf '# protocol (fixture)
-' > "$repo/PREREGISTRATION.md"
+pins="$(cd "$repo/tools" && "$fx_py" -c 'import build_manifest; print(" ".join(build_manifest.SOURCE_ARTIFACTS))')"
+[ -n "$pins" ] || { echo "FAIL could not read build_manifest.SOURCE_ARTIFACTS"; exit 1; }
+# Space-separated: every pinned path is repo-relative and space-free, and a
+# word list needs no newline handling across Windows and Linux pythons.
+for f in $pins; do
+  f="${f%$(printf '\r')}"
+  mkdir -p "$repo/$(dirname "$f")"
+  echo 'stub for the fixture' > "$repo/$f"
+done
 printf 'FROM scratch\n' > "$repo/Dockerfile"
 # The guard WRITES build-manifest.json into the build context, so without this
 # the fixture goes dirty on its own first build and every later case refuses on
@@ -138,7 +152,7 @@ grep -qi "cannot source" "$work/out" && ok "  refusal names the library" || bad 
 mv "$work/lib-portable.away" "$repo/ops/lib-portable.sh"
 
 # 8. FAIL CLOSED on an unset site URL. The web bundle inlines it at build time,
-# so an image built without it serves localhost robots/sitemap/og forever.
+# so an image built without it serves an empty sitemap and no og: card forever.
 check "unset NEXT_PUBLIC_SITE_URL is refused" "$(env -u SIGNALDECK_ALLOW_LOCALHOST_SITE_URL bash ops/docker-build.sh >"$work/out" 2>&1; echo $?)" "1"
 grep -qi "NEXT_PUBLIC_SITE_URL is unset" "$work/out" && ok "  refusal names the variable" || bad "  refusal names the variable"
 check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_PUBLIC_SIGNALDECK_PUBLIC=1 run)" "0"

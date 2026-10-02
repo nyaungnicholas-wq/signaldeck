@@ -11,8 +11,11 @@ output shape the public repo depends on.
 """
 
 import json
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -150,6 +153,67 @@ class TestRenderTrackRecord(unittest.TestCase):
         self.assertEqual(out.returncode, 0, f"exit {out.returncode}: {out.stderr}")
         rows = [ln for ln in out.stdout.splitlines() if ln.startswith("| ") and "---" not in ln]
         self.assertGreater(len(rows), 1, "the real registry rendered no data rows")
+
+
+
+class TestSD30RenderTrackRecord(unittest.TestCase):
+    """The public anchors README withholds SD-30 rows from the same Go switch,
+    reversed here in a throwaway tree so the committed default does not matter."""
+
+    REGISTRY = {
+        "generated": "2026-10-02T00:00:00Z", "min_independent_n": 30,
+        "survivorship_epoch": "2026-07-24", "null_policy": "prequential majority",
+        "rows": [
+            {"predictor": "directional-ensemble (1d)", "family": "direction", "band": "all",
+             "live_n": 1052, "live_acc": 0.5047, "ci": None, "ci_method": "withheld",
+             "null_prequential": 0.5932, "verdict": "INSUFFICIENT DAYS (3/10 credible days)",
+             "note": "live forward record"},
+            {"predictor": "trend21", "family": "structure", "band": "all", "live_n": 11954,
+             "live_acc": 0.7833, "ci": None, "ci_method": "withheld", "null_prequential": 0.7864,
+             "verdict": "INSUFFICIENT BLOCKS (2/10)", "note": None},
+        ],
+    }
+
+    def _render(self, flag):
+        go = (ROOT / "daemon" / "internal" / "publication" / "withhold.go").read_text(encoding="utf-8")
+        self.reason = re.search(r'^const SD30Reason = "([^"]+)"', go, re.M).group(1)
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            (tmp / "tools").mkdir()
+            for name in ("render_track_record.py", "live_accuracy.py"):
+                shutil.copy(ROOT / "tools" / name, tmp / "tools" / name)
+            pub = tmp / "daemon" / "internal" / "publication"
+            pub.mkdir(parents=True)
+            (pub / "withhold.go").write_text(
+                re.sub(r"^var SD30Withheld = (true|false)", "var SD30Withheld = %s" % str(flag).lower(),
+                       go, flags=re.M), encoding="utf-8")
+            (tmp / "reg.json").write_text(json.dumps(self.REGISTRY), encoding="utf-8")
+            return subprocess.run([sys.executable, str(tmp / "tools" / "render_track_record.py"),
+                                   str(tmp / "reg.json")], capture_output=True, text=True,
+                                  encoding="utf-8", cwd=str(tmp))
+
+    def _row(self, out, name):
+        rows = [ln for ln in out.stdout.splitlines() if ln.startswith("| %s " % name)]
+        self.assertEqual(len(rows), 1, out.stdout)
+        return rows[0]
+
+    def test_flag_on_withholds_directional_row(self):
+        out = self._render(True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        row = self._row(out, "directional-ensemble (1d)")
+        self.assertIn("withheld (SD-30)", row)
+        self.assertIn(self.reason, row)
+        for banned in ("50.5%", "59.3%", "INSUFFICIENT DAYS"):
+            self.assertNotIn(banned, row)
+        self.assertIn("78.3%", self._row(out, "trend21"))
+
+    def test_flag_off_restores_directional_row(self):
+        out = self._render(False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        row = self._row(out, "directional-ensemble (1d)")
+        self.assertIn("50.5%", row)
+        self.assertIn("INSUFFICIENT DAYS (3/10", row)
+        self.assertNotIn("SD-30", out.stdout)
 
 
 if __name__ == "__main__":

@@ -273,7 +273,7 @@ type VersionedOutcome struct {
 // different windows and the difference is load-bearing: a HEAD-TO-HEAD grade
 // between two model versions can use the whole record, since survivorship
 // contamination hits both arms alike, while any gate comparing an ABSOLUTE
-// record against an absolute null must start at SurvivorshipEpoch — that
+// record against an absolute null must start at GradingEpoch (the survivorship epoch until the 2026-09-20 window re-registration) — that
 // comparison is precisely the one the contamination distorts.
 func (s *Store) VersionedOutcomes(ctx context.Context, h md.Horizon, limit int, sinceTs int64) ([]VersionedOutcome, error) {
 	if limit <= 0 {

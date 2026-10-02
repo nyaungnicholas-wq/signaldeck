@@ -10,14 +10,17 @@
 // floor, with a negative margin so its inline footprint stays glyph-sized.
 // The popover is position:fixed and placed from the button's rect (clamped
 // to the viewport, flipped above when there's no room below), so it can't be
-// clipped by .panel overflow or scrolling table wrappers. No dependencies.
+// clipped by .panel overflow or scrolling table wrappers. It is portalled to
+// <body>: .panel's backdrop-filter makes the panel the containing block for
+// fixed descendants, which put viewport-based coords off-screen. No dependencies.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
 function HelpTip({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -35,11 +38,16 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
     if (!btn || !pop) return;
     const r = btn.getBoundingClientRect();
     const pw = pop.offsetWidth;
-    const ph = pop.offsetHeight;
+    const ph = pop.scrollHeight; // natural height, not one a previous maxHeight capped
     const left = Math.min(Math.max(8, r.left + r.width / 2 - pw / 2), window.innerWidth - pw - 8);
-    let top = r.bottom + 8;
-    if (top + ph > window.innerHeight - 8 && r.top - ph - 8 >= 8) top = r.top - ph - 8;
-    setPos({ top, left });
+    // Below unless it only fits above; if it fits neither, take the roomier side
+    // and cap the height to it (the tip scrolls) so it never runs off-screen.
+    const below = window.innerHeight - r.bottom - 8 - 8;
+    const above = r.top - 8 - 8;
+    const down = ph <= below || below >= above;
+    const maxHeight = down ? below : above;
+    const top = down ? r.bottom + 8 : r.top - 8 - Math.min(ph, maxHeight);
+    setPos({ top, left, maxHeight });
   }, []);
 
   // Position before paint on open, then track scroll (capture phase catches
@@ -66,7 +74,8 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
       if (e.key === "Escape") close(true);
     };
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && !wrapRef.current?.contains(e.target)) close(false);
+      const t = e.target;
+      if (t instanceof Node && !wrapRef.current?.contains(t) && !popRef.current?.contains(t)) close(false);
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointerDown);
@@ -105,24 +114,27 @@ function HelpTip({ label, children }: { label: string; children: ReactNode }) {
           <line x1="11.94" y1="16.6" x2="11.95" y2="16.6" strokeWidth="2.4" />
         </svg>
       </button>
-      {open && (
-        <div
-          id={popId}
-          ref={popRef}
-          className="pop-in fixed z-[1000] max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
-          style={{
-            top: pos?.top ?? 0,
-            left: pos?.left ?? 0,
-            visibility: pos ? "visible" : "hidden",
-            background: "var(--panel3)",
-            borderColor: "var(--border-strong)",
-            color: "var(--text)",
-            boxShadow: "var(--shadow-2)",
-          }}
-        >
-          {children}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            id={popId}
+            ref={popRef}
+            className="pop-in fixed z-[1000] overflow-y-auto max-w-[min(320px,calc(100vw-16px))] rounded-lg border p-3 text-left text-[0.75rem] font-normal normal-case leading-relaxed tracking-normal"
+            style={{
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              maxHeight: pos?.maxHeight,
+              visibility: pos ? "visible" : "hidden",
+              background: "var(--panel3)",
+              borderColor: "var(--border-strong)",
+              color: "var(--text)",
+              boxShadow: "var(--shadow-2)",
+            }}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }

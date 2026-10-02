@@ -1,4 +1,5 @@
 import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from "./freshness";
+import { untilWarm } from "./warming";
 
 // Typed client for the SignalDeck API. Every page goes through this module.
 // Default is same-origin ("") — the Next.js app proxies /api/* to the daemon
@@ -16,11 +17,19 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The daemon's raw `error` string, e.g. "warming". */
+    readonly code?: string,
+    /** Retry-After in ms, when the daemon sent one. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
+
+// 503 "warming" handling lives in ./warming (loadable by node --test); get()
+// below waits it out for every caller.
+export { isWarming, untilWarm } from "./warming";
 
 /** The licence guard refusing to redistribute raw bars (daemon returns 451).
  *  Deterministic for a given deployment — retrying never changes it, so a
@@ -44,6 +53,9 @@ export const LICENCE_REFUSAL_TEXT =
   "Raw price bars are licensed by the market-data provider and cannot be " +
   "redistributed, so this deployment does not serve them. Every derived signal " +
   "here — regimes, forecasts, risk — is computed from them and is unaffected.";
+
+import type { CallDirection, Journal, JournalPick } from "@/lib/journal";
+import type { AskAnswer, AskStatus } from "@/lib/ask";
 
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
@@ -230,7 +242,8 @@ function authHeaders(json: boolean): Record<string, string> {
 // daemon-health poll opts out so its connectivity dot stays honest.
 const GET_TTL_MS = 8_000;
 const getCache = new Map<string, { ts: number; data: unknown }>();
-const inflightGet = new Map<string, Promise<unknown>>();
+// warm: the onWarming callbacks of everyone sharing this request.
+const inflightGet = new Map<string, { p: Promise<unknown>; warm: Set<() => void> }>();
 const GET_NO_CACHE = ["/api/health"];
 const getCacheable = (path: string) =>
   typeof window !== "undefined" && !GET_NO_CACHE.some((p) => path.startsWith(p));
@@ -256,16 +269,21 @@ function bustGetCache(): void {
   inflightGet.clear();
 }
 
-async function get<T>(path: string): Promise<T> {
+/** onWarming runs each time the daemon answers 503 "warming" while get() waits
+ *  for it, so a page can say "warming up" rather than show a bare spinner. */
+async function get<T>(path: string, onWarming?: () => void): Promise<T> {
   if (getCacheable(path)) {
     const hit = getCache.get(path);
     if (hit && Date.now() - hit.ts < GET_TTL_MS) return hit.data as T;
   }
   if (getDedupable()) {
     const flying = inflightGet.get(path);
-    if (flying) return flying as Promise<T>;
+    if (flying) {
+      if (onWarming) flying.warm.add(onWarming);
+      return flying.p as Promise<T>;
+    }
   }
-  const fetchP = (async (): Promise<T> => {
+  const once = async (): Promise<T> => {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${path}`, {
@@ -278,9 +296,6 @@ async function get<T>(path: string): Promise<T> {
       throw e;
     }
     if (!res.ok) {
-      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
-      // the daemon answered, just not with data.
-      if (res.status >= 500) recordFailure();
       // Use the daemon's `error` STRING, never the raw response text. Dumping
       // the body put a whole JSON object on screen wherever a component renders
       // the message — /api/bars' 451 licence notice arrived as
@@ -295,31 +310,48 @@ async function get<T>(path: string): Promise<T> {
       // A real `error` string replaces it — that sentence is written for a
       // reader and the status adds nothing to it.
       let msg = `API ${res.status}: ${body || path}`;
+      let code: string | undefined;
       try {
         const parsed = JSON.parse(body) as { error?: string };
-        if (parsed?.error) msg = parsed.error;
+        if (parsed?.error) msg = code = parsed.error;
       } catch {
         /* not JSON — the raw text is the best message available */
       }
-      throw new ApiError(res.status, msg);
+      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
+      // the daemon answered, just not with data. So did a "warming" 503.
+      const warming = res.status === 503 && code === "warming";
+      if (res.status >= 500 && !warming) recordFailure();
+      // In a browser a caller sees this only after get() waited out the 3 min cap.
+      if (warming) msg = "the daemon is still preparing this result; try again in a minute";
+      const ra = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
+      throw new ApiError(res.status, msg, code, Number.isFinite(ra) ? Math.max(1, ra) * 1000 : undefined);
     }
     recordSuccess();
     const data = (await res.json()) as T;
     if (getCacheable(path)) getCache.set(path, { ts: Date.now(), data });
     return data;
-  })();
+  };
+  // A 503 "warming" is waited out HERE (Retry-After, 3 min cap), so every page
+  // gets it rather than the few that remembered to. The in-flight slot covers
+  // the whole wait, so a poll tick or a second component joins it instead of
+  // starting a second loop. Browser only: a server render must not hang. A hidden
+  // tab's wait sends nothing until the tab is seen again (untilWarm).
+  // ponytail: the shared wait cannot tell when its callers unmount, so once all
+  // have gone it still asks once per Retry-After (the daemon says 30 s) until warm
+  // or the 3 min cap, plus the one try a tab hidden past the cap makes once
+  // visible. Stopping it needs an AbortSignal through every wrapper.
+  const warm = new Set<() => void>(onWarming ? [onWarming] : []);
+  const fetchP = getDedupable()
+    ? untilWarm(once, { onWarming: () => warm.forEach((f) => f()) })
+    : once();
   if (getDedupable()) {
-    inflightGet.set(path, fetchP as Promise<unknown>);
+    inflightGet.set(path, { p: fetchP, warm });
     // Clear the in-flight slot once settled (either outcome); the caller still
     // owns fetchP and handles any rejection itself.
-    void fetchP.then(
-      () => {
-        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
-      },
-      () => {
-        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
-      },
-    );
+    const done = () => {
+      if (inflightGet.get(path)?.p === fetchP) inflightGet.delete(path);
+    };
+    void fetchP.then(done, done);
   }
   return fetchP;
 }
@@ -494,6 +526,18 @@ export interface RebalanceResult {
   commonDays?: number;
 }
 
+/** GET /api/alert-prefs: the member's alert settings and what this deployment can deliver. */
+export type AlertPrefs = {
+  emailDigest: boolean;
+  emailVerified: boolean;
+  telegramLinked: boolean;
+  telegramAvailable: boolean;
+  mailAvailable: boolean;
+};
+
+/** POST /api/alert-prefs/telegram-link: a one-time code the member sends to the bot. */
+export type TelegramLink = { code: string; botUsername?: string; expiresAt: number };
+
 export const api = {
   health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
 
@@ -534,8 +578,24 @@ export const api = {
     post<Me>("/api/auth/register", { username, password }),
   login: (username: string, password: string) =>
     post<Me>("/api/auth/login", { username, password }),
+  // Public accounts: email-verified sign-up + password reset (daemon accounts.go).
+  signup: (username: string, email: string, password: string, turnstileToken: string, website: string) =>
+    post<{ status: string }>("/api/auth/register", { username, email, password, turnstileToken, website }),
+  verifyEmail: (token: string) => post<Me>("/api/auth/verify", { token }),
+  // Sign in with Google: the ID token Google's button hands the page (daemon google.go).
+  googleSignIn: (credential: string) => post<Me>("/api/auth/google", { credential }),
+  resendVerify: (email: string) => post<{ status: string }>("/api/auth/resend", { email }),
+  forgotPassword: (email: string, turnstileToken: string) =>
+    post<{ status: string }>("/api/auth/forgot", { email, turnstileToken }),
+  resetPassword: (token: string, password: string) => post<Me>("/api/auth/reset", { token, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
   me: () => get<Me>("/api/auth/me"),
+
+  // Member alerts (daemon step 5). Daily email digest + optional Telegram link.
+  alertPrefs: () => get<AlertPrefs>("/api/alert-prefs"),
+  setEmailDigest: (emailDigest: boolean) => post<unknown>("/api/alert-prefs", { emailDigest }),
+  telegramLink: () => post<TelegramLink>("/api/alert-prefs/telegram-link", {}),
+  telegramUnlink: () => post<{ ok?: boolean }>("/api/alert-prefs/telegram-unlink", {}),
 
   watchlist: () => get<WatchRow[]>("/api/watchlist"),
   symbol: (symbol: string, market: Market) =>
@@ -557,6 +617,29 @@ export const api = {
     post<SymbolInfo>("/api/subscribe", { symbol, market }),
   unsubscribe: (symbol: string, market: Market) =>
     post<SymbolInfo>("/api/unsubscribe", { symbol, market }),
+  // Member-safe watchlist edits: the caller's own list only, already-tracked
+  // symbols only, never starting or stopping ingestion (subscribe/unsubscribe
+  // do both and are operator-only).
+  memberWatchlist: () => get<MemberWatchRow[]>("/api/watchlist"),
+  watch: (symbol: string, market: Market) => post<SymbolInfo>("/api/watch", { symbol, market }),
+  unwatch: (symbol: string, market: Market) => post<SymbolInfo>("/api/unwatch", { symbol, market }),
+  // Member call journal (daemon step 8): the member's own calls and their
+  // grade. The daemon never returns a price or return for a call (licence).
+  journal: () => get<Journal>("/api/journal"),
+  journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
+    post<Journal>("/api/journal", c),
+  journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
+  // The journal's picker: tracked US stocks and ETFs with daily bars, exactly
+  // what POST /api/journal accepts (ETFs are not in the SEC directory).
+  journalSymbols: (q: string) =>
+    get<{ symbols: JournalPick[] }>(`/api/journal/symbols?q=${encodeURIComponent(q)}`),
+  // Ask the data (plan step 10): cited answers from SignalDeck's own tables.
+  askStatus: () => get<AskStatus>("/api/ask"),
+  ask: (question: string) => post<AskAnswer>("/api/ask", { question }),
+  // Risk first (plan step 9). The record is validated by lib/riskHeadline, so
+  // it stays `unknown` here; latest is derived fields only (member route).
+  volForecastRecord: () => get<unknown>("/api/vol-forecast/record"),
+  volForecastLatest: () => get<VolForecastLatest>("/api/vol-forecast/latest"),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
 
@@ -645,6 +728,31 @@ export interface Me {
   id: number;
   username: string;
   isAdmin: boolean;
+  /** The daemon's verdict (api.isMember): a signed-in account that is not the
+   *  operator on a published deployment. Member pages key on THIS, never on
+   *  !isAdmin — on a private deployment every account is the operator. */
+  member?: boolean;
+  /** Whether the FINRA short routes are open to members (SIGNALDECK_MEMBER_FINRA);
+   *  off by default, so member pages hide the short panels instead of fetching a 403. */
+  memberFinra?: boolean;
+}
+
+/** A MEMBER's watchlist row: identity and data freshness only. The daemon
+ *  strips closes, sparks, day change and scores for members (vendor-licensed). */
+/** GET /api/vol-forecast/latest: current HAR forecasts, annualised vol in percent. */
+export interface VolForecastLatest {
+  // The daemon serves forecasts only while the record's next-day verdict is
+  // BEATS THE NULLS; otherwise available is false and only reason is set.
+  available: boolean;
+  reason?: string;
+  verdict?: string;
+  forecasts?: { symbol: string; horizon: number; asOf: number; volPct: number }[];
+  what?: string;
+  caveat?: string;
+}
+
+export interface MemberWatchRow extends SymbolInfo {
+  latestBarTs: number;
 }
 
 export interface NewsItem {
@@ -704,9 +812,16 @@ export interface CalBin {
 }
 export interface Calibration {
   horizon: Horizon;
+  // Independent (symbol, settled trading day) observations, not rows (CAL-N).
   n: number;
+  distinctDays?: number;
+  // Below minIndependentN observations or minDistinctDays days every headline
+  // figure (brier, reliability, brierSkill) is null and brierNote says why.
+  gated?: boolean;
+  minIndependentN?: number;
+  minDistinctDays?: number;
   bins: CalBin[];
-  brier: number;
+  brier: number | null;
   // Brier SKILL against the constant base-rate forecast: 1 - brier/(p(1-p)).
   // A bare Brier score is not interpretable — 0.302 reads as small until the
   // 56% base rate puts the constant forecast at 0.246, i.e. the model is 23%
@@ -717,7 +832,7 @@ export interface Calibration {
   baseRate: number | null;
   brierRef: number | null;
   brierNote?: string;
-  reliability: number;
+  reliability: number | null;
   // Phase 0 labeling: calibration is backtested / in-sample until live.
   live?: boolean;
   trackLabel?: string;
@@ -1269,9 +1384,26 @@ export interface LedgerAnchoring {
 export interface LedgerTamperEvidence {
   /** Edits, deletions, reorderings and insertions break the recomputation. */
   detectsEdits?: boolean;
-  /** True only while an anchor reproduces AND none are failing. */
+  /**
+   * Operator-resistant anteriority, which needs an EXTERNAL receipt and is
+   * therefore false until one is verified. It used to be set from a locally
+   * reproducing anchor, which the operator passes by re-signing (audit F09).
+   */
   detectsOperatorRegeneration?: boolean;
-  /** Newest seq covered by a reproducing anchor. null = nothing is proven. */
+  /** A local Ed25519 anchor still reproduces and none are failing. */
+  localAnchorsReproduce?: boolean;
+  /** Who the provenAnterior* numbers constrain — and who they do not. */
+  anteriorityScope?: string;
+  /** Whether an anchor digest was matched against a third party's copy. */
+  externalWitness?: {
+    verified?: boolean;
+    receipt?: unknown;
+    reason?: string;
+  };
+  /** Newest seq whose local anchor reproduces — even while an older one fails. */
+  localAnchorReproducesThroughSeq?: number | null;
+  /** Newest seq covered by a reproducing anchor, null whenever any anchor
+   *  fails. null = nothing is proven. */
   provenAnteriorThroughSeq?: number | null;
   provenAnteriorThroughCount?: number | null;
   /** Unix seconds of that anchor. */
@@ -1279,6 +1411,9 @@ export interface LedgerTamperEvidence {
   anchorCount?: number;
   /** "stored" compares against stored head hashes; ?full=1 re-derives payloads. */
   anchorCheckMode?: string;
+  /** anchorCheckMode as booleans: which check produced the answer above. */
+  storedHeadComparison?: boolean;
+  payloadRecomputed?: boolean;
   /** A signed anchor that STOPS reproducing is positive evidence of a rewrite. */
   failingAnchors?: number;
   firstFailingSeq?: number | null;
@@ -1296,6 +1431,8 @@ export interface LedgerVerifyResponse {
   /** The daemon's own scoping of what `intact` does and does not establish. */
   intactMeans?: string;
   tamperEvidence?: LedgerTamperEvidence;
+  /** When the daemon ran this verification (RFC 3339, UTC); the result is cached. */
+  computedAt?: string;
 }
 
 /** The committed ledger entries for one symbol+horizon (newest first). */
@@ -1307,8 +1444,8 @@ export interface LedgerResponse {
 }
 
 /** Recompute + verify the whole prediction-ledger hash chain. */
-export function ledgerVerify() {
-  return get<LedgerVerifyResponse>("/api/ledger/verify");
+export function ledgerVerify(onWarming?: () => void) {
+  return get<LedgerVerifyResponse>("/api/ledger/verify", onWarming);
 }
 
 /** One frozen claim on the pre-registration chain. */
@@ -1663,7 +1800,8 @@ export interface TrackByMarket {
   market: Market;
   n: number;
   upRate: number; // realized fraction of up moves in this market
-  meanFwd: number; // mean realized forward return
+  // Mean realized forward return. Absent for non-operators when n < 10 (withheld).
+  meanFwd?: number;
   dirHitRate: number; // fraction of directional bets (prob>0.5 == up) that were right
 }
 
@@ -1684,6 +1822,9 @@ export interface TrackLedger {
   intact: boolean;
   count: number;
   head: string;
+  brokenAtSeq?: number;
+  /** Signed anchors that no longer reproduce; read through ledgerHeadline, as /proof does. */
+  tamperEvidence?: { failingAnchors?: number };
 }
 
 /** The /api/track-record payload. Skill numbers are null when `gated`. */
@@ -1725,8 +1866,8 @@ export interface TrackRecord {
 }
 
 /** Fetch the live out-of-sample track record for a horizon (default 1d). */
-export function trackRecord(horizon: Horizon = "1d") {
-  return get<TrackRecord>(`/api/track-record?horizon=${horizon}`);
+export function trackRecord(horizon: Horizon = "1d", onWarming?: () => void) {
+  return get<TrackRecord>(`/api/track-record?horizon=${horizon}`, onWarming);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

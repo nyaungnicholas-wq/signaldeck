@@ -36,6 +36,12 @@ func normaliseEmail(raw string) (string, bool) {
 		if e[i] < 0x20 || e[i] == 0x7f || e[i] == ' ' {
 			return "", false
 		}
+		// Address-list and route syntax: legal in RFC 5322 quoted forms, never
+		// in an address a person types, and each one can split or re-route an
+		// SMTP RCPT TO / To: header once this value is used to send mail.
+		if strings.IndexByte(`<>(),;:"[]\`, e[i]) >= 0 {
+			return "", false
+		}
 	}
 	at := strings.IndexByte(e, '@')
 	if at <= 0 || at != strings.LastIndexByte(e, '@') || at == len(e)-1 {

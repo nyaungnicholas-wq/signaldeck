@@ -63,6 +63,7 @@ func seedResolvedPrediction(t *testing.T, st *store.Store, symbolID int64, h md.
 // (winRate/brier/ic == null) and returns a "not yet significant (k/threshold)"
 // note. This is the honest, mostly-empty state the page must render today.
 func TestTrackRecord_GatedWhenThin(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
@@ -72,9 +73,9 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 
 	const day = int64(86400)
 	// Anchored at the survivorship epoch: ResolvedPredictionOutcomes floors on
-	// it (store.SurvivorshipEpochTS), so a fixture dated 2023 — as this was —
+	// it (store.GradingEpochTS), so a fixture dated 2023 — as this was —
 	// is filtered out entirely and the assertions below grade an empty set.
-	base := int64(store.SurvivorshipEpochTS)
+	base := int64(store.GradingEpochTS)
 	base -= base % day
 	// 3 distinct days, MANY rows each → rawN large, independentN = 3 (< 30).
 	for di := 0; di < 3; di++ {
@@ -114,6 +115,7 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 // handler reports a winRate + Brier + IC, each with a CI, and the numbers are
 // arithmetically correct on a controlled sample.
 func TestTrackRecord_UngatedMath(t *testing.T) {
+	sd30Off(t) // the ungated math is what the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "BBB", md.Stocks, "")
@@ -122,7 +124,7 @@ func TestTrackRecord_UngatedMath(t *testing.T) {
 	}
 
 	const day = int64(86400)
-	base := int64(store.SurvivorshipEpochTS) // must be >= the epoch; see above
+	base := int64(store.GradingEpochTS) // must be >= the epoch; see above
 	base -= base % day
 	// 40 distinct symbol-days (one row each), a strong directional signal:
 	// prob=0.8 on up days (fwd>0), prob=0.2 on down days (fwd<0). Alternating,
@@ -193,6 +195,7 @@ func TestTrackRecord_UngatedMath(t *testing.T) {
 // earlier, already-resolved days. (A resolved row's prob is frozen; its outcome
 // is realized. There is no path for future data to re-grade a past prediction.)
 func TestTrackRecord_NoLookahead(t *testing.T) {
+	sd30Off(t) // the ungated math is what the SD-30 flag reverses to; sd30_withhold_test.go covers the flag on
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "CCC", md.Stocks, "")
@@ -200,7 +203,7 @@ func TestTrackRecord_NoLookahead(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 	const day = int64(86400)
-	base := int64(store.SurvivorshipEpochTS) // must be >= the epoch; see above
+	base := int64(store.GradingEpochTS) // must be >= the epoch; see above
 	base -= base % day
 
 	seedRange := func(fromDay, toDay int) {

@@ -147,7 +147,9 @@ after 12:00 UTC (wall-clock test bug, already filed). Everything else failing is
 
 # PHASE 2 — SERVICES & LIVENESS
 
-1. `launchctl list | grep -E 'signaldeck|tickstream'` — all loaded? Any nonzero exit status?
+1. `powershell -NoProfile -File ops/check-task-health.ps1` — fleet healthy, and no
+   definition drift against `ops/tasks/*.xml`? (Was `launchctl list`, which returns
+   NOTHING on Windows, so a verifier following it concluded "no services loaded".)
 2. Ports 8322 (daemon), 8323 (web), 8321 (tickstream), tunnel — all answering?
 3. `logs/` — any panic, any fatal, any stack trace? (`grep -ciE 'panic|fatal' logs/*.log`)
 4. Log sizes: is anything growing unbounded? (Known: `tickstream.out.log` ~110 MB, no rotation —

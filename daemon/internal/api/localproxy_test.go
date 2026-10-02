@@ -148,3 +148,24 @@ func TestRawDataRefusedIgnoresKeyWhenUnconfigured(t *testing.T) {
 		t.Fatalf("expected 451 when LocalProxyKey unconfigured, got %d", rec.Code)
 	}
 }
+
+// The live posture: loopback bind, the keyed web proxy in front, a quick tunnel
+// publishing it. ALLOWED_HOSTS carrying no public name must NOT make that look
+// private — the tunnel log alone says strangers arrive, through the proxy.
+func TestRawDataRefusedOnTunnelledDaemonEvenFromKeyedProxy(t *testing.T) {
+	d, _ := newExportDeps(t)
+	d.Cfg.LocalProxyKey = "test-local-key"
+	d.Cfg.TunnelLog = "logs/quicktunnel.log"
+	if !d.Cfg.ReachablePrivately() {
+		t.Skip("fixture is not privately reachable; the case under test needs it to be")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/export/bars.csv?symbol=AAPL&market=stocks", nil)
+	req.RemoteAddr = "127.0.0.1:51234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	req.Header.Set("X-Signaldeck-Local", "test-local-key")
+	rec := httptest.NewRecorder()
+	d.exportBars(rec, req)
+	if rec.Code != http.StatusUnavailableForLegalReasons {
+		t.Fatalf("tunnelled daemon served raw bars to a proxied visitor: %d, want 451", rec.Code)
+	}
+}

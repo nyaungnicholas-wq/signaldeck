@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, isAuthError, type Me } from "@/lib/api";
+import { api, ApiError, isAuthError, type Me } from "@/lib/api";
+import { useIsMember } from "@/hooks/useMe";
+import { memberMayVisit } from "@/lib/memberPages";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
@@ -12,6 +14,7 @@ import HelpPanel, { HELP_EVENT } from "@/components/HelpPanel";
 import UxProbe from "@/components/UxProbe";
 import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
+import { visibleInterval } from "@/lib/visibleInterval";
 import { noteVisit } from "@/lib/goal";
 import { isPublicRoute } from "@/lib/publicRoutes";
 import PublicNav from "@/components/PublicNav";
@@ -52,6 +55,8 @@ const NAV: NavItem[] = [
     label: "WATCHLIST",
     match: ["/watchlist", "/deck", "/compare"],
   },
+  // Ask the data (daemon plan step 10): cited answers from SignalDeck's tables.
+  { href: "/ask", label: "ASK", match: ["/ask"] },
   {
     href: "/intel/news",
     label: "INTEL",
@@ -94,6 +99,20 @@ const ADVANCED_DOOR: NavItem = {
   label: "ADVANCED",
   match: ["/advanced", ...NAV.filter((n) => n.advanced).flatMap((n) => n.match)],
 };
+
+// MEMBERS (signed in, not the operator, on a published deployment) see only
+// what the daemon's member tier serves: validated regimes, public-domain intel,
+// their own watchlist and the public record. Every other page would render a
+// wall of 403s, so the Shell sends members home from it (lib/memberPages)
+// before its children mount.
+const MEMBER_NAV: NavItem[] = [
+  { href: "/today", label: "TODAY", match: ["/today"] },
+  { href: "/market/regimes", label: "REGIMES", match: ["/market/regimes", "/market/breadth"] },
+  { href: "/watchlist", label: "WATCHLIST", match: ["/watchlist", "/s"] },
+  { href: "/journal", label: "MY CALLS", match: ["/journal"] },
+  { href: "/ask", label: "ASK", match: ["/ask"] }, // shown only while the daemon offers it to members
+  { href: "/accuracy", label: "RECORD", match: ["/accuracy", "/proof", "/volatility"] },
+];
 
 const READING_KEY = "sd-reading-mode";
 const VIEW_KEY = "sd-view-mode";
@@ -216,7 +235,9 @@ function AlertsBell() {
           setCount(null); // 401 / offline → hide
         });
     load();
-    const t = setInterval(() => {
+    // Not from a hidden tab: an operator tab left open on the public URL
+    // would otherwise poll through the tunnel all day.
+    const stopPoll = visibleInterval(() => {
       if (!paused) load();
     }, 30000);
     const onSeen = () => load(); // refresh immediately after "mark all read"
@@ -227,7 +248,7 @@ function AlertsBell() {
     window.addEventListener("focus", onFocus);
     return () => {
       alive = false;
-      clearInterval(t);
+      stopPoll();
       window.removeEventListener("sd-alerts-seen", onSeen);
       window.removeEventListener("focus", onFocus);
     };
@@ -287,24 +308,37 @@ function AuthChip() {
     <button
       type="button"
       onClick={() => {
-        api
-          .logout()
-          .catch(() => {})
-          // A FULL navigation, not router.replace. AuthGate's `ready` flag is
-          // mount-scoped and deliberately latches true so protected pages never
-          // re-flash; a client-side replace does not remount it, so after a
-          // logout the gate stayed open and a back-navigation painted the whole
-          // app chrome to a signed-out user. (The data itself was safe — the
-          // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
-          // exists to prevent.) A hard load remounts the gate and re-checks.
-          //
+        // A FULL navigation, not router.replace. AuthGate's `ready` flag is
+        // mount-scoped and deliberately latches true so protected pages never
+        // re-flash; a client-side replace does not remount it, so after a
+        // logout the gate stayed open and a back-navigation painted the whole
+        // app chrome to a signed-out user. (The data itself was safe — the
+        // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
+        // exists to prevent.) A hard load remounts the gate and re-checks.
+        //
+        // Only on SUCCESS. This used to swallow a failed logout and navigate
+        // anyway, landing a user whose session was still live on /login and
+        // telling them they were signed out. Say so instead; a retry is a click.
+        api.logout().then(
           // The rule below arrived with eslint-config-next 16.3 and fires on
-          // exactly the behaviour this line wants. It is right in general and
-          // wrong here: router.push/replace is a soft navigation, which is the
-          // defect described above. Disabled on this one line, with the reason,
-          // rather than left as a standing warning nobody reads.
+          // exactly the behaviour this line wants: router.push/replace is a
+          // soft navigation, which is the defect described above.
           // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a hard load is required to remount AuthGate after logout
-          .finally(() => window.location.assign("/login"));
+          () => window.location.assign("/login"),
+          (e: unknown) => {
+            // The daemon ANSWERED (ApiError): it has already cleared this
+            // browser's cookie and says whether the server-side session
+            // survived, so relay its words and leave. No answer at all
+            // (network): nothing changed, so say so and stay.
+            if (e instanceof ApiError) {
+              window.alert(e.message);
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- same hard load as above
+              window.location.assign("/login");
+            } else {
+              window.alert("Log out failed: the server could not be reached, so you are still signed in. Try again.");
+            }
+          },
+        );
       }}
       title={`signed in as ${me.username} — click to log out`}
       aria-label={`signed in as ${me.username} — log out`}
@@ -371,10 +405,33 @@ function Brand() {
 /** App chrome: brand bar + nav + daemon connectivity dot. */
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [up, setUp] = useState<boolean | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const pro = useSyncExternalStore(subscribeViewMode, getViewModePro, getServerFalse);
   const label = useLabel();
+  const { member, known } = useIsMember();
+  const offLimits = member && !memberMayVisit(pathname);
+  // Operator widgets (alerts, palette, freshness, tour) wait for the answer too:
+  // rendered while it is pending, the alerts bell fired /api/alerts and took a 403.
+  const operatorChrome = known && !member;
+  useEffect(() => {
+    if (offLimits) router.replace("/today");
+  }, [offLimits, router]);
+  // Members see ASK only when the daemon answers available (it is off for
+  // members until SIGNALDECK_MEMBER_COPILOT=1, and answers 403 to an ask).
+  const [askOpen, setAskOpen] = useState(false);
+  useEffect(() => {
+    if (!member) return;
+    let alive = true;
+    api
+      .askStatus()
+      .then((s) => alive && setAskOpen(s.available))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [member]);
 
   // Setup-checklist milestones are recorded here, from the one place every
   // navigation already passes through — cheaper and harder to forget than
@@ -391,10 +448,13 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         .then(() => alive && setUp(true))
         .catch(() => alive && setUp(false));
     check();
-    const t = setInterval(check, 10000);
+    // A hidden tab sends nothing: one forgotten tab polling every 10 s was
+    // 8,640 requests a day against whatever metered front the site sits behind.
+    // Coming back into view checks at once, then the 10 s cadence carries on.
+    const stopPoll = visibleInterval(check, 10000);
     return () => {
       alive = false;
-      clearInterval(t);
+      stopPoll();
     };
   }, []);
 
@@ -406,8 +466,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     if (menuOpen) setMenuOpen(false);
   }
 
-  // SIMPLE shows three hubs plus the Advanced door; PRO shows all five.
-  const hubs = pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
+  // SIMPLE shows three hubs plus the Advanced door; PRO shows all five. Members
+  // get their own four; nothing renders until we know which, so a member never
+  // sees the operator's hubs flash past.
+  const memberNav = askOpen ? MEMBER_NAV : MEMBER_NAV.filter((n) => n.href !== "/ask");
+  const hubs = !known ? [] : member ? memberNav : pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
 
   const navLinks = hubs.map((n) => {
     const active =
@@ -469,7 +532,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link href="/dashboard" className="inline-flex shrink-0 items-center">
+          <Link href={member ? "/today" : "/dashboard"} className="inline-flex shrink-0 items-center">
             <Brand />
             <span
               className="ml-3 hidden text-[0.75rem] tracking-wider xl:inline"
@@ -489,6 +552,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 text-[0.75rem]"
             style={{ color: "var(--dim)" }}
           >
+            {/* Members get none of the operator widgets below: the command
+                palette, tour, help, alerts and freshness all read operator
+                routes and would answer them with 403s. */}
+            {operatorChrome && (<>
             {/* Command palette trigger — the keyboard-free way in; ⌘K/Ctrl+K
                 fires the same event listener inside CommandPalette. */}
             <button
@@ -516,16 +583,17 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <span className="hidden sm:inline">help</span>
             </button>
             <AlertsBell />
+            </>)}
             <AuthChip />
             {/* Secondary controls: inline on desktop, folded into the menu panel
                 on mobile so the header row can't overflow a phone width (which
                 was pushing the menu off-canvas). */}
-            <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
+            {operatorChrome && <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
               <FreshnessBadge />
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </HeaderTools></div>
+            </HeaderTools></div>}
             {/* Mobile menu button */}
             <button
               type="button"
@@ -548,7 +616,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             >
               {navLinks}
             </nav>
-            <div
+            {operatorChrome && <div
               className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-[0.75rem]"
               style={{ borderColor: "var(--border)", color: "var(--dim)" }}
             >
@@ -556,17 +624,31 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </div>
+            </div>}
           </div>
         )}
       </header>
-      <CommandPalette />
-      <FirstRunTour />
-      <HelpPanel />
-      <UxProbe />
-      <NextStep />
+      {operatorChrome && (
+        <>
+          <CommandPalette />
+          <FirstRunTour />
+          <HelpPanel />
+          <UxProbe />
+          <NextStep />
+        </>
+      )}
       <main id="main" className="flex flex-1 flex-col gap-4">
-        {children}
+        {/* An off-limits page never mounts for a member: its effects would fire
+            operator requests before the redirect lands. Nothing mounts until we
+            know who is signed in, either -- measured on a direct visit to
+            /dashboard, the page mounted in that gap and sent /api/dashboard. */}
+        {!known ? null : offLimits ? (
+          <p className="panel px-4 py-3 text-sm" style={{ color: "var(--dim)" }}>
+            That page is part of the operator console. Taking you to Today…
+          </p>
+        ) : (
+          children
+        )}
       </main>
       <footer
         className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"

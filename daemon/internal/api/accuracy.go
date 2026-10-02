@@ -96,14 +96,24 @@ type registryRow struct {
 }
 
 type accuracyResponse struct {
-	Status       string        `json:"status"`
-	GraderFresh  bool          `json:"grader_fresh"`
-	Reason       string        `json:"reason,omitempty"`
-	GeneratedAt  time.Time     `json:"generated_at"`
-	GradedAt     string        `json:"graded_at,omitempty"`
-	RefusedSince string        `json:"refused_since,omitempty"`
-	GraderSHA256 string        `json:"grader_sha256,omitempty"`
-	Rows         []accuracyRow `json:"rows,omitempty"`
+	Status      string `json:"status"`
+	GraderFresh bool   `json:"grader_fresh"`
+	// GraderStaleReason carries the heartbeat's own sentence when the grader is
+	// NOT fresh. It exists because `reason` is owned by the publication
+	// decision: when a refused window ALSO has a stale or missing heartbeat,
+	// both facts have to reach the reader, and overwriting one with the other
+	// is what made grader_fresh unreadable in the first place.
+	GraderStaleReason string        `json:"grader_stale_reason,omitempty"`
+	Reason            string        `json:"reason,omitempty"`
+	GeneratedAt       time.Time     `json:"generated_at"`
+	GradedAt          string        `json:"graded_at,omitempty"`
+	RefusedSince      string        `json:"refused_since,omitempty"`
+	GraderSHA256      string        `json:"grader_sha256,omitempty"`
+	Rows              []accuracyRow `json:"rows,omitempty"`
+	// WithheldHorizons names every horizon SD-30 withholds, whether or not a
+	// row for it is present, so a page drawing per-horizon figures from the
+	// registry FILE (the reliability bins) can drop them on the switch itself.
+	WithheldHorizons []string `json:"withheld_horizons,omitempty"`
 }
 
 type accuracyRow struct {
@@ -125,17 +135,49 @@ type accuracyRow struct {
 	DistinctDays      *int     `json:"distinct_days"`
 	CIMethod          string   `json:"ci_method,omitempty"`
 	Note              string   `json:"note,omitempty"`
+	// FiguresWithheld is the reason this row's accuracy, null and skill are
+	// null (publication.DirectionalWithheld). The web page renders figures
+	// from the registry FILE, so it needs this to know not to.
+	FiguresWithheld string `json:"figures_withheld,omitempty"`
 }
 
 func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := d.now().UTC()
 
+	// FRESHNESS IS NOT PUBLICATION STATUS, AND THIS IS WHERE THAT GOT CONFUSED.
+	//
+	// `grader_fresh` answers one operational question: did the grader run, and
+	// recently? Every refusal below used to hard-code it false, so a REFUSED
+	// window reported a broken grader even when the heartbeat said otherwise —
+	// on 2026-09-19 the API served grader_fresh=false while the heartbeat held
+	// success=1 at 21:10:05.873Z, inside the 26h window. That reads as an
+	// outage, and an outage is exactly what a measured scientific refusal is
+	// not. Operators chasing a dead scheduler that was never dead is the cost.
+	//
+	// So it is measured ONCE, here, before any branch, and every response below
+	// reports what was measured. The BRANCH ORDER is unchanged: the registry's
+	// own refusal marker still outranks the heartbeat, because a refusal is a
+	// decision about the figures and staleness is a fact about the process.
+	// Only the reported value moved.
+	stale, staleWhy, staleErr := d.St.GraderStale(ctx, GraderTask, GraderMaxAge, now)
+	graderFresh := staleErr == nil && !stale
+	// The heartbeat's sentence, for the paths that are refusing for a DIFFERENT
+	// reason and must still disclose this one. Empty when the grader is fresh.
+	graderStaleReason := ""
+	switch {
+	case staleErr != nil:
+		graderStaleReason = "grader heartbeat unreadable: " + staleErr.Error()
+	case stale:
+		graderStaleReason = staleWhy
+	}
+
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			Reason: "accuracy registry unavailable: " + err.Error(),
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
+			GraderStaleReason: graderStaleReason,
+			Reason:            "accuracy registry unavailable: " + err.Error(),
 		})
 		return
 	}
@@ -149,25 +191,27 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			reason += ": " + reg.RefusalReason
 		}
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt, RefusedSince: *reg.RefusedSince,
-			Reason: reason,
+			GraderStaleReason: graderStaleReason,
+			Reason:            reason,
 		})
 		return
 	}
 
-	stale, why, err := d.St.GraderStale(ctx, GraderTask, GraderMaxAge, now)
-	if err != nil {
+	if staleErr != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			Reason: "grader heartbeat unreadable: " + err.Error(),
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
+			GraderStaleReason: graderStaleReason,
+			Reason:            "grader heartbeat unreadable: " + staleErr.Error(),
 		})
 		return
 	}
 	if stale {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED_STALE", GraderFresh: false, GeneratedAt: now,
-			GradedAt: reg.GradedAt, Reason: why,
+			Status: "REFUSED_STALE", GraderFresh: graderFresh, GeneratedAt: now,
+			GradedAt: reg.GradedAt, GraderStaleReason: graderStaleReason,
+			Reason: staleWhy,
 		})
 		return
 	}
@@ -204,10 +248,10 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// them would publish a fabricated scientific verdict every time a database
 	// read timed out, which is the same dishonesty as publishing the rows,
 	// pointed the other way.
-	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
+	reason, collapsed, err := d.collapsedGradingWindowCached(ctx, reg, now)
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED_UNAVAILABLE", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED_UNAVAILABLE", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
 			Reason: "the collapsed-cross-section gate could not be evaluated, so these " +
 				"figures are withheld WITHOUT having been judged — this is a check " +
@@ -217,7 +261,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	}
 	if collapsed {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt, Reason: reason,
 		})
 		return
@@ -233,7 +277,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	claims, err := d.St.EvidenceClaims(ctx, "", "")
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
 			Reason:   "evidence claims unreadable: " + err.Error(),
 		})
@@ -248,7 +292,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// An unreadable history must not read as "never retired".
 			writeAccuracyRefusal(w, accuracyResponse{
-				Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+				Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 				Reason: "retirement history unreadable: " + err.Error(),
 			})
 			return
@@ -304,7 +348,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rows = append(rows, accuracyRow{
+		row := accuracyRow{
 			Predictor: predictor, Horizon: horizon, Variant: variant,
 			Family:            rr.Family,
 			PublicationStatus: v.PublicationStatus,
@@ -321,12 +365,32 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			DistinctDays:      rr.DistinctDays,
 			CIMethod:          rr.CIMethod,
 			Note:              rr.Note,
-		})
+		}
+		// SD-30: the directional rows (the ensemble and its benchmark) are graded
+		// on a label mostly realised at issue. The verdict above still ran and
+		// still persists; only what is served changes. Retirement stays visible,
+		// because it is a fact about the record, not a figure over this label.
+		if why, ok := publication.DirectionalWithheld(horizon); ok && (rr.Family == "direction" || rr.Family == "benchmark") {
+			row.LiveAcc, row.NullAcc, row.Skill = nil, nil, nil
+			row.FiguresWithheld = why
+			row.Reasons = append([]string{why}, row.Reasons...)
+			if !row.Retired {
+				row.PublicationStatus = "REFUSED"
+			}
+		}
+		rows = append(rows, row)
 	}
 
+	var withheldH []string
+	for _, h := range []string{"1d", "1w"} {
+		if _, ok := publication.DirectionalWithheld(h); ok {
+			withheldH = append(withheldH, h)
+		}
+	}
 	writeJSONStatus(w, http.StatusOK, accuracyResponse{
-		Status: "OK", GraderFresh: true, GeneratedAt: now,
+		Status: "OK", GraderFresh: graderFresh, GeneratedAt: now,
 		GradedAt: reg.GradedAt, GraderSHA256: reg.GraderSHA256, Rows: rows,
+		WithheldHorizons: withheldH,
 	})
 }
 
@@ -505,7 +569,7 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 	// comment named. Reading from the epoch is a superset of the graded days
 	// (the grader also drops thin, unsettled and stale-feed days), so it can
 	// only over-refuse, never under-refuse.
-	since := time.Unix(store.SurvivorshipEpoch, 0).UTC()
+	since := time.Unix(store.GradingEpoch, 0).UTC()
 	for _, h := range horizons {
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {

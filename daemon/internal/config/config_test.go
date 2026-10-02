@@ -83,3 +83,33 @@ func TestExplicitEnvStillWins(t *testing.T) {
 		t.Error("an explicit SIGNALDECK_PUBLIC_READS=true was overridden by the tunnel default")
 	}
 }
+
+// A9, third shape (2026-09-30): the live box publishes through a QUICK tunnel
+// whose log the daemon reads, while its allowlist still carried a stale ngrok
+// host. That stale host was the only thing keeping these defaults closed;
+// dropping it (the 2026-09-20 CLOUDFLARE_TUNNEL.md said to; today's allows it
+// once the ngrok webhook tunnel is retired) would have opened them. The
+// tunnel log (or a public URL) must close them on its own.
+func TestOpenDefaultsClosedWhenATunnelLogOrPublicURLIsSet(t *testing.T) {
+	// An empty root: otherwise Load() fills the blanked vars below from the
+	// live daemon/.env, whose tunnel log closes the "plain dev box" case.
+	t.Setenv("SIGNALDECK_ROOT", t.TempDir())
+	t.Setenv("SIGNALDECK_ASSUME_TUNNEL", "0")
+	t.Setenv("SIGNALDECK_HTTP", "127.0.0.1:8322")
+	t.Setenv("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")
+	t.Setenv("SIGNALDECK_PUBLIC_READS", "")
+	t.Setenv("SIGNALDECK_OPEN_SIGNUP", "")
+	t.Setenv("SIGNALDECK_PUBLIC_URL", "")
+	t.Setenv("SIGNALDECK_TUNNEL_LOG", "")
+	if c := Load(); !c.PublicReads || !c.OpenSignup {
+		t.Fatalf("plain loopback dev box: PublicReads=%v OpenSignup=%v, want open", c.PublicReads, c.OpenSignup)
+	}
+	for _, env := range []string{"SIGNALDECK_TUNNEL_LOG", "SIGNALDECK_PUBLIC_URL"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "set")
+			if c := Load(); c.PublicReads || c.OpenSignup {
+				t.Fatalf("%s set: PublicReads=%v OpenSignup=%v, want both closed by default", env, c.PublicReads, c.OpenSignup)
+			}
+		})
+	}
+}

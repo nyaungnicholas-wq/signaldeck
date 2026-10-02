@@ -42,6 +42,7 @@ func (s *Store) VolForecastForSymbol(ctx context.Context, symbolID int64) (VolFo
 	if err != nil {
 		return VolForecast{}, false, err
 	}
+	v.Forecast = volregime.Labelled(v.Forecast)
 	return v, true, nil
 }
 
@@ -71,6 +72,7 @@ func (s *Store) VolForecasts(ctx context.Context) ([]VolForecast, error) {
 			&v.HistoricalAccuracy, &v.Tier, &v.Rank, &v.N); err != nil {
 			return nil, err
 		}
+		v.Forecast = volregime.Labelled(v.Forecast)
 		out = append(out, v)
 	}
 	return out, rows.Err()

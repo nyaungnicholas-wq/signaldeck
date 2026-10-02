@@ -53,7 +53,9 @@ Check 'parser agrees with the backlog file' ($null -eq (NextBacklogItem)) ($open
 # The whole battery read red on its first live run and the loop would have spent
 # a day "fixing" code that was already correct. Stand-in commands did not catch
 # it, so exercise the REAL bodies.
-Check 'no gate body calls exit' (@(GateSpecs | Where-Object { $_.c -match '(^|;|\s)exit\s' }).Count) 0
+# String literals are stripped first: the py-tests gate PRINTS "GATE-FAIL: $m
+# exit $LASTEXITCODE", and matching inside that text read as an exit call.
+Check 'no gate body calls exit' (@(GateSpecs | Where-Object { ($_.c -replace '"[^"]*"', '' -replace "'[^']*'", '') -match '(^|;|\s)exit\s' }).Count) 0
 
 # go-build is the cheapest real gate and is known green right now. If the gate
 # plumbing breaks again, this goes red without waiting for a full sweep.

@@ -1,0 +1,25 @@
+# Ed25519 public keys trusted to sign ledger anchors (hex, one per line).
+#
+# The daemon's own current signing key is trusted automatically; this list is
+# for every OTHER key whose anchors must keep verifying (historical keys, keys
+# from another host). An anchor signed by a key that is in neither place is
+# reported as failing: "signed by an unpinned key". That is the check that stops
+# a writer WITHOUT the signing key from regenerating the chain and vouching for
+# it with a key of their own.
+#
+# ROTATION: add the new key here (and publish it) BEFORE its anchors are
+# expected to verify anywhere else. Never remove a key whose anchors are still
+# in ledger_anchors; removing one turns its anchors into tamper evidence.
+#
+# The file is compiled into the daemon (go:embed), so a change is live only
+# after a rebuild and deploy.
+
+# Current signer (~/.signaldeck/ledger_anchor.key on the Windows host); signs
+# every anchor from 2026-07-31 onward.
+a54a95553baa23debe36f0e584a0ae29ab281023a29fde886a42ecd5025e7300
+
+# Historical: signed the first two anchors on 2026-07-26 (ledger seq 238683 and
+# 243172), before the current key. Pinned from the live ledger_anchors table on
+# 2026-10-01 and confirmed legitimate by Nicholas the same day (no external
+# publication of those two digests was found locally).
+2a5aca8d2d69ecea42eff75206e4a45c91d37f13c1b095e6a86645487436de3e

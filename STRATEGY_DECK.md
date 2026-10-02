@@ -41,9 +41,52 @@ The live record is not typed into this deck. It is generated from `data/accuracy
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (registry `REFUSED` since 2026-09-13T14:43:41) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-10-01T14:05:18) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
-> **GRADING REFUSED — no accuracy figures are published.** Reason: publication gate: the graded window contains 18 collapsed cross-section(s) of 82 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld. The window starts at the survivorship epoch and does not roll forward, so a collapsed day stays in it: this clears when the window is re-registered, not by waiting for more grades.. The grade computed at 2026-09-13T14:42:10 (119.5h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| prequential-majority (1d) | all | 1,052 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 5 | withheld (SD-30) |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 95 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 3 | withheld (SD-30) |
+| filingsdrift21 | all | 195 | withheld — no null | — | — | 24 | withheld |
+| liquidity21 | all | 11,874 | 69.7% | 70.6% | -0.9pp | 27 | withheld |
+| liquidity21#persist | all | 11,586 | withheld — no null | — | — | 26 | withheld |
+| liquidity21-crypto | all | 240 | 49.2% | 45.2% | +4.0pp | 36 | withheld |
+| liquidity21-crypto#persist | all | 219 | withheld — no null | — | — | 33 | withheld |
+| trend21 | all | 11,954 | 78.3% | 78.6% | -0.3pp | 27 | withheld |
+| trend21#persist | all | 11,670 | withheld — no null | — | — | 26 | withheld |
+| trend21-crypto | all | 240 | 51.7% | 47.9% | +3.7pp | 36 | withheld |
+| trend21-crypto#persist | all | 219 | withheld — no null | — | — | 33 | withheld |
+| vol21 | all | 11,966 | 49.2% | 47.5% | +1.7pp | 27 | withheld |
+| vol21#persist | all | 11,675 | withheld — no null | — | — | 26 | withheld |
+
+**Directional 1d/1w figures withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision.** These rows are scored against a label that is mostly realised when the call is issued, so their accuracy, null, skill, interval and verdict are not published; n and distinct days describe the sample only.
+
+Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `filingsdrift21` — NO BASELINE — naive-persistence null not frozen for these calls
+- `liquidity21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `liquidity21#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `liquidity21-crypto` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `liquidity21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `trend21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `trend21#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `trend21-crypto` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `trend21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
+- `vol21` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `vol21#persist` — BENCHMARK — the frozen naive-persistence null itself
+
+### Backtested claims with no live record yet
+
+- `trend63` — registered claim 70.0%, 28,627 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=18, looks=73, divisor=1314, corrected_alpha=3.805175038051751e-05.
+
+**Survivorship:** epoch 2026-07-24; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -98,15 +141,15 @@ Generated by `tools/controls_evidence.py` from the Go source. Do not edit by han
 
 | Control | Package | Tests | Wired |
 |---|---|---:|---:|
-| Model registry, health grading, retirement | `internal/modelhealth` | 22 | 2 |
-| Canary / staged model rollout | `internal/canary` | 26 | 3 |
+| Model registry, health grading, retirement | `internal/modelhealth` | 23 | 3 |
+| Canary / staged model rollout | `internal/canary` | 26 | 4 |
 | Multi-source price validation | `internal/pricecheck` | 9 | 1 |
 | Dataset versioning and checksums | `internal/datasetver` | 10 | 1 |
 | Corporate actions / split repair | `internal/splitfix` | 11 | 1 |
 | Data licensing + HTTP 451 export guard | `internal/datalicense` | 10 | 3 |
 | No look-ahead, purge/embargo (cross-sectional) | `internal/alphax` | 11 | 2 |
 | No look-ahead, fill timing (backtest) | `internal/backtest` | 31 | 2 |
-| Data quality, freshness, dq-auditor | `internal/maintain` | 44 | 4 |
+| Data quality, freshness, dq-auditor | `internal/maintain` | 50 | 4 |
 | Pre-trade risk admission | `internal/riskgate` | 41 | 5 |
 | Kill switch | `internal/killswitch` | 6 | 2 |
 | Portfolio optimiser (NOT bound to allocation) | `internal/portopt` | 13 | 1 |
@@ -174,15 +217,15 @@ Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand
 | — observation days | 2,163 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,896 |
+| `symbols.delisted_at` stamps | 1,901 |
 | — delisted 2020-2022 | 620 |
 | — delisted 2023-2025 | 1,116 |
 | — recent window against earlier | **180.0%** of the 2020-2022 count |
-| Daily-bar calendar (from `SPY`) | 1,939 sessions |
-| Stock bar coverage | 91.87% — 2,714,730 of 2,954,915 symbol-days over 2,940 symbols |
-| — still-listed names only | 98.78% over 1,044 symbols |
-| — names carrying `delisted_at` only | 83.32% over 1,896 symbols |
-| — symbols that stop printing early with no `delisted_at` | 12 |
+| Daily-bar calendar (from `SPY`) | 1,948 sessions |
+| Stock bar coverage | 91.89% — 2,723,876 of 2,964,361 symbol-days over 2,940 symbols |
+| — still-listed names only | 98.77% over 1,039 symbols |
+| — names carrying `delisted_at` only | 83.38% over 1,901 symbols |
+| — symbols that stop printing early with no `delisted_at` | 9 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
 The membership derives entirely from the daily-bar history, so it is point-in-time only to the extent that history is complete: the stock coverage row is the bound under every point-in-time claim in this deck. **Read the two cohort rows before the blended one.** They answer different questions — the still-listed row is whether the live universe has holes, the delisted row is how densely the imported dead names were ever sampled — and while dead names are being imported the blended figure moves with the import rather than with data quality. The symbols that stop printing with no `delisted_at` are the survivorship-relevant ones: they leave the universe without being recorded as dead, which is indistinguishable from having stopped looking.

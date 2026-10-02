@@ -9,7 +9,7 @@
 # machine, and its absence is reported as a note rather than an error. See
 # ops/TUNNEL_RESTORE_RUNBOOK.md to turn it back on. Any service that IS
 # registered and fails to start makes `up`/`collect` exit non-zero.
-#   signaldeck-ctl.sh stop     stop everything — market-close trigger uses this
+#   signaldeck-ctl.sh stop     stop everything (market-close.sh no longer does: it stops only the daemon and ngrok, SD-38)
 #   signaldeck-ctl.sh status   show what is running
 #   signaldeck-ctl.sh deploy   THE ONLY sanctioned source->running path (see ops/GO-LIVE.md)
 #   signaldeck-ctl.sh launch   launchd's program for com.signaldeck.daemon: same preflight, then exec
@@ -19,8 +19,6 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-DOMAIN="gui/$(id -u)"
-LA="$HOME/Library/LaunchAgents"
 DAEMON="com.signaldeck.daemon"
 TUNNEL="com.signaldeck.tunnel"
 WEB="com.signaldeck.web"
@@ -175,12 +173,8 @@ build_from_head() {
   return 0
 }
 running() {
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl print "$DOMAIN/$1" 2>/dev/null | awk -F'= ' '/[^a-z]pid = /{print $2; exit}'
-    return
-  fi
-  # Windows: report the daemon's own pid rather than the task's, since that is
-  # what every caller here actually wants to know.
+  # Report the daemon's own pid rather than the task's, since that is what every
+  # caller here actually wants to know.
   case "$1" in
     *.daemon) sd_is_running signaldeckd && echo "up" ;;
     # The PORT, not the process name. `sd_is_running node` matched any node on
@@ -237,7 +231,23 @@ case "${1:-status}" in
     # reported after step 5 agrees.
     cd "$REPO" || exit 2
     rev="$(git rev-parse HEAD)"
-    echo "deploy: HEAD=$rev — running daemon tests"
+    # vet + golangci-lint first: CI's daemon job runs both, and on 2026-09-29/30
+    # three commits were deployed and pushed with lint findings that kept CI red
+    # — the same masking that hid a broken test for five days in August.
+    echo "deploy: HEAD=$rev — vet + lint (the checks CI's daemon job runs)"
+    if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/.local/go-sdk/go/bin" go vet ./...); then
+      echo "deploy REFUSED: go vet failed."
+      exit 1
+    fi
+    if PATH="$PATH:$HOME/go/bin" command -v golangci-lint >/dev/null 2>&1; then
+      if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/go/bin:$HOME/.local/go-sdk/go/bin" golangci-lint run ./...); then
+        echo "deploy REFUSED: golangci-lint failed — CI's daemon job would go red."
+        exit 1
+      fi
+    else
+      echo "deploy WARNING: golangci-lint not installed — CI's lint step was NOT checked."
+    fi
+    echo "deploy: running daemon tests"
     if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/.local/go-sdk/go/bin" go test ./...); then
       echo "deploy REFUSED: daemon tests failed."
       exit 1
@@ -296,24 +306,17 @@ case "${1:-status}" in
     ;;
   status)
     for s in "$DAEMON" "$TUNNEL" "$WEB"; do
-      if command -v launchctl >/dev/null 2>&1; then
-        if launchctl print "$DOMAIN/$s" >/dev/null 2>&1; then
-          p="$(running "$s")"
-          [ -n "$p" ] && echo "$s: running (pid $p)" || echo "$s: loaded-idle (stopped)"
-        else
-          echo "$s: not loaded"
-        fi
-      elif schtasks //Query //TN "$(sd_task_name "$s")" >/dev/null 2>&1; then
+      if schtasks //Query //TN "$(sd_task_name "$s")" >/dev/null 2>&1; then
         [ -n "$(running "$s")" ] && echo "$s: running" || echo "$s: registered-idle (stopped)"
       elif [ "$s" = "$TUNNEL" ]; then
-        # OFF BY CHOICE (Nicholas, 2026-08-11), not a misconfiguration. The old
-        # message pointed at install-windows-tasks.ps1, which SKIPS this task by
-        # design (it requires a .sh in ProgramArguments and the plist names the
-        # ngrok binary directly), so following that advice changed nothing and
-        # made a deliberate state look broken.
-        echo "$s: not registered — OFF by choice (webhooks only; ops/TUNNEL_RESTORE_RUNBOOK.md to enable)"
+        # OFF BY CHOICE (Nicholas, 2026-08-11), not a misconfiguration - but the
+        # advice changed on 2026-09-19. install-windows-tasks.ps1 used to SKIP
+        # this task by design, so pointing at it changed nothing; the tunnel is
+        # now a managed definition in ops/tasks/, so -Install really does
+        # register it once ngrok has an authtoken.
+        echo "$s: not registered — OFF by choice (webhooks only; ngrok config add-authtoken, then ops/install-windows-tasks.ps1 -Install elevated)"
       else
-        echo "$s: no scheduled task — run ops/install-windows-tasks.ps1"
+        echo "$s: no scheduled task — run ops/install-windows-tasks.ps1 -Install (elevated)"
       fi
     done
     ;;

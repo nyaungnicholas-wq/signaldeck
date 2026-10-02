@@ -64,6 +64,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -303,7 +304,14 @@ func storageReport(args []string) (over bool, err error) {
 	// What this does NOT settle: whether 1.4GB of `scores` and 15.4M bars are
 	// worth keeping. That is a retention question for a human, and moving the
 	// threshold does not answer it — it just stops the alert from drowning it.
-	budDB := fs.Int64("budget-db-mb", 6144, "database file budget, MB")
+	//
+	// RAISED AGAIN 6144 -> 10240 ON 2026-09-30 (audit SD-24, owner-authorised),
+	// for the same reason: the post-VACUUM floor reached 6,160MB (the nightly
+	// report read 7,165MB) with the features table still filling toward its
+	// 180-day retention, so the line could only report OVER. It also gates the
+	// daemon's 1m gap-fill, which it had paused for 7+ days. The default now
+	// lives in ONE place, pipeline.DefaultBudgetDBMB, shared with that gate.
+	budDB := fs.Int64("budget-db-mb", pipeline.DefaultBudgetDBMB, "database file budget, MB")
 	budWAL := fs.Int64("budget-wal-mb", 512, "WAL file budget, MB")
 	budBak := fs.Int64("budget-backups-mb", 12288, "backup directory budget, MB")
 	budLog := fs.Int64("budget-logs-mb", 512, "log directory budget, MB")
@@ -510,7 +518,7 @@ func ledgerVerify(args []string) error {
 	// recompute=true: derive every anchored head from row payloads from
 	// genesis, so a consistently-rewritten chain fails here even though the
 	// stored hashes agree with each other.
-	av, err := st.VerifyLedgerAnchors(ctx, 0, true)
+	av, err := st.VerifyLedgerAnchors(ctx, 0, true, ledgeranchor.TrustedKeys())
 	if err != nil {
 		return fmt.Errorf("verify anchors: %w", err)
 	}

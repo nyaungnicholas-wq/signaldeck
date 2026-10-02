@@ -2,7 +2,9 @@ package api
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,5 +167,104 @@ func TestLoginLockoutBacksOffAndClearsOnSuccess(t *testing.T) {
 	}
 	if f.retryAfter("nosuchuser", now) <= 0 {
 		t.Error("unknown username did not lock out — the response now distinguishes real accounts from fake ones")
+	}
+}
+
+// At the cap the lock ends exactly loginLockoutMax after the last failure — the
+// same instant the old sweep forgot the name, so every expiry handed back a
+// fresh ladder (four free guesses, then 5s, 10s ...) instead of one guess per
+// loginLockoutMax.
+func TestLoginLockoutRemembersACappedName(t *testing.T) {
+	f := &failCounter{fails: map[string]*failState{}}
+	now := time.Now()
+	for i := 0; i < 40; i++ {
+		f.fail("bob", now)
+	}
+	later := now.Add(loginLockoutMax + time.Second)
+	if w := f.retryAfter("bob", later); w != 0 {
+		t.Fatalf("still locked after the capped wait: %v", w)
+	}
+	f.fail("bob", later)
+	if w := f.retryAfter("bob", later); w < loginLockoutMax/2 {
+		t.Fatalf("one guess after the cap restarted the ladder (wait %v), want ~%v", w, loginLockoutMax)
+	}
+	// A name that never reached the threshold is still forgotten promptly.
+	f.fail("carol", now)
+	f.retryAfter("x", later.Add(2*time.Minute)) // a call a minute after the last sweep sweeps
+	f.mu.Lock()
+	_, kept := f.fails["carol"]
+	f.mu.Unlock()
+	if kept {
+		t.Error("a sub-threshold entry outlived loginLockoutMax — the map only grows")
+	}
+}
+
+// The lockout key was lowercased while the user lookup is exact-case, and the
+// counter was cleared BEFORE the email-verified check. So an attacker who
+// registered "OWNER" (never verified) and signed in to it wiped the counter
+// guarding "owner" after every four guesses: the lockout never engaged.
+func TestLoginLockoutNotClearedByCaseVariantAccount(t *testing.T) {
+	old := loginFailures
+	loginFailures = &failCounter{fails: map[string]*failState{}}
+	t.Cleanup(func() { loginFailures = old })
+	srv, _, _ := newPublishedServer(t) // seeds admin "owner"
+	if code, body := signup(t, newClient(t), srv.URL, "OWNER", "variant@gmail.com"); code != 200 {
+		t.Fatalf("signup OWNER: %d %s", code, body)
+	}
+	login := func(user, pass string) (int, string) {
+		return acctPost(t, newClient(t), srv.URL+"/api/auth/login",
+			map[string]string{"username": user, "password": pass})
+	}
+	for i := 0; i < loginLockoutAfter-1; i++ {
+		if code, body := login("owner", "wrong-guess"); code != 401 {
+			t.Fatalf("guess %d: %d %s, want 401", i+1, code, body)
+		}
+	}
+	if code, body := login("OWNER", "correcthorse1"); code != 403 {
+		t.Fatalf("variant sign-in: %d %s, want 403 unverified", code, body)
+	}
+	if code, body := login("owner", "wrong-guess"); code != 401 {
+		t.Fatalf("threshold guess: %d %s, want 401", code, body)
+	}
+	if code, body := login("owner", "wrong-guess"); code != 429 {
+		t.Fatalf("after %d failures on owner: %d %s, want 429 — the variant account reset the lockout",
+			loginLockoutAfter, code, body)
+	}
+}
+
+// An unbounded username became a lockout map key and a full log line.
+func TestLoginRejectsOverlongUsername(t *testing.T) {
+	old := loginFailures
+	loginFailures = &failCounter{fails: map[string]*failState{}}
+	t.Cleanup(func() { loginFailures = old })
+	srv, _, _ := newPublishedServer(t)
+	long := strings.Repeat("a", 33)
+	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/login",
+		map[string]string{"username": long, "password": "whatever1"})
+	if code != 401 {
+		t.Fatalf("overlong username: %d %s, want 401", code, body)
+	}
+	loginFailures.mu.Lock()
+	n := len(loginFailures.fails)
+	loginFailures.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("overlong username was stored as a lockout key (%d entries)", n)
+	}
+}
+
+// Under a name-spraying flood the 24h memory gives way to the 15-minute rule, so
+// the map cannot grow without bound.
+func TestLoginLockoutMemoryYieldsUnderPressure(t *testing.T) {
+	f := &failCounter{fails: map[string]*failState{}}
+	now := time.Now()
+	for i := 0; i <= loginFailSoftCap; i++ {
+		f.fails[fmt.Sprintf("n%d", i)] = &failState{n: loginLockoutAfter, last: now}
+	}
+	f.retryAfter("probe", now.Add(loginLockoutMax+time.Second))
+	f.mu.Lock()
+	left := len(f.fails)
+	f.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d remembered names survived a full map past the soft cap", left)
 	}
 }

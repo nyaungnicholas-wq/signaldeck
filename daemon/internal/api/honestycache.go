@@ -138,6 +138,6 @@ func (d Deps) registerHonestyCached(mux *http.ServeMux) {
 	// Perf wave 2026-07-24: moved from the synchronous respCache (whose TTL
 	// lapse made the next visitor rebuild inline, ~22s) to the SWR body cache.
 	mux.HandleFunc("GET /api/honesty", func(w http.ResponseWriter, r *http.Request) {
-		sharedHonestySWR.serve(honestyCacheKey(r), w, r, d.honesty)
+		sharedHonestySWR.serve(d.St.CacheKey()+"|"+honestyCacheKey(r), w, r, d.honesty)
 	})
 }

@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS scores (
   PRIMARY KEY (symbol_id, horizon, ts)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_scores_ts ON scores (ts);
+-- The compactor's strip feed (ScoresHeavyBelow) wants rows that STILL carry a
+-- components blob, oldest first. On idx_scores_ts it walked every row below the
+-- cutoff, ~96% of them already stripped (3.21M of 3.30M on 2026-10-01): 46 s in
+-- the C CLI, and in the daemon one read snapshot open up to the worker's 3h
+-- deadline. That snapshot pinned the WAL: the checkpoint stayed at the same
+-- frame for hours while the WAL grew to 14 GB (2026-10-01, three timed-out
+-- passes). This partial index holds only the un-stripped rows, so the read
+-- touches just those (1.8 s on the same copy, same rows returned).
+CREATE INDEX IF NOT EXISTS idx_scores_heavy ON scores (ts) WHERE components != '[]';
 
 CREATE TABLE IF NOT EXISTS score_outcomes (
   symbol_id   INTEGER NOT NULL,
@@ -75,6 +84,17 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_unresolved
 -- paid once, at the first boot after this lands.
 CREATE INDEX IF NOT EXISTS idx_outcomes_resolved
   ON score_outcomes (horizon, ts) WHERE resolved_at IS NOT NULL;
+-- Retention reads and prunes score_outcomes by ts ALONE (ScoreOutcomesBefore,
+-- DeleteScoreOutcomesBefore), and ts is the primary key's third column, so
+-- both planned as SCAN score_outcomes: the archive read sorted every row in a
+-- temp b-tree each hourly pass, and the DELETE scanned every row while holding
+-- the write lock. Logged live 2026-09-30: the 22:54 pass pruned 576 rows and
+-- the DELETE held the writer 5m19s; sign-in's account writes give up at 12s.
+-- Same remedy as idx_scores_ts and idx_snapshots_1s_ts. With it both plan as
+-- SEARCH ... USING INDEX idx_outcomes_ts (ts<?). Checked with EXPLAIN QUERY
+-- PLAN: every other score_outcomes query keeps its plan, except DataStats'
+-- COUNT/MIN/MAX(ts), which now reads this index instead of the table.
+CREATE INDEX IF NOT EXISTS idx_outcomes_ts ON score_outcomes (ts);
 
 CREATE TABLE IF NOT EXISTS expectancy (
   symbol_id  INTEGER NOT NULL,
@@ -267,6 +287,82 @@ CREATE TABLE IF NOT EXISTS user_symbols (
   added_ts  INTEGER,
   PRIMARY KEY (user_id, symbol_id)
 );
+
+-- A MEMBER's watchlist (2026-09-30). Deliberately NOT user_symbols: that table
+-- is read fleet-wide -- WatchedSymbolIDs widens the news-fetch scope (news API
+-- calls + LLM sentiment tagging) and the attention scope (StockTwits,
+-- Wikimedia), the alerts runner fans out per user, and SymbolWatcherCount keeps
+-- feeds alive. A member's list must cost nothing and drive nothing.
+CREATE TABLE IF NOT EXISTS member_symbols (
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  added_ts  INTEGER,
+  PRIMARY KEY (user_id, symbol_id)
+);
+
+-- Member alert preferences (2026-10-01, plan step 5). OPT-IN: no row, or
+-- email_digest=0 with no chat id, means nothing is ever sent. last_digest_day
+-- (ET date) is the one-digest-per-day cap, written only after a delivery.
+CREATE TABLE IF NOT EXISTS member_alert_prefs (
+  user_id               INTEGER PRIMARY KEY REFERENCES users(id),
+  email_digest          INTEGER NOT NULL DEFAULT 0,
+  telegram_chat_id      TEXT,
+  telegram_link_code    TEXT,
+  telegram_link_expires INTEGER,
+  last_digest_day       TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_member_alert_prefs_code
+  ON member_alert_prefs (telegram_link_code) WHERE telegram_link_code IS NOT NULL;
+
+-- Member digest tries (2026-10-02): per member, ET day and channel, the tries
+-- spent and whether the read was delivered, so a daemon restart neither
+-- re-sends a delivered channel nor grants fresh tries past the cap
+-- (memberdigest.maxTries). The worker prunes days before the current one.
+CREATE TABLE IF NOT EXISTS member_digest_tries (
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  day       TEXT NOT NULL,
+  channel   TEXT NOT NULL CHECK (channel IN ('email','telegram')),
+  tries     INTEGER NOT NULL DEFAULT 0,
+  delivered INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, channel)
+);
+
+-- Member call journal (2026-10-01, plan step 8): a member's OWN direction calls,
+-- graded close-to-close by member-call-resolver (internal/memberjournal). No
+-- price or return is stored: the grade is all a member is shown (licence,
+-- datalicense.go D1). entry_ts / exit_due_ts are the session-close instants the
+-- calendar fixed at creation. Calls are immutable: the triggers below refuse
+-- any change to what was called, and any change at all once a call settles.
+CREATE TABLE IF NOT EXISTS member_calls (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  symbol_id    INTEGER NOT NULL REFERENCES symbols(id),
+  market       TEXT NOT NULL CHECK (market = 'stocks'),
+  call         TEXT NOT NULL CHECK (call IN ('up','down')),
+  horizon      INTEGER NOT NULL CHECK (horizon IN (1,5,21)),
+  note         TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 280),
+  created_ts   INTEGER NOT NULL,
+  entry_ts     INTEGER NOT NULL,
+  exit_due_ts  INTEGER NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','void','withdrawn')),
+  outcome      TEXT CHECK (outcome IN ('hit','miss')),
+  resolved_ts  INTEGER,
+  withdrawn_ts INTEGER,
+  CHECK ((status = 'resolved') = (outcome IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_member_calls_user ON member_calls (user_id, created_ts);
+CREATE INDEX IF NOT EXISTS idx_member_calls_open ON member_calls (status, exit_due_ts);
+CREATE TRIGGER IF NOT EXISTS member_calls_immutable
+BEFORE UPDATE OF user_id, symbol_id, market, call, horizon, note, created_ts, entry_ts, exit_due_ts ON member_calls
+BEGIN
+  SELECT RAISE(ABORT, 'member calls are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS member_calls_settled_final
+BEFORE UPDATE ON member_calls
+WHEN old.status <> 'open'
+BEGIN
+  SELECT RAISE(ABORT, 'a settled member call is final');
+END;
 
 -- ── storage-permanence wave (appended block — keep at END of file so ──────
 -- ── parallel schema edits by other agents never collide) ─────────────────
@@ -841,6 +937,8 @@ CREATE TABLE IF NOT EXISTS composite_scores (
   PRIMARY KEY (symbol_id, ts, horizon)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_composite_scores_ts ON composite_scores (ts DESC);
+-- CompositeHeavyBelow's twin of idx_scores_heavy (see there).
+CREATE INDEX IF NOT EXISTS idx_composite_heavy ON composite_scores (ts) WHERE payload != '{}';
 
 -- SIGNALS-hub overhaul review fix (appended): the composite-scorer's
 -- LatestPredictionsForScoring runs a MAX(ts) GROUP BY symbol_id WHERE horizon=?
