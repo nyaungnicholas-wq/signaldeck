@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
 )
 
@@ -38,6 +39,10 @@ type marketRegimeRow struct {
 	Accuracy   float64 `json:"historicalAccuracy"`
 	Ts         int64   `json:"ts"`
 	Horizon    int     `json:"horizonDays"`
+	// EvidenceCaveat is the same sentence every per-symbol regime row carries,
+	// with this kind's current live status: /market/breadth is a member page
+	// that shows these accuracies, and its rows shipped without it.
+	EvidenceCaveat string `json:"evidenceCaveat"`
 }
 
 func (d Deps) marketRegimes(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +67,13 @@ func (d Deps) marketRegimes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	live := d.St.LiveRegimeResolutions(ctx)
+	caveat := func(kind string) string {
+		if live == nil {
+			return structregime.EvidenceCaveatText()
+		}
+		return structregime.EvidenceCaveatFor(live[kind])
+	}
 	rows := []marketRegimeRow{}
 	covered := map[string]bool{}
 	for _, c := range calls {
@@ -75,6 +87,7 @@ func (d Deps) marketRegimes(w http.ResponseWriter, r *http.Request) {
 			Kind: string(c.Kind), Regime: c.Regime,
 			Conviction: c.Conviction, Tier: convictionTier(c.Conviction),
 			Accuracy: c.HistoricalAccuracy, Ts: c.Ts, Horizon: c.HorizonDays,
+			EvidenceCaveat: caveat(string(c.Kind)),
 		})
 		covered[sym] = true
 	}

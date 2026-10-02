@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -87,7 +88,16 @@ func memberRegimesView(resp map[string]any, q url.Values) map[string]any {
 				sym, acc = f.Symbol, f.HistoricalAccuracy
 			case map[string]any:
 				sym, _ = f["symbol"].(string)
-				acc, _ = f["historicalAccuracy"].(float64)
+				// A payload loaded from disk is decoded with UseNumber
+				// (loadPersistedPayload), so its numbers are json.Number: read
+				// as float64 only, every row counted as unmeasured after a
+				// restart until the cache rebuilt.
+				switch a := f["historicalAccuracy"].(type) {
+				case float64:
+					acc = a
+				case json.Number:
+					acc, _ = a.Float64()
+				}
 			default:
 				continue
 			}
