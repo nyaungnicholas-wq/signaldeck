@@ -74,7 +74,9 @@ func rows(upHit, upMiss, downHit, downMiss int) []store.MemberCall {
 	var out []store.MemberCall
 	add := func(n int, call, outcome string) {
 		for i := 0; i < n; i++ {
-			out = append(out, store.MemberCall{Call: call, Status: "resolved", Outcome: outcome})
+			// One call per entry session: each is its own independent unit.
+			out = append(out, store.MemberCall{Call: call, Status: "resolved", Outcome: outcome,
+				EntryTs: int64(len(out)+1) * 86400})
 		}
 	}
 	add(upHit, "up", "hit")

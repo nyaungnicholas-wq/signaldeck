@@ -11,20 +11,28 @@ import { JOURNAL_FOOTER, HORIZONS, statsHeadline, beatsDrift, statusLabel } from
 const src = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
 const stats = (o) => ({
-  resolved: 0, hits: 0, misses: 0, open: 0, void: 0, withdrawn: 0,
+  resolved: 0, callDays: 0, hits: 0, misses: 0, open: 0, void: 0, withdrawn: 0,
   hitRate: null, ciLow: null, ciHigh: null, baselineUpRate: null, withheld: true, minN: 30, ...o,
 });
 
-test("below 30 resolved calls no rate is shown", () => {
-  assert.equal(statsHeadline(stats({ resolved: 12, hits: 9 })), "Not enough resolved calls yet (12/30)");
+test("below 30 independent call days no rate is shown", () => {
+  assert.equal(statsHeadline(stats({ resolved: 12, callDays: 12, hits: 9 })), "Not enough independent call days yet (12/30; 12 resolved calls)");
+  // The floor counts call days, not calls: 58 calls on 29 days is still withheld.
+  assert.equal(statsHeadline(stats({ resolved: 58, callDays: 29 })), "Not enough independent call days yet (29/30; 58 resolved calls)");
   // Withheld wins even if a rate were present.
-  assert.equal(statsHeadline(stats({ resolved: 29, hitRate: 0.9, ciLow: 0.7, ciHigh: 0.97 })), "Not enough resolved calls yet (29/30)");
-  assert.equal(beatsDrift(stats({ resolved: 29 })), null);
+  assert.equal(
+    statsHeadline(stats({ resolved: 29, callDays: 29, hitRate: 0.9, ciLow: 0.7, ciHigh: 0.97 })),
+    "Not enough independent call days yet (29/30; 29 resolved calls)",
+  );
+  assert.equal(beatsDrift(stats({ resolved: 29, callDays: 29 })), null);
 });
 
 test("from 30 the rate, interval and always-up baseline are shown", () => {
-  const s = stats({ resolved: 40, hits: 28, hitRate: 0.7, ciLow: 0.5457, ciHigh: 0.8193, baselineUpRate: 0.55, withheld: false });
-  assert.equal(statsHeadline(s), 'Hit rate 70% (95% interval 55%–82%) over 40 resolved calls; "always up" over the same calls: 55%');
+  const s = stats({ resolved: 40, callDays: 40, hits: 28, hitRate: 0.7, ciLow: 0.5457, ciHigh: 0.8193, baselineUpRate: 0.55, withheld: false });
+  assert.equal(
+    statsHeadline(s),
+    'Hit rate 70% (95% interval 55%–82%, counting each of 40 call days once) over 40 resolved calls; "always up" over the same calls: 55%',
+  );
   assert.equal(beatsDrift(s), null, "baseline inside the interval: no claim");
   assert.equal(beatsDrift({ ...s, baselineUpRate: 0.5 }), true);
   assert.equal(beatsDrift({ ...s, baselineUpRate: 0.9 }), false);

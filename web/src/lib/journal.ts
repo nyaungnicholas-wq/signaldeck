@@ -36,12 +36,16 @@ export interface JournalCall {
 
 export interface JournalStats {
   resolved: number;
+  /** Distinct entry sessions among resolved calls: the independent units the
+   *  interval and the minN floor count (calls made the same day share one
+   *  market move). */
+  callDays: number;
   hits: number;
   misses: number;
   open: number;
   void: number;
   withdrawn: number;
-  /** null while withheld (fewer than minN resolved calls). */
+  /** null while withheld (fewer than minN call days). */
   hitRate: number | null;
   ciLow: number | null;
   ciHigh: number | null;
@@ -73,10 +77,10 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
  *  the always-up baseline over the same calls. */
 export function statsHeadline(s: JournalStats): string {
   if (s.withheld || s.hitRate == null || s.ciLow == null || s.ciHigh == null) {
-    return `Not enough resolved calls yet (${s.resolved}/${s.minN})`;
+    return `Not enough independent call days yet (${s.callDays}/${s.minN}; ${s.resolved} resolved calls)`;
   }
   const base = s.baselineUpRate == null ? "" : `; "always up" over the same calls: ${pct(s.baselineUpRate)}`;
-  return `Hit rate ${pct(s.hitRate)} (95% interval ${pct(s.ciLow)}–${pct(s.ciHigh)}) over ${s.resolved} resolved calls${base}`;
+  return `Hit rate ${pct(s.hitRate)} (95% interval ${pct(s.ciLow)}–${pct(s.ciHigh)}, counting each of ${s.callDays} call days once) over ${s.resolved} resolved calls${base}`;
 }
 
 /** Whether the member's record clears the always-up baseline, or null when

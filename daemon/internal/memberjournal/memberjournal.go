@@ -1,7 +1,8 @@
 // Package memberjournal grades members' own direction calls (plan step 8) by
 // the rules SignalDeck grades itself with: close to close, no lookahead, NYSE
 // calendar (marketcal), the settled-bar rule of the prediction resolver, and a
-// Wilson interval withheld below the platform's 30-row floor.
+// Wilson interval on independent call days, withheld below the platform's
+// 30-unit floor.
 //
 // LICENCE (datalicense.go D1): a member is shown the grade only. Nothing here
 // returns, stores or logs an entry price, exit price or realized return.
@@ -99,9 +100,11 @@ func CanWithdraw(ctx context.Context, st *store.Store, c store.MemberCall, now t
 	return !exists, err
 }
 
-// Stats is a member's record: counts always, rates only from MinN up.
+// Stats is a member's record: counts always, rates only from MinN independent
+// units (CallDays) up.
 type Stats struct {
 	Resolved       int      `json:"resolved"`
+	CallDays       int      `json:"callDays"` // distinct entry sessions among resolved calls: the independent units
 	Hits           int      `json:"hits"`
 	Misses         int      `json:"misses"`
 	Open           int      `json:"open"`
@@ -118,12 +121,23 @@ type Stats struct {
 // Summarize grades a member's calls. The baseline is the share of the SAME
 // resolved calls whose symbol went up ("always up"), derived from call and
 // outcome alone, so a member can see whether they beat drift.
-// ponytail: raw-n Wilson; calls made the same day share one market move, so
-// the interval is optimistic for a member who calls many names at once.
-// Switch to clusterstat.Grade on entry day if members do that.
+//
+// The interval and the MinN floor count INDEPENDENT UNITS, not calls. Calls
+// entered on the same session share that session's market-wide move (the
+// record's own measured finding, internal/clusterstat), so ten names called
+// on one day are close to one bet, not ten. The unit is the distinct entry
+// session, not the distinct (symbol, day), because it is the conservative of
+// the two: days <= (symbol, day) pairs always, and the pair count still
+// counts ten names on one day as ten units. The interval is Wilson at
+// n = days around the unchanged point estimate hits/resolved.
+// ponytail: not a worst-case bound. Under strong same-day correlation with
+// very uneven calls per day the truth can be wider still, and overlapping
+// 5- and 21-session windows on different entry days count as separate units;
+// clusterstat.Grade on entry day (a measured design effect) if that matters.
 func Summarize(calls []store.MemberCall) Stats {
 	s := Stats{MinN: MinN}
 	ups := 0
+	days := map[int64]bool{} // EntryTs is the entry session's close instant, so one key per session
 	for _, c := range calls {
 		switch c.Status {
 		case "open":
@@ -134,6 +148,7 @@ func Summarize(calls []store.MemberCall) Stats {
 			s.Withdrawn++
 		case "resolved":
 			s.Resolved++
+			days[c.EntryTs] = true
 			if c.Outcome == "hit" {
 				s.Hits++
 			} else {
@@ -144,13 +159,14 @@ func Summarize(calls []store.MemberCall) Stats {
 			}
 		}
 	}
-	s.Withheld = s.Resolved < MinN
+	s.CallDays = len(days)
+	s.Withheld = s.CallDays < MinN
 	if s.Withheld {
 		return s
 	}
 	n := float64(s.Resolved)
 	rate, base := float64(s.Hits)/n, float64(ups)/n
-	iv := clusterstat.WilsonEffAt(rate, n, 1.959963985)
+	iv := clusterstat.WilsonEffAt(rate, float64(s.CallDays), 1.959963985)
 	s.HitRate, s.CILow, s.CIHigh, s.BaselineUpRate = &rate, &iv.Lo, &iv.Hi, &base
 	return s
 }
