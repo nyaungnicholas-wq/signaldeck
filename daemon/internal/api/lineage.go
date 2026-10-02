@@ -17,9 +17,10 @@ func (d Deps) registerLineage(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/lineage", d.lineageTrace)
 }
 
-const lineageNote = "edges are written at produce time by the wired research producers (research loop, " +
-	"research ledger, prediction runner); meta_json.rev is the VCS revision of the build that wrote the edge; " +
-	"unwired producers are listed as TODOs in internal/lineage/doc.go — an absent edge means not-yet-wired, not not-related"
+const lineageNote = "edges are written at produce time by the wired producers (research loop, every " +
+	"research-ledger evidence writer, prediction runner, evidence engine); meta_json.rev is the VCS revision of " +
+	"the build that wrote the edge; unwired producers, and why, are listed in internal/lineage/doc.go — an absent " +
+	"edge means not-yet-wired, not not-related"
 
 func (d Deps) lineageTrace(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
