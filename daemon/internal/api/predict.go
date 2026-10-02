@@ -61,7 +61,15 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	}
 	live := liveN >= minIndependentN
 	trackLabel := "backtested / in-sample — not a live track record"
-	if live {
+	var liveWinRate any = liveWin
+	if gated {
+		// liveN is len(pairs) (one population), so a gated record publishes no
+		// win rate anywhere in this payload, label included.
+		liveWinRate = nil
+	}
+	if live && gated {
+		trackLabel = "LIVE prequential record, figures withheld: " + independenceGateNote(len(pairs), distinctDays)
+	} else if live {
 		trackLabel = fmt.Sprintf("LIVE prequential record: win rate %.1f%% over %d independent symbol-days — probabilities were frozen at prediction time and graded forward; a bad number here is the honest product, not a display bug", liveWin*100, liveN)
 	}
 	// A bare Brier score is not interpretable and must never ship alone. The
@@ -87,7 +95,7 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		"brier":           ensemble.BrierScore(pairs),
 		"reliability":     ensemble.ReliabilityScore(pairs),
 		"live":            live,
-		"liveRecord":      map[string]any{"independentN": liveN, "winRate": liveWin},
+		"liveRecord":      map[string]any{"independentN": liveN, "winRate": liveWinRate},
 		"trackLabel":      trackLabel,
 		// C-2 (2026-08-02 re-audit): /api/track-record publishes the same
 		// record at a different scope and therefore different numbers. Naming

@@ -225,16 +225,29 @@ func (b calibBuckets) deficit(prob float64) (float64, bool) {
 }
 
 // buildCalibBuckets bins resolved (pred, up) pairs into 0.1-wide buckets and
-// computes each bucket's realized up-rate. Uses the same resolved history the
-// track-record reads (no lookahead — every pair is a resolved outcome).
+// computes each bucket's realized up-rate, over the accuracy grader's
+// population: one pair per (symbol, settled trading day), the same pairs
+// /api/calibration grades (no lookahead — every pair is a resolved outcome).
 func buildCalibBuckets(ctx context.Context, st *store.Store, h md.Horizon) calibBuckets {
-	b := calibBuckets{realized: map[int]float64{}, known: map[int]bool{}}
-	probs, ups, _, err := st.ResolvedPredictionPairs(ctx, h, 20000)
-	if err != nil || len(probs) == 0 {
-		return b
+	probs, ups, days, err := st.ResolvedPredictionPairs(ctx, h, 20000)
+	if err != nil {
+		return calibBuckets{realized: map[int]float64{}, known: map[int]bool{}}
 	}
+	return calibBucketsFrom(probs, ups, days)
+}
+
+// calibBucketsFrom trusts a bucket's rate only at minBucket pairs over
+// minBucketDays distinct days: pairs resolving on one day share one market
+// move, so twenty symbols on a single day are one observation of that day.
+func calibBucketsFrom(probs, ups []float64, days []int64) calibBuckets {
+	const (
+		minBucket     = 20
+		minBucketDays = 10
+	)
+	b := calibBuckets{realized: map[int]float64{}, known: map[int]bool{}}
 	sum := map[int]float64{}
 	cnt := map[int]int{}
+	dayset := map[int]map[int64]bool{}
 	for i := range probs {
 		idx := int(probs[i] * 10)
 		if idx > 9 {
@@ -245,10 +258,13 @@ func buildCalibBuckets(ctx context.Context, st *store.Store, h md.Horizon) calib
 		}
 		sum[idx] += ups[i]
 		cnt[idx]++
+		if dayset[idx] == nil {
+			dayset[idx] = map[int64]bool{}
+		}
+		dayset[idx][days[i]] = true
 	}
-	const minBucket = 20 // need enough resolutions before trusting a bucket rate
 	for idx, n := range cnt {
-		if n >= minBucket {
+		if n >= minBucket && len(dayset[idx]) >= minBucketDays {
 			b.realized[idx] = sum[idx] / float64(n)
 			b.known[idx] = true
 		}

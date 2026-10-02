@@ -81,6 +81,9 @@ func TestCalibrationNCountsIndependentSymbolDays(t *testing.T) {
 	if _, ok := body["brier"].(float64); !ok {
 		t.Fatalf("brier missing or not a float64: %#v", body["brier"])
 	}
+	if label, _ := body["trackLabel"].(string); !strings.Contains(label, "win rate") {
+		t.Fatalf("trackLabel = %q, want the live win rate once ungated", label)
+	}
 }
 
 // 40 independent observations over 5 days clear the N floor and must still be
@@ -123,6 +126,15 @@ func TestCalibrationGatesOnDistinctDays(t *testing.T) {
 	bins, ok := body["bins"].([]any)
 	if !ok || len(bins) == 0 {
 		t.Fatalf("bins = %v, want non-empty []any", body["bins"])
+	}
+	// 40 >= 30 makes the record live, but a gated payload publishes no win
+	// rate anywhere: not in liveRecord, not in the label.
+	if lr, _ := body["liveRecord"].(map[string]any); lr == nil || lr["winRate"] != nil {
+		t.Fatalf("liveRecord = %#v, want winRate null while gated", body["liveRecord"])
+	}
+	if label, _ := body["trackLabel"].(string); strings.Contains(label, "win rate") ||
+		!strings.Contains(label, "5/10 distinct market days") {
+		t.Fatalf("trackLabel = %q, want the gate note and no win rate", label)
 	}
 }
 
