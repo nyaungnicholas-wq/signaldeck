@@ -33,7 +33,10 @@ param(
     [int]$Port = 8323,
     [string]$Task = 'SignalDeck Web',
     [switch]$BuildOnly,
-    [string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\web-release.log')
+    [string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\web-release.log'),
+    # Dot-source with -SelfTestOnly to get the functions without releasing
+    # anything (ops/test-web-release-prune.ps1).
+    [switch]$SelfTestOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,6 +61,38 @@ function Fail([string]$Why) {
     Write-Log ("RELEASE ABORTED: {0}" -f $Why)
     exit 1
 }
+
+# Every promote moves the previous build aside and nothing ever deleted one:
+# measured 2026-10-02, ten web\.next-prev-* dirs holding 4.9 GB. Keep the newest
+# $Keep (the stamp sorts by name) and NEVER the one the release record names as
+# the rollback. A record that exists but cannot be read means that dir cannot be
+# identified, so nothing is removed. Returns the names it removed.
+function Remove-StalePrevBuilds([string]$WebDir, [string]$RecordPath, [int]$Keep = 2) {
+    $protect = ''
+    if (Test-Path -LiteralPath $RecordPath) {
+        $rec = $null
+        try { $rec = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json } catch { $rec = $null }
+        if ($rec -eq $null) {
+            Write-Log ("prune skipped: {0} is unreadable, so the rollback build cannot be identified" -f $RecordPath)
+            return @()
+        }
+        $kept = [string]$rec.keptPrevious
+        if ($kept -and $kept -ne '(none)') { $protect = Split-Path -Leaf $kept }
+    }
+    $prev = @(Get-ChildItem -LiteralPath $WebDir -Directory |
+        Where-Object { $_.Name -match '^\.next-prev-\d{8}-\d{6}$' } |
+        Sort-Object Name -Descending)
+    $removed = @()
+    foreach ($d in ($prev | Select-Object -Skip $Keep)) {
+        if ($d.Name -eq $protect) { continue }
+        Remove-Item -LiteralPath $d.FullName -Recurse -Force
+        Write-Log ("pruned old build {0}" -f $d.Name)
+        $removed += $d.Name
+    }
+    return $removed
+}
+
+if ($SelfTestOnly) { return }
 
 if (-not (Test-Path -LiteralPath (Join-Path $Web 'package.json'))) {
     Fail ("no web\package.json under {0}" -f $Repo)
@@ -262,6 +297,14 @@ try {
     $recordPath = Join-Path $Repo 'logs\web-release.json'
     Set-Content -LiteralPath $recordPath -Value ($record | ConvertTo-Json) -Encoding UTF8
     Write-Log ("recorded {0} (build {1}) in {2}" -f $Revision, $buildId, $recordPath)
+
+    # 9 - PRUNE, only after a promotion that came up complete and was recorded.
+    # A prune failure is logged, never a failed release: the new build is live.
+    try {
+        $null = Remove-StalePrevBuilds -WebDir $Web -RecordPath $recordPath -Keep 2
+    } catch {
+        Write-Log ("prune of old .next-prev-* builds failed (the release itself succeeded): {0}" -f $_)
+    }
     exit 0
 }
 finally {
