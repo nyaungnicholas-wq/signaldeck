@@ -617,7 +617,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		Version: version,
 		Started: time.Now(),
 		// Homepage renders call the collapse gate every time; cache refusals only.
-		CollapseCache: &api.CollapseRefusalCache{TTL: 5 * time.Minute},
+		CollapseCache: &api.CollapseVerdictCache{},
 		// Where the grader's registry lands. Empty keeps the production
 		// behaviour of resolving relative to the working directory.
 		//

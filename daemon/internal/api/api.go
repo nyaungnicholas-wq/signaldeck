@@ -44,9 +44,9 @@ type Deps struct {
 	// production). Mirrors ModelHealthWorker.RegistryPath, and exists for the
 	// same reason: without it a test reads the LIVE registry.
 	RegistryPath string
-	// CollapseCache memoizes REFUSED collapse verdicts (see collapsecache.go).
+	// CollapseCache memoizes the collapse verdict per data identity (collapsecache.go).
 	// nil = recompute every call, which is what tests and the gate tool get.
-	CollapseCache *CollapseRefusalCache
+	CollapseCache *CollapseVerdictCache
 	LLM          llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.

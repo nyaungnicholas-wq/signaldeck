@@ -2,16 +2,47 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
-// The cache may only ever make the gate refuse MORE: a pass is recomputed every
-// call (so a new collapse refuses at once), a refusal is reused until its TTL.
-func TestCollapseCacheNeverCachesAPass(t *testing.T) {
-	now := gateNow // inside the graded window, whatever date it opens on
+// rewriteDayProbs is the probe these tests use to see whether the gate ran. It
+// rewrites prob in place, which no production path ever does: the fingerprint
+// the cache keys on reads only which rows are in the set, so this leaves the
+// key unchanged while the gate itself WOULD see it. The verdict that comes back
+// after a rewrite therefore says whether the cache answered or the gate re-ran.
+func rewriteDayProbs(t *testing.T, dbPath string, day time.Time, expr string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close() //nolint:errcheck
+	ts := day.UTC().Truncate(24 * time.Hour).Unix()
+	query := fmt.Sprintf("UPDATE prediction_outcomes SET prob = %s WHERE horizon = '1d' AND ts = ?", expr)
+	res, err := db.ExecContext(context.Background(), query, ts)
+	if err != nil {
+		t.Fatalf("update prob: %v", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected: %v", err)
+	}
+	if rows == 0 {
+		t.Fatalf("probe touched no rows")
+	}
+}
+
+// A pass is reused while no row has entered or left the gated set, and a new
+// resolution re-runs the gate at once, so a newly collapsed day cannot publish
+// late.
+func TestCollapseCacheServesAPassUntilAResolutionLands(t *testing.T) {
+	now := gateNow
 	_, st, d := newTestServer(t, nil)
 	path := writeRegistry(t, registryFor(map[string]int{"1d": 3}))
 	d.RegistryPath = path
@@ -19,33 +50,68 @@ func TestCollapseCacheNeverCachesAPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load registry: %v", err)
 	}
-	d.CollapseCache = &CollapseRefusalCache{TTL: time.Hour}
+	d.CollapseCache = &CollapseVerdictCache{}
 	ctx := context.Background()
 	gate := func() (string, bool, error) {
 		return d.collapsedGradingWindowCached(ctx, reg, now)
 	}
+
 	for i := 1; i <= 3; i++ {
 		seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -i), 300, 180)
 	}
-	if _, c, err := gate(); err != nil || c {
-		t.Fatalf("clean window: collapsed=%v err=%v", c, err)
+	if _, collapsed, err := gate(); err != nil || collapsed {
+		t.Fatalf("clean window: collapsed=%v err=%v", collapsed, err)
 	}
-	// A collapse on a NEW day must refuse at once: the pass above was not cached.
+
+	rewriteDayProbs(t, d.Cfg.DBPath, now.AddDate(0, 0, -1), "0.5")
+	if _, collapsed, err := gate(); err != nil || collapsed {
+		t.Fatalf("pass not served from cache: the gate re-ran although no row entered or left (collapsed=%v err=%v)", collapsed, err)
+	}
+
+	seedResolvedForecasts(t, st, md.H1d, now, 300, 180)
+	reason, collapsed, err := gate()
+	if err != nil || !collapsed {
+		t.Fatalf("FAIL-OPEN: a cached pass outlived a new resolution (collapsed=%v err=%v)", collapsed, err)
+	}
+	if !strings.Contains(reason, now.AddDate(0, 0, -1).UTC().Format("2006-01-02")) {
+		t.Errorf("reason does not mention the changed day: %q", reason)
+	}
+}
+
+// A refusal is still cached, and is keyed the same way: it clears only when the
+// rows change and the re-run gate passes.
+func TestCollapseCacheStillCachesARefusal(t *testing.T) {
+	now := gateNow
+	_, st, d := newTestServer(t, nil)
+	path := writeRegistry(t, registryFor(map[string]int{"1d": 3}))
+	d.RegistryPath = path
+	reg, err := loadRegistry(path)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	d.CollapseCache = &CollapseVerdictCache{}
+	ctx := context.Background()
+	gate := func() (string, bool, error) {
+		return d.collapsedGradingWindowCached(ctx, reg, now)
+	}
+
+	for i := 1; i <= 3; i++ {
+		seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -i), 300, 180)
+	}
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -4), 300, 5)
-	reason, c, err := gate()
-	if err != nil || !c {
-		t.Fatalf("FAIL-OPEN: a cached pass hid a new collapse (collapsed=%v err=%v)", c, err)
+	reason, collapsed, err := gate()
+	if err != nil || !collapsed {
+		t.Fatalf("collapsed day not refused: collapsed=%v err=%v", collapsed, err)
 	}
-	// Within the TTL the refusal is served without touching the store.
-	if err := st.Close(); err != nil {
-		t.Fatalf("close: %v", err)
+
+	rewriteDayProbs(t, d.Cfg.DBPath, now.AddDate(0, 0, -4), "0.40 + (symbol_id % 180) * 0.001")
+	reason2, collapsed2, err := gate()
+	if err != nil || !collapsed2 || reason2 != reason {
+		t.Fatalf("refusal not served from cache (collapsed=%v err=%v)", collapsed2, err)
 	}
-	if r2, c2, err := gate(); err != nil || !c2 || r2 != reason {
-		t.Fatalf("refusal not served from cache: collapsed=%v err=%v", c2, err)
-	}
-	// Expired: recomputed, so the closed store now surfaces as an error, not a verdict.
-	d.CollapseCache.TTL = 0
-	if _, c3, err := gate(); err == nil || c3 {
-		t.Fatalf("expired refusal was not recomputed: collapsed=%v err=%v", c3, err)
+
+	seedResolvedForecasts(t, st, md.H1d, now, 300, 180)
+	if _, collapsed, err := gate(); err != nil || collapsed {
+		t.Fatalf("a cached refusal outlived a new resolution: the gate did not re-run (collapsed=%v err=%v)", collapsed, err)
 	}
 }
