@@ -831,6 +831,12 @@ type Quiescer interface {
 // every minute and its deadline is 15m).
 const quiesceWindow = 3 * time.Second
 
+// truncateRetryWait is how long each RETRY of a blocked TRUNCATE waits for
+// readers while it holds the write lock and the main-writer connection. Short
+// on purpose: a sign-in or a worker write waits at most this long behind one,
+// and there is a free second between attempts.
+const truncateRetryWait = 100 * time.Millisecond
+
 // walIneffectiveRuns is how many consecutive passes may reclaim ZERO frames
 // while the WAL is still growing before that becomes its own dq event. Distinct
 // from wal_checkpoint_busy, which fires on SIZE: a WAL can sit under the size
@@ -1097,10 +1103,19 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 		// 0 now really disables it, as the next comment promises; envIntOr
 		// rejects 0, and that rejection is CRITICAL, so writing the documented
 		// value turned fleet health red and ran the 300s default anyway.
+		//
+		// So the retries are SHORT AND SPACED: each waits at most
+		// truncateRetryWait for readers, then the connection and the write lock
+		// are free for a full second before the next. It was a 1s ticker around
+		// 5s attempts, so ticks queued and the attempts ran back to back: the
+		// single main-writer connection and the write lock were held for the
+		// whole budget (up to 5 minutes), and every worker write queued behind
+		// it. A retry only needs the reader-free INSTANT; it does not need to
+		// wait for one.
 		retrySec := walTruncateRetrySec()
 		if retrySec > 0 {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			gap := time.NewTimer(time.Second)
+			defer gap.Stop()
 			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
 			defer deadline.Stop()
 		retryLoop:
@@ -1110,16 +1125,17 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 					break retryLoop
 				case <-deadline.C:
 					break retryLoop
-				case <-ticker.C:
+				case <-gap.C:
 					attempts++
 					prior += trunc.Checkpointed
-					trunc, err = g.St.WALCheckpointTruncate(ctx)
+					trunc, err = g.St.WALCheckpointTruncateWithin(ctx, truncateRetryWait)
 					if err != nil {
 						break retryLoop
 					}
 					if !trunc.Busy {
 						break retryLoop
 					}
+					gap.Reset(time.Second) // the gap starts when the attempt has let go
 				}
 			}
 		}

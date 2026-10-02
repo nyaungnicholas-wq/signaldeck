@@ -2015,9 +2015,10 @@ func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 var checkpointBusy = 5 * time.Second
 
 // walCheckpoint runs one PRAGMA wal_checkpoint(<mode>) on the WRITE connection
-// and returns the pragma's own result row. mode is a fixed literal chosen by
-// the callers below — never user input.
-func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointResult, error) {
+// and returns the pragma's own result row; RESTART and TRUNCATE wait up to wait
+// for readers. mode is a fixed literal chosen by the callers below — never user
+// input.
+func (s *Store) walCheckpoint(ctx context.Context, mode string, wait time.Duration) (WALCheckpointResult, error) {
 	conn, err := s.w.Conn(ctx)
 	if err != nil {
 		return WALCheckpointResult{}, err
@@ -2025,9 +2026,9 @@ func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointRe
 	defer conn.Close() //nolint:errcheck
 	// RESTART and TRUNCATE take the WRITE lock and then sit in the busy handler
 	// waiting for readers, blocking every writer meanwhile, so the wait is set
-	// here explicitly (checkpointBusy) rather than inherited.
+	// here explicitly (wait) rather than inherited.
 	if mode != "PASSIVE" {
-		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA busy_timeout=%d`, checkpointBusy.Milliseconds())); err != nil {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA busy_timeout=%d`, wait.Milliseconds())); err != nil {
 			return WALCheckpointResult{}, err
 		}
 		defer conn.ExecContext(context.Background(), `PRAGMA busy_timeout=5000`) //nolint:errcheck
@@ -2055,7 +2056,7 @@ func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointRe
 // ~97 workers on a shared read pool plus the API's ReaderClone never provides,
 // so the ONLY checkpoint the daemon ever ran was the one that could not run.
 func (s *Store) WALCheckpointPassive(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "PASSIVE")
+	return s.walCheckpoint(ctx, "PASSIVE", 0)
 }
 
 // WALCheckpointRestart runs PRAGMA wal_checkpoint(RESTART): like FULL, it
@@ -2065,7 +2066,7 @@ func (s *Store) WALCheckpointPassive(ctx context.Context) (WALCheckpointResult, 
 // the middle rung, reachable when readers are merely busy rather than
 // permanently present.
 func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "RESTART")
+	return s.walCheckpoint(ctx, "RESTART", checkpointBusy)
 }
 
 // WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE): it flushes the
@@ -2081,7 +2082,14 @@ func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, 
 // the WAL frozen at exactly 254.1MB). Reporting an action the return value
 // says did not happen is precisely the honesty failure this codebase forbids.
 func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "TRUNCATE")
+	return s.walCheckpoint(ctx, "TRUNCATE", checkpointBusy)
+}
+
+// WALCheckpointTruncateWithin is WALCheckpointTruncate waiting at most wait for
+// readers, for callers that retry: each attempt holds the write lock (and the
+// single main-writer connection) only that long.
+func (s *Store) WALCheckpointTruncateWithin(ctx context.Context, wait time.Duration) (WALCheckpointResult, error) {
+	return s.walCheckpoint(ctx, "TRUNCATE", wait)
 }
 
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention
