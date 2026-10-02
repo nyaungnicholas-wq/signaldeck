@@ -168,7 +168,7 @@ func TestDiscoverAlphaIsNotConfigurable(t *testing.T) {
 func TestCandidateRecordsItsDivisor(t *testing.T) {
 	got := survivors(Discover(edgeObs(80, 40, 55), DiscoverConfig{PriorSearches: 2}))
 	if len(got) == 0 {
-		t.Skip("planted edge did not survive at 3 searches — covered by TestDiscoverFindsAPlantedEdge")
+		t.Fatal("the planted edge did not survive at 3 searches, so no divisor would be checked")
 	}
 	want := DiscoverConfig{PriorSearches: 2}.Divisor()
 	for _, c := range got {

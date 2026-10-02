@@ -140,6 +140,12 @@ func EnsureSeeds(ctx context.Context, st *store.Store) (int, error) {
 			return n, err
 		}
 		if exists {
+			// Never rewritten, but its lineage edges are: claims seeded before
+			// Put linked lineage would otherwise never get them, because Put is
+			// only reached from here. Linked from the STORED row, not the seed.
+			if stored, gerr := Get(ctx, st, c.ID); gerr == nil {
+				linkFeatureKeys(ctx, st, stored)
+			}
 			continue
 		}
 		if err := Put(ctx, st, c); err != nil {

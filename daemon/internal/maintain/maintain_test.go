@@ -836,10 +836,11 @@ func TestStorageGovernorDefersTruncateDuringMarketHours(t *testing.T) {
 	if err != nil {
 		t.Fatalf("governor run: %v", err)
 	}
-	// A WAL that PASSIVE empties outright returns before the gate is consulted;
-	// that is a legitimate early exit and not what this test is about.
+	// The 50 writes above leave frames in the WAL, so the early "wal empty"
+	// exit cannot be taken here; if it is, the gate below was never reached and
+	// nothing was tested.
 	if contains(msg, "wal empty") {
-		t.Skip("PASSIVE emptied the WAL before the market-hours gate was reached")
+		t.Fatalf("the fixture's writes left the WAL empty, so the market-hours gate was never reached: %q", msg)
 	}
 	if !contains(msg, "TRUNCATE deferred") {
 		t.Errorf("market pinned OPEN with a small WAL, want TRUNCATE deferred, got %q", msg)
