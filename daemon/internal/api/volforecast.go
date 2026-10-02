@@ -29,12 +29,21 @@ const RVMinDistinctDays = 60
 const RVRecordCaveat = "LIVE RECORD, ACCRUING. This is not a claim of skill. The comparison is against a random walk and RiskMetrics EWMA(0.94), lower loss is better, and no verdict is published until the pre-registered minimum evidence is met. Backtest figures are reported separately and are never mixed with these."
 
 // rvRecordCaveat is the caveat for a record whose headline verdict is v over
-// days distinct trading days. On BEATS THE NULLS, "not a claim of skill" would
-// contradict the verdict printed beside it, so a pass gets its own words, and
-// they claim no more than the registered test does: a pass over the stated
-// window, not a guarantee.
+// days distinct trading days. RVRecordCaveat says no verdict is published yet,
+// which is false beside a published one: on BEATS THE NULLS "not a claim of
+// skill" contradicts the verdict, and on a failed test "ACCRUING ... no verdict
+// is published" hides it. A ruled record gets its own words, and they claim no
+// more than the registered test does.
 func rvRecordCaveat(v string, days int) string {
-	if v != rvgrade.Beats {
+	switch v {
+	case rvgrade.Beats:
+	case rvgrade.NoSkill, rvgrade.Artifact:
+		return fmt.Sprintf("LIVE RECORD, PRE-REGISTERED TEST NOT PASSED (%s). Over %d distinct trading "+
+			"days the next-day forecast did not beat RiskMetrics EWMA(0.94) under the pre-registered test, "+
+			"so this is not a claim of skill. The record keeps accruing and the verdict is recomputed as "+
+			"it does. Backtest figures are "+
+			"reported separately and are never mixed with these.", v, days)
+	default:
 		return RVRecordCaveat
 	}
 	return fmt.Sprintf("LIVE RECORD, PRE-REGISTERED TEST PASSED. Over %d distinct trading days the "+

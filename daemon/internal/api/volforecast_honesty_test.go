@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/rvgrade"
 )
 
 // RV-COPY (2026-10-02): the record's caveat and its pooled figures must say
@@ -137,5 +139,22 @@ func TestVolRecordPooledFiguresObeyTheStartRule(t *testing.T) {
 	}
 	if h1.Verdict != "BEATS THE NULLS" {
 		t.Errorf("horizon 1: Verdict = %q, want BEATS THE NULLS", h1.Verdict)
+	}
+}
+
+// A ruled record that failed must not read "no verdict is published" beside its
+// verdict; a record not yet ruled keeps RVRecordCaveat verbatim.
+func TestVolRecordCaveatOnAFailedTest(t *testing.T) {
+	for _, v := range []string{rvgrade.NoSkill, rvgrade.Artifact} {
+		c := rvRecordCaveat(v, 61)
+		if strings.Contains(c, "no verdict is published") || !strings.Contains(c, "not a claim of skill") ||
+			!strings.Contains(c, "Over 61 distinct trading days") || !strings.Contains(c, v) {
+			t.Errorf("%s: caveat %q", v, c)
+		}
+	}
+	for _, v := range []string{rvgrade.Insufficient, rvgrade.Accruing, ""} {
+		if c := rvRecordCaveat(v, 61); c != RVRecordCaveat {
+			t.Errorf("%q: caveat %q, want RVRecordCaveat", v, c)
+		}
 	}
 }
