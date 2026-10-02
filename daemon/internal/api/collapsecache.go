@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +22,16 @@ import (
 // The gate's entire input is the set of gated horizons (gatedHorizons) and, per
 // horizon, the resolved rows ForecastDayStats reads. The key is exactly that:
 // each horizon with store.ResolvedOutcomeFingerprint over the same rows. A new
-// resolution (or a quarantined label) changes the key, so the gate re-runs and
-// can refuse on the very next read; nothing ages out on a clock, so there is no
-// TTL. The fingerprint is read BEFORE the gate: if rows land in between, the
+// resolution (or a label leaving the set) changes the key, so the gate re-runs
+// and can refuse on the very next read; nothing ages out on a clock, so there is
+// no TTL. The fingerprint is read BEFORE the gate: if rows land in between, the
 // verdict is stored under the older key and the next read recomputes.
+//
+// FAIL CLOSED. An unreadable fingerprint cannot be matched to a cached pass, and
+// a pass is the one verdict that publishes, so it is never served on one. A
+// cached refusal still stands (it can only over-refuse); otherwise the error
+// goes back to the caller, and both callers refuse on it. A gate error is
+// returned, never cached.
 //
 // nil (tests, the publication gate tool) means no caching.
 // ponytail: one entry; a per-key map if callers ever pass different registries.
@@ -45,8 +52,12 @@ func (d Deps) collapsedGradingWindowCached(ctx context.Context, reg *registryFil
 	for _, h := range hs {
 		fp, err := d.St.ResolvedOutcomeFingerprint(ctx, h, gateSince())
 		if err != nil {
-			// Unidentifiable data: run the gate itself and cache nothing.
-			return d.collapsedGradingWindow(ctx, reg, now)
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.key != "" && c.collapsed {
+				return c.reason, true, nil
+			}
+			return "", false, fmt.Errorf("collapse gate: rows unidentifiable: %w", err)
 		}
 		parts = append(parts, h+"="+fp)
 	}
@@ -60,7 +71,7 @@ func (d Deps) collapsedGradingWindowCached(ctx context.Context, reg *registryFil
 	c.mu.Unlock()
 	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
 	if err != nil {
-		// Not cached: the entry left in place is keyed to its own data.
+		// Not cached: the entry left in place is keyed to its own rows.
 		return reason, collapsed, err
 	}
 	c.mu.Lock()

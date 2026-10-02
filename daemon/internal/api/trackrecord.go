@@ -253,9 +253,10 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// That is the "refused on one document, published on six" divergence this
 	// repo has already been bitten by, one endpoint out.
 	//
-	// FAIL OPEN on a read error, exactly as the HTTP handler does and as the
-	// gate's own doc requires: refusing on a transient database error would wedge
-	// publication shut on something that is not evidence.
+	// FAIL CLOSED on a gate error, as /api/accuracy has since 2026-09-13
+	// (REFUSED_UNAVAILABLE): an unevaluated gate is not a passed gate. This used
+	// to fail open "exactly as the HTTP handler does" after the handler had
+	// stopped doing so, so the two surfaces split on every unreadable window.
 	// TWO conditions, not one. Verified live after the first attempt shipped with
 	// only the collapse gate and changed nothing: /api/accuracy refuses at
 	// reg.RefusedSince, which fires LONG BEFORE it reaches the collapse gate, and
@@ -281,7 +282,13 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 				" — figures over this graded window are withheld. The window is anchored to the " +
 				"survivorship epoch and does not roll forward, so this clears when the window is " +
 				"re-registered, not by waiting"
-		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr == nil && collapsed {
+		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr != nil {
+			gated = true
+			gateReason = "refused"
+			collapseReason = "the collapsed-cross-section gate could not be evaluated, so these figures " +
+				"are withheld WITHOUT having been judged — a check outage, not a finding about the " +
+				"models: " + cerr.Error()
+		} else if collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true
