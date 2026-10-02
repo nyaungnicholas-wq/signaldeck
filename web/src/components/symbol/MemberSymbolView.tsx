@@ -18,6 +18,7 @@ import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import ShortInterestPanel from "@/components/symbol/ShortInterestPanel";
 import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import CongressChip from "@/components/symbol/CongressChip";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 export default function MemberSymbolView({ symbol, market }: { symbol: string; market: Market }) {
   const [name, setName] = useState<string>("");
@@ -124,6 +125,7 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
         </Link>
         . Filings, insider, holder and short data are public SEC and FINRA records. Not financial advice.
       </p>
+      <HypotheticalNote short className="px-1" />
     </div>
   );
 }

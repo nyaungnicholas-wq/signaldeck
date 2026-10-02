@@ -523,6 +523,18 @@ export interface RebalanceResult {
   commonDays?: number;
 }
 
+/** GET /api/alert-prefs: the member's alert settings and what this deployment can deliver. */
+export type AlertPrefs = {
+  emailDigest: boolean;
+  emailVerified: boolean;
+  telegramLinked: boolean;
+  telegramAvailable: boolean;
+  mailAvailable: boolean;
+};
+
+/** POST /api/alert-prefs/telegram-link: a one-time code the member sends to the bot. */
+export type TelegramLink = { code: string; botUsername?: string; expiresAt: number };
+
 export const api = {
   health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
 
@@ -575,6 +587,12 @@ export const api = {
   resetPassword: (token: string, password: string) => post<Me>("/api/auth/reset", { token, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
   me: () => get<Me>("/api/auth/me"),
+
+  // Member alerts (daemon step 5). Daily email digest + optional Telegram link.
+  alertPrefs: () => get<AlertPrefs>("/api/alert-prefs"),
+  setEmailDigest: (emailDigest: boolean) => post<unknown>("/api/alert-prefs", { emailDigest }),
+  telegramLink: () => post<TelegramLink>("/api/alert-prefs/telegram-link", {}),
+  telegramUnlink: () => post<{ ok?: boolean }>("/api/alert-prefs/telegram-unlink", {}),
 
   watchlist: () => get<WatchRow[]>("/api/watchlist"),
   symbol: (symbol: string, market: Market) =>

@@ -291,6 +291,20 @@ CREATE TABLE IF NOT EXISTS member_symbols (
   PRIMARY KEY (user_id, symbol_id)
 );
 
+-- Member alert preferences (2026-10-01, plan step 5). OPT-IN: no row, or
+-- email_digest=0 with no chat id, means nothing is ever sent. last_digest_day
+-- (ET date) is the one-digest-per-day cap, written only after a delivery.
+CREATE TABLE IF NOT EXISTS member_alert_prefs (
+  user_id               INTEGER PRIMARY KEY REFERENCES users(id),
+  email_digest          INTEGER NOT NULL DEFAULT 0,
+  telegram_chat_id      TEXT,
+  telegram_link_code    TEXT,
+  telegram_link_expires INTEGER,
+  last_digest_day       TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_member_alert_prefs_code
+  ON member_alert_prefs (telegram_link_code) WHERE telegram_link_code IS NOT NULL;
+
 -- ── storage-permanence wave (appended block — keep at END of file so ──────
 -- ── parallel schema edits by other agents never collide) ─────────────────
 

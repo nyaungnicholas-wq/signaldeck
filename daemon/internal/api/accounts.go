@@ -73,6 +73,10 @@ var memberRoutes = map[string]bool{
 	"/api/company/profile": true, "/api/filings": true, "/api/insiders": true,
 	"/api/institutions": true, "/api/dilution": true, "/api/fundamentals": true,
 	"/api/short-interest": true, "/api/shorts": true, "/api/congress": true,
+	// The member's own alert switches (plan step 5): on/off and a Telegram
+	// link code, never an input that could personalise what is sent.
+	"/api/alert-prefs": true, "/api/alert-prefs/telegram-link": true,
+	"/api/alert-prefs/telegram-unlink": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published

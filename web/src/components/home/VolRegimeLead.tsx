@@ -19,10 +19,11 @@ import Link from "next/link";
 import { volRegime, pollMs, POLL_SLOW, type VolRegime } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
-export default function VolRegimeLead() {
+export default function VolRegimeLead({ memberView = false }: { memberView?: boolean }) {
   const [data, setData] = useState<VolRegime | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -140,10 +141,14 @@ export default function VolRegimeLead() {
               data.caveat ||
               "A regime call is situational awareness with a measured hit rate, not a trade."}
           </HelpTip>{" "}
-          <Link href="/lab/options" style={{ textDecoration: "underline" }}>
-            See how to trade it &rarr;
-          </Link>
+          {/* /lab/options is an operator page; a member is never pointed at a trade. */}
+          {!memberView && (
+            <Link href="/lab/options" style={{ textDecoration: "underline" }}>
+              See how to trade it &rarr;
+            </Link>
+          )}
         </p>
+        <HypotheticalNote short className="mt-1" />
       </div>
     </section>
   );

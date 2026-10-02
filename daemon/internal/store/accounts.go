@@ -281,6 +281,7 @@ func (s *Store) PurgeStaleUnverified(ctx context.Context, createdBefore time.Tim
 		`DELETE FROM sessions WHERE user_id IN (` + stale + `)`,
 		`DELETE FROM user_symbols WHERE user_id IN (` + stale + `)`,
 		`DELETE FROM member_symbols WHERE user_id IN (` + stale + `)`,
+		`DELETE FROM member_alert_prefs WHERE user_id IN (` + stale + `)`,
 		`DELETE FROM users WHERE id IN (` + stale + `)`,
 	} {
 		if _, err := s.authW().ExecContext(ctx, q, cut); err != nil {

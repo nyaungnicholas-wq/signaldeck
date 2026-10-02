@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import AlertsPanel from "@/components/account/AlertsPanel";
 
 type User = {
   id: number;
@@ -63,7 +64,7 @@ export default function AccountPage() {
             Signed in as <strong className="text-[var(--text)]">{user.username}</strong>
           </p>
           <p className="text-sm leading-relaxed text-[var(--dim)] mb-6">
-            Your account is active. Member accounts see the public record — the live grades, the volatility record and the hash-chained receipts — and get updates as new evidence lands. Descriptive market analysis, not financial advice.
+            Your account is active. Member accounts see the public record — the live grades, the volatility record and the hash-chained receipts — and can turn on a daily digest of their watchlist below. Descriptive market analysis, not financial advice.
           </p>
           <div className="space-y-2">
             <Link href="/" className="text-sm text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]">
@@ -94,6 +95,7 @@ export default function AccountPage() {
           )}
         </div>
       </div>
+      <AlertsPanel />
     </div>
   );
 }

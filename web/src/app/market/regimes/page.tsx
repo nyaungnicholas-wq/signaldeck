@@ -15,6 +15,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ExportMenu from "@/components/ExportMenu";
 import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 const KIND_ORDER = ["trend21", "liquidity21", "vol21"] as const;
 
@@ -455,6 +456,7 @@ export default function RegimesPage() {
               from walk-forward testing — these numbers are transparently displayed for each forecast tier.
               Regimes persist until the underlying data shifts, making persistence itself a signal of market structure stability.
             </p>
+            <HypotheticalNote short className="mt-2" />
           </Reveal>
 
           {/* Regime Sections */}

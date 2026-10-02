@@ -69,6 +69,10 @@ type Message struct {
 	Body  string `json:"body"`
 	Kind  string `json:"kind"` // e.g. "alerts", "watchdog"
 	Ts    int64  `json:"ts"`   // unix seconds
+
+	// headers are extra email headers (SendEmailWithHeaders only), already
+	// validated; chat transports ignore them.
+	headers map[string]string
 }
 
 // text renders the message for chat-style transports (Discord/Telegram).

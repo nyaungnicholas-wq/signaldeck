@@ -19,6 +19,7 @@ import {
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
 import { bindingMismatch, labelOfPublished, unapprovedLabels } from "@/lib/accuracybinding";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 export const dynamic = "force-dynamic";
 
@@ -682,6 +683,7 @@ export default async function AccuracyPage() {
           <div className="border-t px-5 py-2 text-[0.72rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
             A PENDING claim is a backtested number, not a live record — it becomes evidence on the
             first-grade date in its status, never before.
+            <HypotheticalNote short className="mt-1" />
           </div>
         </section>
       )}

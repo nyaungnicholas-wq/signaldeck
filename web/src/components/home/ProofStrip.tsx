@@ -14,6 +14,7 @@ import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import useDashboardProof from "@/hooks/useDashboardProof";
 import RefusalNotice from "@/components/RefusalNotice";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 export default function ProofStrip() {
   const { tr, err } = useDashboardProof();
@@ -155,6 +156,9 @@ export default function ProofStrip() {
             </span>
           )}
         </div>
+
+        {/* The paper figure is hypothetical performance; say so in the regulator's words, not only in a tip. */}
+        <HypotheticalNote className="basis-full" />
 
         {/* ledger integrity — the record grades the record that was made */}
         {tr.ledger && (

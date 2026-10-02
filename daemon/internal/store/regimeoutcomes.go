@@ -676,6 +676,7 @@ func (s *Store) LatestPeriodicFiling(ctx context.Context, symbolID int64) (Perio
 // digest's raw material for "what changed this week".
 type RegimeWeekCall struct {
 	Symbol string
+	Market string
 	Kind   structregime.Kind
 	Ts     int64
 	Regime string
@@ -687,7 +688,7 @@ type RegimeWeekCall struct {
 // forecast to find regime changes.
 func (s *Store) RegimeOutcomeCallsSince(ctx context.Context, since int64) ([]RegimeWeekCall, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT sym.symbol, o.kind, o.ts, o.regime
+		SELECT sym.symbol, sym.market, o.kind, o.ts, o.regime
 		FROM regime_outcomes o JOIN symbols sym ON sym.id = o.symbol_id
 		WHERE o.ts >= ? AND sym.active = 1
 		ORDER BY o.ts ASC`, since)
@@ -699,7 +700,7 @@ func (s *Store) RegimeOutcomeCallsSince(ctx context.Context, since int64) ([]Reg
 	for rows.Next() {
 		var c RegimeWeekCall
 		var kind string
-		if err := rows.Scan(&c.Symbol, &kind, &c.Ts, &c.Regime); err != nil {
+		if err := rows.Scan(&c.Symbol, &c.Market, &kind, &c.Ts, &c.Regime); err != nil {
 			return nil, err
 		}
 		c.Kind = structregime.Kind(kind)

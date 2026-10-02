@@ -75,9 +75,8 @@ async function proxy(
   if (segments.some((s) => s === "." || s === "..")) {
     return Response.json({ error: "invalid path" }, { status: 400 });
   }
-  const upstream = `${DAEMON}/api/${segments
-    .map(encodeURIComponent)
-    .join("/")}${req.nextUrl.search}`;
+  const upstreamPath = `/api/${segments.map(encodeURIComponent).join("/")}`;
+  const upstream = `${DAEMON}${upstreamPath}${req.nextUrl.search}`;
 
   const headers = new Headers();
   for (const name of REQUEST_HEADERS) {
@@ -153,7 +152,13 @@ async function proxy(
     if (overflowed) {
       return Response.json({ error: "request body too large" }, { status: 413 });
     }
-    console.error(`[api-proxy] ${req.method} ${upstream} failed:`, err);
+    // The PATH only, never the query: a query can carry an emailed token
+    // (/api/alerts/unsubscribe?token=) or a member's search. The error is
+    // reduced to its name and cause code for the same reason: undici errors
+    // can quote the full request URL.
+    const cause = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+    const why = err instanceof Error ? err.name : "error";
+    console.error(`[api-proxy] ${req.method} ${upstreamPath} failed: ${why}${typeof cause === "string" ? ` (${cause})` : ""}`);
     return Response.json({ error: "daemon unreachable" }, { status: 502 });
   }
 

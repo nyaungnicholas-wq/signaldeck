@@ -46,6 +46,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/memberdigest"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -557,6 +558,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	var warmTarget func(context.Context) error
 	fleet = append(fleet, cacheWarmWorkers(&warmTarget)...)
 	fleet = append(fleet, digestWorkers(st, remote)...)
+	fleet = append(fleet, memberDigestWorkers(st, remote, cfg)...)
 	// Ops-notify wave (constructor appended at the END of this file) — the
 	// daily dead-man heartbeat + ledger-verify escalation (H9). BEFORE the
 	// watchdog spec snapshot so it's health-audited like every other worker.
@@ -1835,6 +1837,32 @@ func digestWorkers(st *store.Store, remote *notify.Notifier) []workers.Worker {
 	return []workers.Worker{
 		&briefing.DigestWorker{St: st, Notifier: remote},
 	}
+}
+
+// memberDigestWorkers returns the members' opt-in daily read (plan step 5):
+// member-digest fires trading days at 08:00 ET and mails each opted-in member
+// with a verified address (and/or their linked Telegram chat) the same derived
+// regime forecasts for the stocks they watch. telegram-link, registered only
+// with SIGNALDECK_TELEGRAM_BOT_TOKEN, polls the bot for link codes.
+func memberDigestWorkers(st *store.Store, remote *notify.Notifier, cfg config.Config) []workers.Worker {
+	var tg *memberdigest.Telegram
+	if remote != nil && remote.TelegramToken != "" {
+		tg = &memberdigest.Telegram{Token: remote.TelegramToken, APIBase: remote.TelegramAPIBase}
+	}
+	out := []workers.Worker{&memberdigest.Worker{
+		St:        st,
+		// The CONFIGURED public URL only, never the quick-tunnel fallback that
+		// publicBase() uses: a trycloudflare origin changes on every restart,
+		// so a link emailed with it dies with the tunnel.
+		Base:      func() string { return cfg.PublicURL },
+		MailReady: remote.MailReady,
+		Mail:      remote.SendEmailWithHeaders,
+		Telegram:  tg,
+	}}
+	if tg != nil {
+		out = append(out, &memberdigest.LinkWorker{St: st, Telegram: tg})
+	}
+	return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────

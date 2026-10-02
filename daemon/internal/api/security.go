@@ -107,7 +107,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// webhook is exempt — TradingView's servers cannot send the header;
 		// that endpoint is authenticated by its own shared secret instead.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) {
+			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) && !csrfExemptUnsubscribe(r) {
 			if r.Header.Get(csrfHeader) == "" {
 				httpErr(w, http.StatusForbidden, "missing "+csrfHeader+" header — every non-GET "+
 					"request must carry it; this is the CSRF guard, not a credential problem")
@@ -316,10 +316,22 @@ var publicRoutes = map[string]bool{
 	// stored -- saying "already subscribed" would let anyone test whether a
 	// given person signed up.
 	"/api/waitlist": true,
+	// One-click unsubscribe from a digest email (plan step 5). The mail client
+	// has no session, so the emailed token is the authority, and all it can do
+	// is turn that one user's email digest OFF. Serves a fixed sentence.
+	"/api/alerts/unsubscribe": true,
 
 	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
 	// the new forecast and is useless if a visitor cannot read it.
 	"/api/vol-forecast/record": true,
+}
+
+// csrfExemptUnsubscribe: the digest unsubscribe POST, by exact path and
+// method only. Its senders (the confirm page's plain form, a mail client's
+// RFC 8058 one-click POST) cannot set the CSRF header, and the emailed token
+// is the credential; a forged POST without it changes nothing.
+func csrfExemptUnsubscribe(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/alerts/unsubscribe"
 }
 
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
@@ -445,6 +457,11 @@ func (d Deps) requiresAuth(path string) bool {
 	if path == "/api/ledger/range" {
 		return false
 	}
+	// The digest email's one-click unsubscribe: tokened, off-switch only (see
+	// publicRoutes). Exact path, BEFORE the /api/alerts prefix below closes it.
+	if path == "/api/alerts/unsubscribe" {
+		return false
+	}
 	// The landing page's waitlist form posts here anonymously. It was opened
 	// only in publicRoutes, so on a daemon published WITHOUT
 	// SIGNALDECK_PUBLIC_SURFACE (the live quick-tunnel posture) every visitor
@@ -477,6 +494,7 @@ func (d Deps) requiresAuth(path string) bool {
 		strings.HasPrefix(path, "/api/portfolio"),
 		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),
+		strings.HasPrefix(path, "/api/alert-prefs"),
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",
