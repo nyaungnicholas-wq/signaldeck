@@ -1374,12 +1374,10 @@ func (s *Store) ScoreHistory(ctx context.Context, symbolID int64, h md.Horizon, 
 // oldest-first batch, rows that can never settle (a symbol whose last bar is
 // the forward bar) sat at the head of every pass and shrank the batch for
 // everything behind them (2026-10-02: ~3,000 CRNX rows of every 4,000).
+// Score is NOT returned (the resolver never reads it), so the page is a
+// covered seek on idx_outcomes_pending; see pendingOutcomesSQL.
 func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff, afterTs, afterSym int64, limit int) ([]md.ScoreOutcome, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, horizon, ts, score FROM score_outcomes
-		WHERE resolved_at IS NULL AND horizon=? AND ts<=? AND (ts, symbol_id) > (?, ?)
-		ORDER BY ts, symbol_id LIMIT ?`,
-		string(h), cutoff, afterTs, afterSym, limit)
+	rows, err := s.db.QueryContext(ctx, pendingOutcomesSQL, string(h), cutoff, afterTs, afterSym, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1388,7 +1386,7 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 	for rows.Next() {
 		var o md.ScoreOutcome
 		var hz string
-		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score); err != nil {
+		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts); err != nil {
 			return nil, err
 		}
 		o.Horizon = md.Horizon(hz)
@@ -1396,6 +1394,14 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 	}
 	return out, rows.Err()
 }
+
+// pendingOutcomesSQL is one keyset page of a horizon's pending outcomes: a
+// covered seek on idx_outcomes_pending from (afterTs, afterSym), read in index
+// order, so no temp b-tree and no table lookup (TestPendingOutcomePageIsACoveredSeek).
+const pendingOutcomesSQL = `
+	SELECT symbol_id, horizon, ts FROM score_outcomes
+	WHERE resolved_at IS NULL AND horizon=? AND ts<=? AND (ts, symbol_id) > (?, ?)
+	ORDER BY ts, symbol_id LIMIT ?`
 
 // ResolveOutcome records the realized forward return for one score.
 //
