@@ -58,7 +58,7 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 			symbolID, horizon, ts, prob, up, fwdReturn, conviction, magnitude,
 			primaryReason, secondaryReason, reasons, createdAt)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback() //nolint:errcheck
 			t.Fatalf("Insert row %d: %v", i, err)
 		}
 	}
@@ -73,7 +73,7 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EXPLAIN: %v", err)
 		}
-		defer rows.Close()
+		defer rows.Close() //nolint:errcheck
 		var details []string
 		for rows.Next() {
 			var id, parent, notused int
