@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { verdictTone } from "@/lib/riskHeadline";
 
 /**
  * The live record of the HAR volatility forecast, for a reader with no
@@ -148,7 +149,9 @@ export default async function RiskPage() {
 
           <div className="flex flex-col gap-4">
             {rec.horizons.map((h) => {
-              const insufficient = !h.sufficient;
+              // Green only for the registered pass: past the floor, NO SKILL,
+              // ARTIFACT, ACCRUING and SECONDARY are verdicts, not results.
+              const tone = verdictTone(h.verdict) === "ok" ? "var(--ok)" : "var(--warn)";
               return (
                 <section
                   key={h.horizon}
@@ -160,11 +163,9 @@ export default async function RiskPage() {
                     <span
                       className="mono rounded border px-2 py-1 text-[0.7rem] font-bold uppercase tracking-[0.12em]"
                       style={{
-                        borderColor: insufficient ? "var(--warn)" : "var(--ok)",
-                        color: insufficient ? "var(--warn)" : "var(--ok)",
-                        background: insufficient
-                          ? "color-mix(in srgb, var(--warn) 12%, transparent)"
-                          : "color-mix(in srgb, var(--ok) 12%, transparent)",
+                        borderColor: tone,
+                        color: tone,
+                        background: `color-mix(in srgb, ${tone} 12%, transparent)`,
                       }}
                     >
                       {h.verdict}
