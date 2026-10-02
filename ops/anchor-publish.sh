@@ -113,11 +113,18 @@ try:
 except Exception:
     sys.exit(0)
 anchors = d.get("anchors") or []
-if anchors and anchors[0].get("publish"):
+# Only an anchor the daemon itself verifies (pinned key, head reproduces) is
+# worth a third-party timestamp; publishing a failing one would give a forged
+# anchor exactly the external standing anchoring exists to deny it.
+if anchors and anchors[0].get("ok") is True and anchors[0].get("publish"):
     print(anchors[0]["publish"])
+elif anchors:
+    print("REFUSE " + str(anchors[0].get("reason") or "the daemon does not verify the newest anchor"))
 ')
-  if [ -z "$line" ]; then
-    line=$("$(sd_py)" - "$SD/data/signaldeck.db" <<'PY'
+  refused=""
+  case "$line" in REFUSE\ *) refused=${line#REFUSE }; line="" ;; esac
+  if [ -z "$line" ] && [ -z "$refused" ]; then
+    line=$("$(sd_py)" - "$SD/data/signaldeck.db" "$SD/daemon/internal/ledgeranchor/pinned_pubkeys.txt" <<'PY'
 import hashlib, sqlite3, sys
 con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
 row = con.execute("SELECT created_at, ledger_seq, ledger_count, head_hash, alg,"
@@ -128,7 +135,17 @@ if not row:
 created_at, lseq, lcount, head, alg, pub, sig, stored = row
 if alg != "ed25519":
     sys.exit(1)  # unknown scheme — do not guess at the payload
-msg = ("signaldeck-ledger-anchor|v1|alg=ed25519"
+# Same trust set the daemon embeds. The daemon also trusts its own current key,
+# which this fallback cannot read without the secret, so a key not yet pinned
+# waits for the API path rather than being published unverified.
+try:
+    pinned = {l.split("#")[0].strip().lower() for l in open(sys.argv[2], encoding="utf-8")}
+except OSError:
+    sys.exit(1)
+if pub.lower() not in pinned:
+    print(f"newest anchor (seq {lseq}) is signed by an unpinned key", file=sys.stderr)
+    sys.exit(1)
+msg =("signaldeck-ledger-anchor|v1|alg=ed25519"
        f"|created_at={created_at}|ledger_seq={lseq}|ledger_count={lcount}|head={head}")
 digest = hashlib.sha256(
     msg.encode() + b"\x1e" + sig.encode() + b"\x1e" + pub.encode()).hexdigest()
@@ -139,7 +156,10 @@ PY
     ) || line=""
     [ -n "$line" ] && echo "note: API unavailable — anchor line recomputed from data/signaldeck.db"
   fi
-  if [ -n "$line" ]; then
+  if [ -n "$refused" ]; then
+    echo "FAIL: the daemon reports the newest anchor as failing ($refused) — refusing to timestamp it externally"
+    fail=1
+  elif [ -n "$line" ]; then
     grep -qxF -- "$line" "$REPO/anchors.log" || printf '%s\n' "$line" >> "$REPO/anchors.log"
   else
     echo "FAIL: no anchor available from $API and none recomputable from data/signaldeck.db — the signed ledger head was NOT externally timestamped by this run"
