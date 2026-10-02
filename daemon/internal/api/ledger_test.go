@@ -804,3 +804,38 @@ func TestLedgerVerify_SyntheticChainCompletesAndDetectsTamper(t *testing.T) {
 		t.Fatalf("brokenAtSeq = %v, want 1500", v2.BrokenAtSeq)
 	}
 }
+
+// TestLedgerVerify_UnpinnedStrayAnchorDoesNotBlockAnchoring: an anchor under an
+// unpinned key reads as failing, but anyone with DB write access can add one,
+// so it must not veto anchoring forever. The honest pinned anchor still catches
+// a regeneration (TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne).
+func TestLedgerVerify_UnpinnedStrayAnchorDoesNotBlockAnchoring(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 5, 0.5)
+	ver, err := st.VerifyLedger(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stray, err := ledgeranchor.LoadOrCreateSigner(filepath.Join(t.TempDir(), "stray.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := st.AppendLedgerAnchor(ctx,
+		stray.Sign(time.Now().Add(-7*time.Hour).Unix(), 5, ver.Count, ver.HeadHash)); err != nil || !wrote {
+		t.Fatalf("stray anchor: wrote=%v err=%v", wrote, err)
+	}
+	appendLedgerRows(t, st, sym.ID, 2, 0.5)
+
+	v := getLedgerVerify(t, srv, "")
+	if !v.Tamper.Anchoring.Wrote {
+		t.Fatalf("an unpinned stray anchor blocked anchoring: %q", v.Tamper.Anchoring.Reason)
+	}
+	if v.Tamper.FailingAnchors != 1 {
+		t.Errorf("failingAnchors = %d, want the stray still flagged (1)", v.Tamper.FailingAnchors)
+	}
+}

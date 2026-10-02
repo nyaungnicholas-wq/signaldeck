@@ -174,8 +174,8 @@ export default function ProofStrip() {
             </span>
             <HelpTip label="What ledger intact means">
               Every flagship prediction is hash-chained append-only — “intact” means the stored rows
-              are internally consistent: editing, deleting or reordering any one of them breaks the
-              chain. It does not prove when they were written — deleting every row and re-appending
+              are internally consistent: editing, deleting or reordering any one of them breaks a full
+              recomputation of the chain. It does not prove when they were written — deleting every row and re-appending
               a fabricated chain also verifies intact.
             </HelpTip>
           </span>

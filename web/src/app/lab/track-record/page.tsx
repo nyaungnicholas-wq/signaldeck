@@ -612,7 +612,7 @@ export default function TrackRecordPage() {
                     <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       Every flagship prediction is hash-chained (append-only). A verified
                       chain means the stored rows are internally consistent — editing, deleting
-                      or reordering any one of them breaks it. It does not prove when they were
+                      or reordering any one of them breaks a full recomputation. It does not prove when they were
                       written: deleting every row and re-appending a fabricated chain also
                       verifies intact. The proof page shows what the signed anchors add.
                     </p>

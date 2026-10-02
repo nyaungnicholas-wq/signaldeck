@@ -47,7 +47,7 @@ export default function AuditTrail({ audit }: { audit: RecoAudit }) {
         <span
           className="tnum ml-auto text-[0.75rem] font-bold"
           style={{ color: intact ? "var(--ok)" : "var(--bad)" }}
-          title="whether the hash chain still verifies (no silent edits)"
+          title="whether the stored rows are internally consistent (not when they were written: a fabricated chain re-appended from scratch also verifies)"
         >
           {intact ? "chain intact ✓" : "chain broken ✗"}
         </span>

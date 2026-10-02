@@ -375,17 +375,35 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	// Every anchor, not just the newest. A newer anchor over a fabricated chain
 	// reproduces fine; the honest OLDER anchor is the thing that reports the
 	// history is gone, and checking only the newest would never surface it.
-	// It runs BEFORE anchoring: a failing anchor vetoes signing a new one.
+	// It runs BEFORE anchoring: a trusted anchor that no longer reproduces
+	// vetoes signing a new one. Unpinned anchors still read as failing in
+	// tamperEvidence, but do not veto: anyone with DB write access could add
+	// one, and a regeneration still breaks the honest pinned anchor.
 	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys())
 	var anchoring map[string]any
-	if err == nil && av.FailingAnchors > 0 {
-		anchoring = map[string]any{"wrote": false, "reason": fmt.Sprintf(
-			"%d previously-signed anchor(s) no longer reproduce (oldest at ledger seq %d) — refusing to sign a new anchor over a contradicted chain",
-			av.FailingAnchors, *av.FirstFailingSeq)}
-	} else if err == nil {
-		anchoring = d.maybeAnchor(r, v)
-		if wrote, _ := anchoring["wrote"].(bool); wrote {
-			av, err = d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys()) // count the anchor just written
+	if err == nil {
+		contradicted, oldest := 0, int64(0)
+		for _, a := range av.Anchors {
+			if !a.OK && a.SignatureOK && a.PinnedKey {
+				if contradicted == 0 || a.Record.LedgerSeq < oldest {
+					oldest = a.Record.LedgerSeq
+				}
+				contradicted++
+			}
+		}
+		if contradicted > 0 {
+			anchoring = map[string]any{"wrote": false, "reason": fmt.Sprintf(
+				"%d trusted signed anchor(s) no longer reproduce (oldest at ledger seq %d) — refusing to sign a new anchor over a contradicted chain",
+				contradicted, oldest)}
+		} else {
+			anchoring = d.maybeAnchor(r, v)
+			if wrote, _ := anchoring["wrote"].(bool); wrote {
+				// Count the anchor just written. On failure keep the earlier
+				// answer: the write succeeded and must not read as a 503.
+				if av2, err2 := d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys()); err2 == nil {
+					av = av2
+				}
+			}
 		}
 	}
 	if err != nil {

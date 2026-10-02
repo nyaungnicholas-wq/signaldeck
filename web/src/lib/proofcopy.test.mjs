@@ -20,6 +20,10 @@ for (const p of ["../components/home/ProofStrip.tsx", "../app/lab/track-record/p
   });
 }
 
+test("AuditTrail tooltip does not gloss intact as no silent edits", () => {
+  assert.doesNotMatch(read("../components/desk/AuditTrail.tsx"), /no silent edits/);
+});
+
 test("/proof does not label the chain length as entries verified", () => {
   const s = read("../app/proof/page.tsx");
   assert.doesNotMatch(s, /entries verified/);
