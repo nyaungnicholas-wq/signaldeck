@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -457,5 +459,99 @@ func TestSD30_SelfAuditWithheld(t *testing.T) {
 	sd30Off(t)
 	if f := byMetric(serveRecorded(t, d.selfAudit, "/api/self-audit"))["calibration:1d"]; f["status"] != "ok" || jnum(f, "value") != 0.12 {
 		t.Fatalf("flag off: %v", f)
+	}
+}
+
+// The worker's stored grade (its lifetime ledger) is left as it is; what the
+// public route SERVES for a directional horizon loses every label-derived figure.
+func TestSD30_ModelHealthWithheld(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	blob := `{"model":"directional-ensemble-1d","verdict":"retired","emitting":false,"overall":0.31,
+	  "components":{"skill":0.2,"calibration":0.3,"drift":0.5,"freshness":1,"stability":0.9},
+	  "reasons":["lifetime accuracy is BELOW the naive baseline"],"observations":2257,
+	  "accuracy":0.462,"baseline":0.528,"skillVsBenchmark":-0.08,
+	  "benchmark":{"model":"prequential-majority-1d","n":100,"accuracy":0.55,"ensembleAlignedN":100,"ensembleAlignedAcc":0.47},
+	  "readmission":{"eligible":false,"lower":0.41,"upper":0.5,"null":0.55,"distinctDays":12,"minDistinctDays":20,"reason":"not re-admitted: lower bound 41.0%"}}`
+	for _, k := range []string{"directional-ensemble-1d", "structural-trend21"} {
+		b := strings.ReplaceAll(blob, "directional-ensemble-1d", k)
+		if err := st.SetMeta(t.Context(), pipeline.MetaKeyPrefix+k, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byModel := func() map[string]map[string]any {
+		out := map[string]map[string]any{}
+		ms, _ := serveRecorded(t, d.modelHealth, "/api/model-health")["models"].([]any)
+		for _, x := range ms {
+			m, _ := x.(map[string]any)
+			name, _ := m["model"].(string)
+			out[name] = m
+		}
+		return out
+	}
+	nilAt := func(m map[string]any, keys ...string) {
+		t.Helper()
+		for _, k := range keys {
+			if v, present := m[k]; !present || v != nil {
+				t.Fatalf("%s = %v (present %v), want an explicit null in %v", k, v, present, m)
+			}
+		}
+	}
+
+	sd30On(t)
+	got := byModel()
+	m := got["directional-ensemble-1d"]
+	nilAt(m, "accuracy", "baseline", "skillVsBenchmark", "overall")
+	b, _ := m["benchmark"].(map[string]any)
+	nilAt(b, "accuracy", "ensembleAlignedAcc")
+	c, _ := m["components"].(map[string]any)
+	nilAt(c, "skill", "calibration", "drift")
+	ra, _ := m["readmission"].(map[string]any)
+	nilAt(ra, "lower", "upper", "null")
+	if m["withheld"] != publication.SD30Reason || ra["reason"] != publication.SD30Reason {
+		t.Fatalf("the reason must be stated: withheld %v, readmission.reason %v", m["withheld"], ra["reason"])
+	}
+	if m["verdict"] != "retired" || jnum(m, "observations") != 2257 || jnum(b, "n") != 100 || c["freshness"] != 1.0 {
+		t.Fatalf("verdict, sample sizes and label-free components stay: %v", m)
+	}
+	if s := got["structural-trend21"]; s["accuracy"] != 0.462 || s["withheld"] != nil {
+		t.Fatalf("a structural row is not SD-30's: %v", s)
+	}
+
+	sd30Off(t)
+	m = byModel()["directional-ensemble-1d"]
+	if m["accuracy"] != 0.462 || m["skillVsBenchmark"] != -0.08 || m["withheld"] != nil {
+		t.Fatalf("flag off must restore the stored grade: %v", m)
+	}
+}
+
+// The seeded refutations are dated history: kept verbatim, and said to be so.
+func TestSD30_EvidenceSeedsSayTheyAreDatedHistory(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	if _, err := evidence.EnsureSeeds(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	texts := map[string]string{}
+	cs, _ := serveRecorded(t, d.evidenceList, "/api/evidence")["claims"].([]any)
+	for _, x := range cs {
+		c, _ := x.(map[string]any)
+		id, _ := c["id"].(string)
+		texts[id], _ = c["text"].(string)
+	}
+	one := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/evidence/directional-ensemble-1w", nil)
+	req.SetPathValue("id", "directional-ensemble-1w")
+	d.evidenceOne(one, req)
+	for id, text := range map[string]string{"directional-ensemble-1d": texts["directional-ensemble-1d"], "directional-ensemble-1w": one.Body.String()} {
+		if !strings.Contains(text, "dated retirement record (2026-07-01 to 2026-07-26)") || !strings.Contains(text, "pre-SD-30") {
+			t.Fatalf("%s does not say it is dated history: %s", id, text)
+		}
+	}
+	if !strings.Contains(texts["directional-ensemble-1d"], "48.12%") {
+		t.Fatal("the dated figure is history and must stay")
+	}
+	for id, text := range texts {
+		if !strings.HasPrefix(id, "directional-ensemble-") && strings.Contains(text, "SD-30") {
+			t.Fatalf("%s is not a directional claim: %s", id, text)
+		}
 	}
 }
