@@ -37,6 +37,8 @@ import type {
   StructRegimeForecast,
 } from "@/lib/api";
 import { structuralRegimes } from "@/lib/api";
+import { regimeCaveats } from "@/lib/regimeCaveat";
+import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 function symbolHref(symbol: string, market?: Market): string {
@@ -197,6 +199,11 @@ export default function TodaysRead({
             <span className="tnum font-semibold" style={{ color: "var(--text)" }}>
               {pct(best.fc.historicalAccuracy)}
             </span>{" "}
+            {regimeCaveats([best.fc]).map((c) => (
+              <HelpTip key={c} label="what this accuracy is">
+                {c}
+              </HelpTip>
+            ))}{" "}
             (conviction <span className="tnum">{best.fc.conviction.toFixed(2)}</span>
             {best.fc.n > 0 ? (
               <>

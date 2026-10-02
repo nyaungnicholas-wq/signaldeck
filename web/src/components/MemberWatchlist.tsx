@@ -19,6 +19,8 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 
 type Chip = { label: string; regime: string; accuracy: number };
 
@@ -110,6 +112,13 @@ export default function MemberWatchlist() {
     if (v) out.push({ label: "vol63", regime: v.regime, accuracy: v.historicalAccuracy });
     return out;
   };
+
+  // The caveats of the rows behind the chips on show: every watched symbol's
+  // regime rows, and the vol63 row of each watched symbol.
+  const caveats = regimeCaveats([
+    ...regimes,
+    ...vols.filter((v) => (rows ?? []).some((r) => r.symbol === v.symbol && r.market === v.market)),
+  ]);
 
   const watch = async (ticker: string) => {
     setBusy(`add:${ticker}`);
@@ -279,7 +288,17 @@ export default function MemberWatchlist() {
         <Link href="/accuracy" className="underline">
           record
         </Link>
-        . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.
+        . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.{" "}
+        {/* The chips' accuracies, qualified in the daemon's own words (verbatim). */}
+        {caveats.length > 0 ? (
+          <HelpTip label="what these accuracies are">
+            {caveats.map((c) => (
+              <span key={c} className="mb-2 block last:mb-0">
+                {c}
+              </span>
+            ))}
+          </HelpTip>
+        ) : null}
       </p>
       <HypotheticalNote short />
     </section>

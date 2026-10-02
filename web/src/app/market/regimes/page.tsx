@@ -16,6 +16,8 @@ import ErrorState from "@/components/ErrorState";
 import ExportMenu from "@/components/ExportMenu";
 import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 
 const KIND_ORDER = ["trend21", "liquidity21", "vol21"] as const;
 
@@ -218,6 +220,8 @@ function KindSection({
   const held = new Set(rows.map((f) => f.symbol));
   const all = [...rows, ...extra.filter((f) => !held.has(f.symbol))];
   const list = showAll ? all : all.slice(0, SHOW_N);
+  // The server's caveat on the rows on show, verbatim, on the accuracy header.
+  const caveats = regimeCaveats(list);
   const remaining = Math.max(0, total - all.length);
 
   const loadMore = async () => {
@@ -299,7 +303,20 @@ function KindSection({
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">symbol</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">call</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">conviction</th>
-                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">accuracy</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">
+                    <span className="inline-flex items-center gap-1">
+                      accuracy
+                      {caveats.length > 0 ? (
+                        <HelpTip label="what these accuracies are">
+                          {caveats.map((c) => (
+                            <span key={c} className="mb-2 block last:mb-0">
+                              {c}
+                            </span>
+                          ))}
+                        </HelpTip>
+                      ) : null}
+                    </span>
+                  </th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">tier</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 font-normal">as of</th>
                 </tr>
