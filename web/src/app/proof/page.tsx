@@ -20,11 +20,13 @@ import {
   trackRecord,
   ledgerVerify,
   ApiError,
+  isWarming,
   HORIZONS,
   type Horizon,
   type TrackRecord,
   type LedgerVerifyResponse,
 } from "@/lib/api";
+import { ledgerHeadline } from "@/lib/ledgerHeadline";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import RefusalNotice from "@/components/RefusalNotice";
@@ -92,13 +94,19 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
   if (!te) return null;
 
   const provenSeq = te.provenAnteriorThroughSeq ?? null;
-  const beyond = provenSeq === null ? lv.count : Math.max(0, lv.count - provenSeq);
+  // A COUNT minus a count. This was lv.count - provenSeq, a seq: seqs can skip
+  // (AUTOINCREMENT after a failed insert, a truncated tail), so a gap at or
+  // before the anchor under-reported what is unproven. Nothing proven means
+  // every entry is unproven; a proven seq without its count omits the row.
+  const provenCount = te.provenAnteriorThroughCount ?? null;
+  const beyond =
+    provenSeq === null ? lv.count : provenCount === null ? null : Math.max(0, lv.count - provenCount);
   const failing = te.failingAnchors ?? 0;
   const asOf = te.provenAnteriorAsOf
     ? new Date(te.provenAnteriorAsOf * 1000).toISOString().replace("T", " ").slice(0, 16) + "Z"
     : null;
 
-  const rows: Array<[string, string, string?]> = [
+  const rows: Array<[string, string, string?] | null> = [
     [
       "Verification mode",
       lv.incremental === false
@@ -123,10 +131,12 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
         : `entry #${provenSeq.toLocaleString()}${asOf ? `, signed ${asOf}` : ""}`,
       provenSeq === null ? undefined : "anteriority against an adversary WITHOUT the signing key",
     ],
-    [
-      "Carries no anteriority proof",
-      `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
-    ],
+    beyond === null
+      ? null
+      : [
+          "Carries no anteriority proof",
+          `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
+        ],
     [
       "Anteriority against the operator",
       te.externalWitness?.verified
@@ -148,7 +158,7 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
         What this check covered
       </div>
       <dl className="m-0 grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,15rem)_1fr]">
-        {rows.map(([k, v, hint]) => (
+        {rows.filter((r) => r !== null).map(([k, v, hint]) => (
           <div key={k} className="contents">
             <dt className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               {k}
@@ -176,6 +186,33 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
   );
 }
 
+/** The daemon was still answering "warming" when get() stopped waiting (3 min).
+ *  It is up and building, so this is a waiting state, not an error; nothing
+ *  asks again on its own from here, hence the reload. The copy names no cause:
+ *  "warming" follows a restart, and also a key read that timed out because the
+ *  daemon's read pool was starved, and the client cannot tell which. */
+function StillWarming({ what }: { what: string }) {
+  return (
+    <div
+      role="status"
+      className="panel flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4 text-[0.75rem] leading-relaxed"
+    >
+      <span className="min-w-0 flex-1" style={{ color: "var(--dim)" }}>
+        The service is still preparing the {what}. It answered and refused nothing; reload in a minute to
+        see it.
+      </span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)]"
+        style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
+      >
+        Reload
+      </button>
+    </div>
+  );
+}
+
 export default function ProofPage() {
   // The horizon is the one thing a sceptic actually wants to vary here: a
   // record that only holds at one horizon is not much of a record. The API
@@ -191,6 +228,8 @@ export default function ProofPage() {
     horizon: Horizon;
     data: TrackRecord | null;
     err: string | null;
+    /** err is the daemon still answering "warming" after get()'s 3 min wait. */
+    warm?: boolean;
   } | null>(null);
   const [lv, setLv] = useState<LedgerVerifyResponse | null>(null);
   const [lvErr, setLvErr] = useState<string | null>(null);
@@ -205,6 +244,17 @@ export default function ProofPage() {
   // looks offline" while /api/health returned 200. null means no ApiError at
   // all, i.e. the request never got an answer.
   const [lvStatus, setLvStatus] = useState<number | null>(null);
+  // The daemon answered 503 "warming": it is still building the cached result
+  // (after a restart, or while its read pool is starved; the client cannot tell
+  // which). Shown as a waiting state, never as an error, including when
+  // it is still warming after get()'s 3 min wait (then with a reload button).
+  const [lvWarming, setLvWarming] = useState(false);
+  const [trWarming, setTrWarming] = useState(false);
+
+  // Tone from ledgerHeadline, not lv.intact: a consistent chain whose signed
+  // anchors stopped reproducing is tamper evidence and must not read green.
+  const lvHead = lv ? ledgerHeadline(lv) : null;
+  const lvColor = lvHead?.tone === "ok" ? "var(--ok)" : "var(--bad)";
 
   const settled = trState?.horizon === horizon ? trState : null;
   const tr = settled?.data ?? null;
@@ -233,14 +283,21 @@ export default function ProofPage() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
     const attempt = (n: number) => {
-      ledgerVerify()
+      // "warming" is waited out inside get() (Retry-After, 3 min cap), so the
+      // bounded retries below are only for 429 and a non-warming 503.
+      ledgerVerify(() => {
+        if (alive) setLvWarming(true);
+      })
         .then((l) => {
           if (alive) setLv(l);
         })
         .catch((e) => {
           if (!alive) return;
           const status = e instanceof ApiError ? e.status : null;
-          if ((status === 503 || status === 429) && n < LEDGER_VERIFY_RETRIES) {
+          // True only when the daemon was STILL warming at the cap; any other
+          // error after a warming wait is an error, not a wait.
+          setLvWarming(isWarming(e));
+          if ((status === 503 || status === 429) && !isWarming(e) && n < LEDGER_VERIFY_RETRIES) {
             setLvRetry(n + 1);
             timer = setTimeout(() => attempt(n + 1), LEDGER_RETRY_DELAY_MS);
             return;
@@ -264,9 +321,12 @@ export default function ProofPage() {
   useEffect(() => {
     let alive = true;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    trackRecord(horizon)
+    trackRecord(horizon, () => {
+      if (alive) setTrWarming(true);
+    })
       .then((t) => alive && setTrState({ horizon, data: t, err: null }))
-      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e) }));
+      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e), warm: isWarming(e) }))
+      .finally(() => alive && setTrWarming(false));
     return () => {
       alive = false;
     };
@@ -304,7 +364,7 @@ export default function ProofPage() {
           prediction to a tamper-evident hash chain as it is made, counts the rare write that
           does not land instead of rounding it away, and grades itself against what actually
           happened — withholding any skill claim until the sample is real. This page is that
-          record, recomputed live. It is descriptive, not advice.
+          record, recomputed every few minutes from the live ledger. It is descriptive, not advice.
         </p>
       </header>
 
@@ -314,14 +374,17 @@ export default function ProofPage() {
           <Skeleton
             lines={3}
             label={
-              lvRetry === 0
-                ? "recomputing the ledger hash chain"
-                : `ledger verification timed out — retrying (${lvRetry}/${LEDGER_VERIFY_RETRIES}); the daemon is busy, which is usual for a few minutes after a restart`
+              lvWarming
+                ? "the service is still preparing the ledger check — it appears here on its own once it is ready"
+                : lvRetry === 0
+                  ? "recomputing the ledger hash chain"
+                  : `ledger verification timed out — retrying (${lvRetry}/${LEDGER_VERIFY_RETRIES}); the daemon is busy, which is usual for a few minutes after a restart`
             }
           />
         </div>
       )}
-      {lvErr && !lv && (
+      {lvErr && !lv && lvWarming && <StillWarming what="ledger check" />}
+      {lvErr && !lv && !lvWarming && (
         <ErrorState
           message={lvErr}
           // /proof is a PUBLIC page: most people who see this error have no
@@ -347,20 +410,20 @@ export default function ProofPage() {
       )}
 
       {/* ── LEDGER INTEGRITY: the differentiator ── */}
-      {lv && (
+      {lv && lvHead && (
         <section
           className="panel"
-          style={{ borderColor: lv.intact ? "color-mix(in srgb, var(--ok) 45%, var(--border))" : "var(--bad)" }}
+          style={{ borderColor: lvHead.tone === "ok" ? "color-mix(in srgb, var(--ok) 45%, var(--border))" : "var(--bad)" }}
           aria-label="ledger integrity"
         >
           <div className="panel-h">
-            <span style={{ color: lv.intact ? "var(--ok)" : "var(--bad)" }}>PREDICTION LEDGER</span>
+            <span style={{ color: lvColor }}>PREDICTION LEDGER</span>
             <span className="chip px-2 py-[1px] text-[0.7rem]">hash-chained · tamper-evident</span>
           </div>
           <div className="flex flex-col gap-3 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-1">
-              <span className="text-[1.15rem] font-bold" style={{ color: lv.intact ? "var(--ok)" : "var(--bad)" }}>
-                {lv.intact ? "Chain intact" : `BROKEN at #${lv.brokenAtSeq}`}
+              <span className="text-[1.15rem] font-bold" style={{ color: lvColor }}>
+                {lvHead.text}
               </span>
               {/* THE HEADLINE IS NOT THE CLAIM. This used to read "recomputed
                   just now, top to bottom ... A prediction can't be edited or
@@ -397,6 +460,8 @@ export default function ProofPage() {
           {lv.head ? (
             <div className="border-t px-5 py-2 text-[0.7rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
               head <span className="mono">{lv.head.slice(0, 16)}…</span>
+              {/* computedAt: the verify result is cached (2 min), so say when it ran. */}
+              {lv.computedAt ? ` · verified ${lv.computedAt.replace("T", " ").slice(0, 16)}Z` : null}
             </div>
           ) : null}
         </section>
@@ -440,10 +505,18 @@ export default function ProofPage() {
       {/* track-record loading / error (independent of the ledger) */}
       {!tr && !trErr && (
         <div className="panel p-4">
-          <Skeleton lines={3} label="grading the live track record" />
+          <Skeleton
+            lines={3}
+            label={
+              trWarming
+                ? "the service is still preparing the track record — it appears here on its own once it is graded"
+                : "grading the live track record"
+            }
+          />
         </div>
       )}
-      {trErr && !tr && (
+      {trErr && !tr && settled?.warm && <StillWarming what="track record" />}
+      {trErr && !tr && !settled?.warm && (
         <ErrorState
           message={trErr}
           hint={

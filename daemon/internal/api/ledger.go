@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
@@ -105,6 +108,248 @@ const ledgerVerifyConcurrency = 2
 // rest 429 immediately rather than queue.
 var ledgerVerifySem = make(chan struct{}, ledgerVerifyConcurrency)
 
+// sharedLedgerVerifyCache fronts the DEFAULT (incremental) /api/ledger/verify
+// result (step 4, 2026-10-01). Every /proof visit ran the verification itself:
+// a COUNT over the ~620k-row prefix plus the suffix walk, then a range COUNT per
+// anchor — 2.3-18s measured, and 503 at the 30s deadline three times running
+// under load. The result is the same for every caller, so it is built once per
+// TTL (by the warmer, normally).
+//
+// A rebuild runs exactly what the handler ran, maybeAnchor included, so anchors
+// are now also written by warmer-driven rebuilds: on the same AnchorDue cadence
+// check (one per MinInterval at most) and the same signing. ?full=1 stays live.
+//
+// It is a PROOF cache (review #6): the result is a claim, so how long a copy may
+// stand in is bounded. A rebuild that ran and failed evicts it (the next reader
+// gets the real error, as production did before this cache), a copy older than
+// 10 minutes is never served, and it is NOT persisted: after a boot /proof waits for a
+// verification this process ran, never a previous process's or a previous
+// database's. What a served copy claims is stated under ledgerVerifyKey.
+var sharedLedgerVerifyCache = func() *swrCache {
+	c := newSWRCache(2 * time.Minute)
+	c.maxStale = 10 * time.Minute
+	return c
+}()
+
+// ledgerVerifyBuildTimeout bounds one cached default verification (review #9).
+// The request path's 30s ledgerVerifyTimeout is too tight for a build that runs
+// for every visitor at once and queues its checkpoint write behind the single
+// writer (17s waits measured), but without a bound of its own a wedged build
+// held a ledgerVerifySem slot and a cold-build slot for the 10-minute detached
+// ceiling. Expiry releases both; the failed rebuild then evicts and the next
+// reader retries. A var only so the test can shorten it.
+var ledgerVerifyBuildTimeout = 2 * time.Minute
+
+// errLedgerVerifyBusy: ledgerVerifySem was full (finding A11). Answered 429.
+var errLedgerVerifyBusy = errors.New("a ledger verification is already running — retry shortly")
+
+// ledgerVerifyKeyTimeout bounds the two lookups ledgerVerifyKey makes. A var
+// only so the tests can starve the read pool without waiting 2s a read.
+var ledgerVerifyKeyTimeout = 2 * time.Second
+
+// errLedgerVerifyKey: the verify key lookup failed for a reason other than time
+// (a scan error, a corrupt row, a missing table). That is a fault, not a busy
+// pool: answered 500, counted by the warmer, logged by warnLedgerVerifyKey.
+var errLedgerVerifyKey = errors.New("the ledger verify key could not be read")
+
+// ledgerKeyTimeoutStreak is how many key reads in a row may time out before
+// that stops reading as load (round 5, F2). One timeout is a busy pool; a pool
+// starved for good, or an anchor row too slow to read, would otherwise keep
+// /proof on the last build and then on warming indefinitely while the warmer
+// logged INFO skips. From the 5th in a row a WARN names the timeout (once a
+// minute) and the warmer counts its step as failed, until a key read succeeds.
+const ledgerKeyTimeoutStreak = 5
+
+// ledgerKeyTimeouts counts the default verify's key reads that timed out since
+// the last one that succeeded.
+var ledgerKeyTimeouts atomic.Int64
+
+// ledgerKeyWarnedAt is when warnLedgerVerifyKey last logged (unix nanos).
+var ledgerKeyWarnedAt atomic.Int64
+
+// warnLedgerVerifyKey logs a key fault or a timeout streak at WARN at most once
+// a minute: either fails every read the same way until it clears, so per-read
+// logging would only bury it.
+func warnLedgerVerifyKey(msg string, args ...any) {
+	now, last := time.Now().UnixNano(), ledgerKeyWarnedAt.Load()
+	if now-last >= int64(time.Minute) && ledgerKeyWarnedAt.CompareAndSwap(last, now) {
+		slog.Warn(msg+" (logged at most once a minute)", args...)
+	}
+}
+
+// ledgerVerifyNow stamps computedAt. A var only so a test can see WHEN the stamp
+// is taken relative to the row reads.
+var ledgerVerifyNow = time.Now
+
+// ledgerVerifyKey keys the cached default verification on the store and the
+// NEWEST ANCHOR: its signature, and the entry hash the chain stores today at the
+// seq that anchor signed.
+//
+//   - The signature covers everything the anchor states (when, which seq, how
+//     many rows, which head) under the anchor's key. A new anchor is a new key,
+//     and so is one deleted and re-signed over a regenerated chain at the same
+//     row seq (review G); a row seq would add nothing to it.
+//   - The stored hash at the anchored seq changes when the anchored history is
+//     rewritten under an unchanged anchor, so that is a new key too and the next
+//     read verifies fresh (TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne).
+//   - The ledger HEAD is deliberately NOT in it. The chain appends ~2.75 times an
+//     hour, in bursts (measured on the live database, step-4 review round 2),
+//     and with the head in the key nearly every /proof read was a cold verify.
+//     Anchors change at most once per MinInterval (6h).
+//
+// So a cached answer is not "the chain as it is now", and the payload does not
+// say it is: it is the verification as of computedAt at head seq headSeq (both
+// in the payload, beside the head hash; computedAt is stamped before the rows
+// are read). While the key can be read AND something reads it at least once a
+// TTL (the warmer does, every minute), a change after that (an append, a
+// tamper, a deletion) is reflected by the next rebuild, at most one TTL (2 min)
+// plus one rebuild later, and a new or re-signed anchor changes the key and
+// forces a fresh verify.
+//
+// maxStale (10 min) is counted from builtAt, the END of the build that made the
+// copy, not from its computedAt: a served copy can be up to maxStale plus that
+// build's time (at most ledgerVerifyBuildTimeout) past its computedAt, which it
+// carries. A copy that old is served to the first read after a gap with no
+// reads (stale-while-revalidate: served, then refreshed behind it), and on
+// three paths that serve it on rather than replace it: a key read that times
+// out (the last build is served, see cachedLedgerVerify), a refresh that cannot
+// run (no cold build slot, or the verify semaphore full), and a refresh whose
+// build read another key (the chain moved mid-build). The last two keep the
+// copy with its original builtAt, so none of them extends it past maxStale.
+//
+// Two indexed single-row lookups under one bound. Any error is returned: a
+// LedgerEntryHash failure never becomes the no-row key (round-3 V5). No row at
+// the anchored seq is a key of its own: the anchored history is gone, which the
+// build reports as tamper evidence.
+func (d Deps) ledgerVerifyKey(ctx context.Context) (string, error) {
+	kctx, cancel := context.WithTimeout(ctx, ledgerVerifyKeyTimeout)
+	defer cancel()
+	a, ok, err := d.St.LatestLedgerAnchor(kctx)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return ledgerVerifyKeyOf(d.St, "", ""), nil
+	}
+	stored, _, err := d.St.LedgerEntryHash(kctx, a.Record.LedgerSeq)
+	if err != nil {
+		return "", err
+	}
+	return ledgerVerifyKeyOf(d.St, a.Record.Sig, stored), nil
+}
+
+// ledgerVerifyKeyOf spells the key; sig "" is "no anchor yet", stored "" is "no
+// row at the anchored seq".
+func ledgerVerifyKeyOf(st *store.Store, sig, stored string) string {
+	return st.CacheKey() + "|ledger-verify|a" + sig + "|s" + stored
+}
+
+// ledgerVerifyKeySeen is the key of the state a build's own anchor check read:
+// the newest anchor it checked and the hash it found stored at that anchor's seq.
+func ledgerVerifyKeySeen(st *store.Store, av store.LedgerAnchorVerification) string {
+	if len(av.Anchors) == 0 {
+		return ledgerVerifyKeyOf(st, "", "")
+	}
+	return ledgerVerifyKeyOf(st, av.Anchors[0].Record.Sig, av.Anchors[0].StoredHead)
+}
+
+// lastLedgerVerifyKey holds the key (a string) of the newest default
+// verification this process built and filed.
+var lastLedgerVerifyKey atomic.Value
+
+// cachedLedgerVerify is the default verification through the shared cache.
+//
+// A result is filed only under the key of the state its own anchor check read
+// (ledgerVerifyKeySeen). The key is read BEFORE the build, so the chain can move
+// in between: a fabricated chain is in place for the key read, the honest rows
+// are put back for the build, then the fabrication returns, and an honest
+// verdict filed under the fabricated key would answer for it (review round 3,
+// PGe). When the build read another key, its result answers this build's own
+// callers (true as of its computedAt) and is filed under the key it did read,
+// never under the requested one. That also files an anchoring build under its
+// new anchor (review #10), and only when its check saw that anchor.
+//
+// When the key read times out (a starved read pool: the 2s bound ran out) it
+// starts NO verification. One would need the pool that just failed: round 2
+// verified uncached here, and with the pool held a reader waited the full 30s
+// for a 503 while the cache held a good answer. Nor does it refresh anything: a
+// rebuild filed under a key nobody could read may answer for an anchor it never
+// checked. A reader gets the last BUILT answer under the cache's rules (never
+// past maxStale; a failed rebuild has already evicted it), or warming at once.
+// The warmer is told warming, so its step logs as skipped, until
+// ledgerKeyTimeoutStreak reads in a row have timed out: from then on a WARN
+// names the timeout and the warmer's step fails, until a key read succeeds.
+// Any OTHER key error is a fault, not load: errLedgerVerifyKey, 500, counted by
+// the warmer.
+func (d Deps) cachedLedgerVerify(ctx context.Context) (map[string]any, error) {
+	key, err := d.ledgerVerifyKey(ctx)
+	if err == nil {
+		ledgerKeyTimeouts.Store(0)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() == nil { // the key's own bound ran out, not the caller's
+			if n := ledgerKeyTimeouts.Add(1); n >= ledgerKeyTimeoutStreak {
+				warnLedgerVerifyKey("ledger verify key reads keep timing out: /api/ledger/verify serves the last build (never past maxStale), then warming, until one reads",
+					"consecutive", n, "bound", ledgerVerifyKeyTimeout, "err", err)
+				if isWarmer(ctx) {
+					return nil, fmt.Errorf("%d ledger verify key reads in a row timed out: %w", n, err)
+				}
+			}
+		}
+		if k, _ := lastLedgerVerifyKey.Load().(string); !isWarmer(ctx) && strings.HasPrefix(k, d.St.CacheKey()+"|") {
+			if p, ok := sharedLedgerVerifyCache.peek(k); ok {
+				return p, nil
+			}
+		}
+		return nil, errWarming
+	}
+	if err != nil {
+		if ctx.Err() == nil { // a caller that left is not a fault
+			warnLedgerVerifyKey("ledger verify key unreadable: /api/ledger/verify answers 500 until it reads", "err", err)
+		}
+		return nil, fmt.Errorf("%w: %w", errLedgerVerifyKey, err)
+	}
+	return sharedLedgerVerifyCache.get(ctx, key, func(ctx context.Context) (map[string]any, error) {
+		out, seen, err := d.buildLedgerVerify(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if seen != key {
+			sharedLedgerVerifyCache.put(seen, out)
+			lastLedgerVerifyKey.Store(seen)
+			return nil, uncachedResult{out}
+		}
+		lastLedgerVerifyKey.Store(key)
+		return out, nil
+	})
+}
+
+// buildLedgerVerify is the default (incremental) verification the handler used
+// to run per request: the same semaphore, the same verification, the same
+// maybeAnchor, the same anchor check, under ledgerVerifyBuildTimeout. It also
+// returns the key of the state its anchor check read.
+func (d Deps) buildLedgerVerify(ctx context.Context) (map[string]any, string, error) {
+	select {
+	case ledgerVerifySem <- struct{}{}:
+		defer func() { <-ledgerVerifySem }()
+	default:
+		return nil, "", errLedgerVerifyBusy
+	}
+	ctx, cancel := context.WithTimeout(ctx, ledgerVerifyBuildTimeout)
+	defer cancel()
+	at := ledgerVerifyNow() // before the reads, so every row there at computedAt was read
+	v, fullWalk, err := d.St.VerifyLedgerCached(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	anchoring := d.maybeAnchor(ctx, v)
+	av, err := d.St.VerifyLedgerAnchors(ctx, 0, false, ledgeranchor.TrustedKeys())
+	if err != nil {
+		return nil, "", err
+	}
+	return ledgerVerifyPayload(v, fullWalk, av, anchoring, at), ledgerVerifyKeySeen(d.St, av), nil
+}
+
 // anchorPolicy resolves the cadence from the environment.
 func anchorPolicy() store.AnchorPolicy {
 	p := store.DefaultAnchorPolicy()
@@ -146,7 +391,7 @@ func anchorKeyErrClass(err error) string {
 // mutation, the anchor commits to a head the recompute-mode anchor check will
 // later report as headMatches=false — the failure surfaces as tamper rather
 // than hiding, which is the correct direction to fail in.
-func (d Deps) maybeAnchor(r *http.Request, v store.LedgerVerification) map[string]any {
+func (d Deps) maybeAnchor(ctx context.Context, v store.LedgerVerification) map[string]any {
 	out := map[string]any{"wrote": false}
 	if strings.TrimSpace(os.Getenv(anchorEnvDisable)) == "1" {
 		out["reason"] = "disabled by " + anchorEnvDisable
@@ -155,8 +400,9 @@ func (d Deps) maybeAnchor(r *http.Request, v store.LedgerVerification) map[strin
 	p := anchorPolicy()
 	out["minInterval"] = p.MinInterval.String()
 	now := time.Now()
-	// Bounded, and derived from the request so a client disconnect still cancels.
-	actx, acancel := context.WithTimeout(r.Context(), anchorWriteBudget)
+	// Bounded, and derived from the caller's context: the request's on ?full=1,
+	// the cache build's (detached, with its ceiling) on the default path.
+	actx, acancel := context.WithTimeout(ctx, anchorWriteBudget)
 	defer acancel()
 	if _, due, reason, err := d.St.AnchorDue(actx, v, p, now); err != nil {
 		out["reason"] = "anchor-due check failed: " + err.Error()
@@ -328,6 +574,31 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusUnauthorized, "?full=1 re-derives the whole chain and requires authentication; the default incremental verify is public")
 		return
 	}
+	// The default answer comes from the shared cache (sharedLedgerVerifyCache);
+	// only the auditor's ?full=1 walk below runs per request.
+	if !full {
+		out, err := d.cachedLedgerVerify(r.Context())
+		switch {
+		case errors.Is(err, errLedgerVerifyBusy):
+			w.Header().Set("Retry-After", "5")
+			httpErr(w, http.StatusTooManyRequests, err.Error())
+			return
+		case errors.Is(err, errWarming):
+			writeWarming(w)
+			return
+		case errors.Is(err, errLedgerVerifyKey):
+			// Logged by cachedLedgerVerify, at most once a minute; not per read.
+			httpErr(w, http.StatusInternalServerError, "internal error")
+			return
+		case err != nil:
+			// A build that ran out its ledgerVerifyBuildTimeout is a 503 to
+			// retry, as on ?full=1, not the opaque 500.
+			ledgerVerifyErr(w, r.Context(), err)
+			return
+		}
+		writeJSON(w, out)
+		return
+	}
 	// At most ledgerVerifyConcurrency verifications run at once, daemon-wide.
 	// Anything beyond that gets an immediate 429 instead of stacking CPU-bound
 	// chain walks behind each other until the daemon starves (finding A11).
@@ -336,7 +607,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-ledgerVerifySem }()
 	default:
 		w.Header().Set("Retry-After", "5")
-		httpErr(w, http.StatusTooManyRequests, "a ledger verification is already running — retry shortly")
+		httpErr(w, http.StatusTooManyRequests, errLedgerVerifyBusy.Error())
 		return
 	}
 	// Hard deadline: even a full genesis walk finishes in seconds (measured
@@ -345,47 +616,48 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	// helps nobody.
 	ctx, cancel := context.WithTimeout(r.Context(), ledgerVerifyTimeout)
 	defer cancel()
-	r = r.WithContext(ctx)
 
-	var v store.LedgerVerification
-	var err error
-	fullWalk := true
-	if full {
-		v, err = d.St.VerifyLedger(ctx)
-	} else {
-		v, fullWalk, err = d.St.VerifyLedgerCached(ctx)
-	}
+	at := ledgerVerifyNow()
+	v, err := d.St.VerifyLedger(ctx)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
-			return
-		}
-		httpInternal(w, err)
+		ledgerVerifyErr(w, ctx, err)
 		return
 	}
-	anchoring := d.maybeAnchor(r, v)
-	// Summary path: check the newest anchor only. A reproducing anchor fixes
-	// the entire prefix that produced it, so the newest one carries the whole
-	// claim. When the newest anchor fails but an older one would still
-	// reproduce, this reports LESS than is proven — the safe direction, and
-	// /api/ledger/anchors walks the rest.
+	anchoring := d.maybeAnchor(ctx, v)
 	// Every anchor, not just the newest. A newer anchor over a fabricated chain
 	// reproduces fine; the honest OLDER anchor is the thing that reports the
 	// history is gone, and checking only the newest would never surface it.
-	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys())
+	av, err := d.St.VerifyLedgerAnchors(ctx, 0, true, ledgeranchor.TrustedKeys())
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
-			return
-		}
-		httpInternal(w, err)
+		ledgerVerifyErr(w, ctx, err)
 		return
 	}
+	writeJSON(w, ledgerVerifyPayload(v, true, av, anchoring, at))
+}
+
+// ledgerVerifyErr answers a failed verification: 503 when it ran out of time
+// (?full=1 at ledgerVerifyTimeout, the cached default build at
+// ledgerVerifyBuildTimeout), else 500.
+func ledgerVerifyErr(w http.ResponseWriter, ctx context.Context, err error) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		httpErr(w, http.StatusServiceUnavailable, "ledger verification ran out of time — retry shortly; the default verify is the incremental path (no ?full=1)")
+		return
+	}
+	httpInternal(w, err)
+}
+
+// ledgerVerifyPayload is the verify payload. computedAt (at, taken before the
+// rows were read), headSeq and head say when it was computed and which chain
+// head it covers, because the default path serves a cached result (the bound is
+// under ledgerVerifyKey).
+func ledgerVerifyPayload(v store.LedgerVerification, fullWalk bool, av store.LedgerAnchorVerification, anchoring map[string]any, at time.Time) map[string]any {
 	out := map[string]any{
 		"intact":         v.Intact,
 		"count":          v.Count,
+		"headSeq":        v.HeadSeq,
 		"head":           v.HeadHash,
 		"incremental":    !fullWalk,
+		"computedAt":     at.UTC().Format(time.RFC3339),
 		"tamperEvidence": tamperEvidence(av, anchoring),
 		"verifiedNote":   "verified incrementally from the last intact checkpoint (hash chains verify incrementally by design); a checkpoint-anchor mismatch forces a full walk and reads as tamper; ?full=1 forces the complete genesis walk, the only path that catches a stored-hash-preserving payload mutation before the checkpoint",
 		"intactMeans":    "the stored rows are internally consistent — NOT that they were written when they claim. Read tamperEvidence for what is actually proven.",
@@ -393,7 +665,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	if v.BrokenAtSeq != nil {
 		out["brokenAtSeq"] = *v.BrokenAtSeq
 	}
-	writeJSON(w, out)
+	return out
 }
 
 // ledgerAnchors is the auditor's anchor view: every signed commitment, whether

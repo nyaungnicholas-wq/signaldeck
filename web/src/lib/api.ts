@@ -1,4 +1,5 @@
 import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from "./freshness";
+import { untilWarm } from "./warming";
 
 // Typed client for the SignalDeck API. Every page goes through this module.
 // Default is same-origin ("") — the Next.js app proxies /api/* to the daemon
@@ -16,11 +17,19 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The daemon's raw `error` string, e.g. "warming". */
+    readonly code?: string,
+    /** Retry-After in ms, when the daemon sent one. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
+
+// 503 "warming" handling lives in ./warming (loadable by node --test); get()
+// below waits it out for every caller.
+export { isWarming, untilWarm } from "./warming";
 
 /** The licence guard refusing to redistribute raw bars (daemon returns 451).
  *  Deterministic for a given deployment — retrying never changes it, so a
@@ -230,7 +239,8 @@ function authHeaders(json: boolean): Record<string, string> {
 // daemon-health poll opts out so its connectivity dot stays honest.
 const GET_TTL_MS = 8_000;
 const getCache = new Map<string, { ts: number; data: unknown }>();
-const inflightGet = new Map<string, Promise<unknown>>();
+// warm: the onWarming callbacks of everyone sharing this request.
+const inflightGet = new Map<string, { p: Promise<unknown>; warm: Set<() => void> }>();
 const GET_NO_CACHE = ["/api/health"];
 const getCacheable = (path: string) =>
   typeof window !== "undefined" && !GET_NO_CACHE.some((p) => path.startsWith(p));
@@ -256,16 +266,21 @@ function bustGetCache(): void {
   inflightGet.clear();
 }
 
-async function get<T>(path: string): Promise<T> {
+/** onWarming runs each time the daemon answers 503 "warming" while get() waits
+ *  for it, so a page can say "warming up" rather than show a bare spinner. */
+async function get<T>(path: string, onWarming?: () => void): Promise<T> {
   if (getCacheable(path)) {
     const hit = getCache.get(path);
     if (hit && Date.now() - hit.ts < GET_TTL_MS) return hit.data as T;
   }
   if (getDedupable()) {
     const flying = inflightGet.get(path);
-    if (flying) return flying as Promise<T>;
+    if (flying) {
+      if (onWarming) flying.warm.add(onWarming);
+      return flying.p as Promise<T>;
+    }
   }
-  const fetchP = (async (): Promise<T> => {
+  const once = async (): Promise<T> => {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${path}`, {
@@ -278,9 +293,6 @@ async function get<T>(path: string): Promise<T> {
       throw e;
     }
     if (!res.ok) {
-      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
-      // the daemon answered, just not with data.
-      if (res.status >= 500) recordFailure();
       // Use the daemon's `error` STRING, never the raw response text. Dumping
       // the body put a whole JSON object on screen wherever a component renders
       // the message — /api/bars' 451 licence notice arrived as
@@ -295,31 +307,48 @@ async function get<T>(path: string): Promise<T> {
       // A real `error` string replaces it — that sentence is written for a
       // reader and the status adds nothing to it.
       let msg = `API ${res.status}: ${body || path}`;
+      let code: string | undefined;
       try {
         const parsed = JSON.parse(body) as { error?: string };
-        if (parsed?.error) msg = parsed.error;
+        if (parsed?.error) msg = code = parsed.error;
       } catch {
         /* not JSON — the raw text is the best message available */
       }
-      throw new ApiError(res.status, msg);
+      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
+      // the daemon answered, just not with data. So did a "warming" 503.
+      const warming = res.status === 503 && code === "warming";
+      if (res.status >= 500 && !warming) recordFailure();
+      // In a browser a caller sees this only after get() waited out the 3 min cap.
+      if (warming) msg = "the daemon is still preparing this result; try again in a minute";
+      const ra = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
+      throw new ApiError(res.status, msg, code, Number.isFinite(ra) ? Math.max(1, ra) * 1000 : undefined);
     }
     recordSuccess();
     const data = (await res.json()) as T;
     if (getCacheable(path)) getCache.set(path, { ts: Date.now(), data });
     return data;
-  })();
+  };
+  // A 503 "warming" is waited out HERE (Retry-After, 3 min cap), so every page
+  // gets it rather than the few that remembered to. The in-flight slot covers
+  // the whole wait, so a poll tick or a second component joins it instead of
+  // starting a second loop. Browser only: a server render must not hang. A hidden
+  // tab's wait sends nothing until the tab is seen again (untilWarm).
+  // ponytail: the shared wait cannot tell when its callers unmount, so once all
+  // have gone it still asks once per Retry-After (the daemon says 30 s) until warm
+  // or the 3 min cap, plus the one try a tab hidden past the cap makes once
+  // visible. Stopping it needs an AbortSignal through every wrapper.
+  const warm = new Set<() => void>(onWarming ? [onWarming] : []);
+  const fetchP = getDedupable()
+    ? untilWarm(once, { onWarming: () => warm.forEach((f) => f()) })
+    : once();
   if (getDedupable()) {
-    inflightGet.set(path, fetchP as Promise<unknown>);
+    inflightGet.set(path, { p: fetchP, warm });
     // Clear the in-flight slot once settled (either outcome); the caller still
     // owns fetchP and handles any rejection itself.
-    void fetchP.then(
-      () => {
-        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
-      },
-      () => {
-        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
-      },
-    );
+    const done = () => {
+      if (inflightGet.get(path)?.p === fetchP) inflightGet.delete(path);
+    };
+    void fetchP.then(done, done);
   }
   return fetchP;
 }
@@ -1339,6 +1368,8 @@ export interface LedgerVerifyResponse {
   /** The daemon's own scoping of what `intact` does and does not establish. */
   intactMeans?: string;
   tamperEvidence?: LedgerTamperEvidence;
+  /** When the daemon ran this verification (RFC 3339, UTC); the result is cached. */
+  computedAt?: string;
 }
 
 /** The committed ledger entries for one symbol+horizon (newest first). */
@@ -1350,8 +1381,8 @@ export interface LedgerResponse {
 }
 
 /** Recompute + verify the whole prediction-ledger hash chain. */
-export function ledgerVerify() {
-  return get<LedgerVerifyResponse>("/api/ledger/verify");
+export function ledgerVerify(onWarming?: () => void) {
+  return get<LedgerVerifyResponse>("/api/ledger/verify", onWarming);
 }
 
 /** One frozen claim on the pre-registration chain. */
@@ -1706,7 +1737,8 @@ export interface TrackByMarket {
   market: Market;
   n: number;
   upRate: number; // realized fraction of up moves in this market
-  meanFwd: number; // mean realized forward return
+  // Mean realized forward return. Absent for non-operators when n < 10 (withheld).
+  meanFwd?: number;
   dirHitRate: number; // fraction of directional bets (prob>0.5 == up) that were right
 }
 
@@ -1768,8 +1800,8 @@ export interface TrackRecord {
 }
 
 /** Fetch the live out-of-sample track record for a horizon (default 1d). */
-export function trackRecord(horizon: Horizon = "1d") {
-  return get<TrackRecord>(`/api/track-record?horizon=${horizon}`);
+export function trackRecord(horizon: Horizon = "1d", onWarming?: () => void) {
+  return get<TrackRecord>(`/api/track-record?horizon=${horizon}`, onWarming);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

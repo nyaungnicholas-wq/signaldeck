@@ -160,7 +160,13 @@ calling web work done.
   screener 49 s, paper book 7 s quiet vs 116 s loaded, ledger verification 8 s quiet vs a 30 s
   timeout loaded, sign-in 30 s timeouts during the post-restart storm. The dashboard, movers,
   honesty, calibration, the volatility record, the screener, the symbol page and the flagship
-  paper books are now cache-warmed; sign-in still queues behind long worker writes.
+  paper books are now cache-warmed; sign-in still queues behind long worker writes. Since
+  2026-10-01 the track record, regimes and volatility record keep their last good result on
+  disk (data/apicache), so a restart serves them at once (measured: 42 s cold -> 0.00 s);
+  a cold build answers `503 warming` after 20 s instead of holding the request, and the
+  web waits it out. The ledger verify is cached 2 minutes and never kept across restarts.
+  Uncached public receipts (/api/postmortems, /api/research-loop) can still stall past
+  60 s under heavy worker load.
 - **Intraday capture runs only while this host is on.** Minute bars for sessions it sleeps
   through are not backfilled; daily bars are polled separately and are complete.
 - **Publication is refused right now** and clears only as resolved days accrue; nothing here

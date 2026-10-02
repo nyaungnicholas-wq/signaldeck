@@ -10,6 +10,7 @@ import {
   type StructRegimesWithEarnings,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import { visibleInterval } from "@/lib/visibleInterval";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ExportMenu from "@/components/ExportMenu";
@@ -334,10 +335,12 @@ export default function RegimesPage() {
         .catch(() => undefined);
     };
     pull();
-    const t = setInterval(pull, 120_000);
+    // Same cadence as before for a visible tab; a hidden one sends nothing and
+    // pulls once when it comes back (pollMs's rule, without its failure backoff).
+    const stopPoll = visibleInterval(pull, 120_000);
     return () => {
       dead = true;
-      clearInterval(t);
+      stopPoll();
     };
   }, []);
 

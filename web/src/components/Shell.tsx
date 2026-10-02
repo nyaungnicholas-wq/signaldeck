@@ -14,6 +14,7 @@ import HelpPanel, { HELP_EVENT } from "@/components/HelpPanel";
 import UxProbe from "@/components/UxProbe";
 import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
+import { visibleInterval } from "@/lib/visibleInterval";
 import { noteVisit } from "@/lib/goal";
 import { isPublicRoute } from "@/lib/publicRoutes";
 import PublicNav from "@/components/PublicNav";
@@ -230,7 +231,9 @@ function AlertsBell() {
           setCount(null); // 401 / offline → hide
         });
     load();
-    const t = setInterval(() => {
+    // Not from a hidden tab: an operator tab left open on the public URL
+    // would otherwise poll through the tunnel all day.
+    const stopPoll = visibleInterval(() => {
       if (!paused) load();
     }, 30000);
     const onSeen = () => load(); // refresh immediately after "mark all read"
@@ -241,7 +244,7 @@ function AlertsBell() {
     window.addEventListener("focus", onFocus);
     return () => {
       alive = false;
-      clearInterval(t);
+      stopPoll();
       window.removeEventListener("sd-alerts-seen", onSeen);
       window.removeEventListener("focus", onFocus);
     };
@@ -427,10 +430,13 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         .then(() => alive && setUp(true))
         .catch(() => alive && setUp(false));
     check();
-    const t = setInterval(check, 10000);
+    // A hidden tab sends nothing: one forgotten tab polling every 10 s was
+    // 8,640 requests a day against whatever metered front the site sits behind.
+    // Coming back into view checks at once, then the 10 s cadence carries on.
+    const stopPoll = visibleInterval(check, 10000);
     return () => {
       alive = false;
-      clearInterval(t);
+      stopPoll();
     };
   }, []);
 

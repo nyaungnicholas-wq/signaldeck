@@ -37,7 +37,7 @@ func (d Deps) predictionsLatestCached(w http.ResponseWriter, r *http.Request) {
 			return d.buildPredictionsLatest(ctx, h)
 		})
 	if err != nil {
-		httpInternal(w, err)
+		httpCacheErr(w, err) // a cold build past coldServeWait is a 503 "warming", not a 500
 		return
 	}
 	writeJSON(w, resp)

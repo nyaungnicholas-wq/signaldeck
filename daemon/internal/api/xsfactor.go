@@ -103,17 +103,6 @@ func xsFactorCacheKey(st *store.Store, r *http.Request) string {
 		limitParam(r, xsFactorDefaultLimit, xsFactorMaxLimit))
 }
 
-// xsFactorWarmKey is the key WarmCaches' default-query pre-build lands on — it
-// must match what the route computes for a bare GET, or the warmer would fill an
-// entry no visitor reads.
-func xsFactorWarmKey(st *store.Store) string {
-	req, err := http.NewRequest(http.MethodGet, "/api/xs-factor", nil)
-	if err != nil {
-		return fmt.Sprintf("%s|%s|%s|%d", st.CacheKey(), xsfactor.H21d, md.Stocks, xsFactorDefaultLimit)
-	}
-	return xsFactorCacheKey(st, req)
-}
-
 // xsFactor serves the cross-sectional factor ranking.
 // GET /api/xs-factor?horizon=5d|21d|63d&limit=&market=
 func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {

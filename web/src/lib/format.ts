@@ -61,6 +61,13 @@ export function verdict(score: number): string {
   return "strong sell pressure";
 }
 
+/** Up/down colour for a signed value. An absent value (e.g. one the daemon
+ *  withheld) is neutral, never red: there is nothing to be down. */
+export function signColor(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "var(--dim)";
+  return v >= 0 ? "var(--bid)" : "var(--ask)";
+}
+
 export function scoreColor(score: number): string {
   if (score >= 0.15) return "var(--bid)";
   if (score <= -0.15) return "var(--ask)";

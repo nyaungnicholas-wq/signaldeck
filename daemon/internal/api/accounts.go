@@ -18,6 +18,7 @@ package api
 // either way (resend, forgot, and a sign-up on a taken address).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -80,6 +82,23 @@ var memberRoutes = map[string]bool{
 // old shape.
 func (d Deps) isMember(r *http.Request) bool {
 	return userID(r) != 0 && !d.isOperator(r)
+}
+
+// Crypto is not part of the member product: the owner chose US stocks/ETFs and
+// futures, and Kraken's terms restrict derived works (datalicense.go,
+// cryptohist). So memberRoutes handlers drop market=crypto rows from lists and
+// refuse single-symbol crypto lookups for a member. The operator and the
+// public proof record (publicRoutes) are unchanged.
+const cryptoNotForMembers = "crypto is not covered for members"
+
+// refuseMemberCrypto answers 404 and returns true when a member asks a member
+// route about a crypto symbol.
+func (d Deps) refuseMemberCrypto(w http.ResponseWriter, r *http.Request, m md.Market) bool {
+	if m != md.Crypto || !d.isMember(r) {
+		return false
+	}
+	httpErr(w, http.StatusNotFound, cryptoNotForMembers)
+	return true
 }
 
 // Window limiters for the unauthenticated account writes. Package-level so all
@@ -244,16 +263,37 @@ func lastTunnelURL(path string) string {
 		return ""
 	}
 	defer f.Close() //nolint:errcheck
-	const tail = 256 << 10
-	if st, err := f.Stat(); err == nil && st.Size() > tail {
-		_, _ = f.Seek(-tail, io.SeekEnd)
-	}
-	b, _ := io.ReadAll(f)
-	all := trycloudflareRe.FindAllStringSubmatch(string(b), -1)
-	if len(all) == 0 {
+	st, err := f.Stat()
+	if err != nil {
 		return ""
 	}
-	return all[len(all)-1][1]
+	// The newest banner ANYWHERE, not only in the last 256 KB: an unrotated log
+	// on a box up 24/7 scrolls the banner out of the tail in ~8 days, and with
+	// no public origin every login POST fails the origin check. Walk back one
+	// chunk at a time, searching whole lines only; the partial line at a
+	// chunk's start is carried into the next (earlier) chunk.
+	const chunk = 256 << 10
+	var carry []byte
+	for end := st.Size(); end > 0; {
+		start := max(0, end-chunk)
+		buf := make([]byte, end-start, end-start+int64(len(carry)))
+		if _, err := f.ReadAt(buf, start); err != nil {
+			return ""
+		}
+		buf = append(buf, carry...)
+		cut := 0 // buf[:cut] is the tail of a line that began in an earlier chunk
+		if start > 0 {
+			if cut = bytes.IndexByte(buf, '\n') + 1; cut == 0 {
+				carry, end = buf, start // one line spans this whole chunk
+				continue
+			}
+		}
+		if all := trycloudflareRe.FindAllSubmatch(buf[cut:], -1); len(all) > 0 {
+			return string(all[len(all)-1][1])
+		}
+		carry, end = buf[:cut], start
+	}
+	return ""
 }
 
 // originsNow is the CORS/CSRF origin allowlist for this request: the configured

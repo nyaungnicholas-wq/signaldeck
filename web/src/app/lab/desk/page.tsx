@@ -9,6 +9,7 @@ import AuditTrail from "@/components/desk/AuditTrail";
 import WorldModelPanel from "@/components/desk/WorldModelPanel";
 import { PageHero, StatTile } from "@/components/ui/Kit";
 import { fmtTs } from "@/lib/format";
+import { visibleInterval } from "@/lib/visibleInterval";
 
 interface TopResponse {
   note: string;
@@ -58,10 +59,10 @@ export default function DeskOverviewPage() {
           if (alive) setTopErr(msg(e));
         });
     load();
-    const id = setInterval(load, 30000);
+    const stopPoll = visibleInterval(load, 30000); // nothing from a hidden tab
     return () => {
       alive = false;
-      clearInterval(id);
+      stopPoll();
     };
   }, []);
 
@@ -80,10 +81,10 @@ export default function DeskOverviewPage() {
           if (alive) setRecoErrState({ key: activeKey, msg: msg(e) });
         });
     load();
-    const id = setInterval(load, 30000);
+    const stopPoll = visibleInterval(load, 30000); // nothing from a hidden tab
     return () => {
       alive = false;
-      clearInterval(id);
+      stopPoll();
     };
   }, [activeKey, retryTick]);
 

@@ -398,7 +398,10 @@ func (d Deps) requiresAuth(path string) bool {
 	//     them when the sample is too thin;
 	//   - ledger/verify is CPU-bound (~2.5s), and its resource-exhaustion lever
 	//     was already closed by A11: ledgerVerifyConcurrency caps concurrent
-	//     walks at 2 and ledgerVerifyTimeout bounds each at 30s.
+	//     walks at 2. The default verify is served from a cache, and the build
+	//     behind it is bounded by ledgerVerifyBuildTimeout (2m); ?full=1 and
+	//     /api/ledger/anchors run per request, bounded by ledgerVerifyTimeout
+	//     (30s).
 	//
 	// Known and accepted: verify may APPEND a signed anchor on a cadence (see
 	// maybeAnchor), so this is a public read with a bounded write side effect.

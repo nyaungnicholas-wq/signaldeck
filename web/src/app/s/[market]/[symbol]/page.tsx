@@ -114,10 +114,22 @@ export default function SymbolPage({
   const { member, known } = useIsMember();
   if (!known) return null;
   if (member) {
+    // The member product is US stocks/ETFs (+ futures); the daemon 404s crypto
+    // symbol lookups for members, so say so instead of rendering empty panels.
+    if (p.market === "crypto") {
+      return (
+        <p className="panel m-0 px-4 py-3 text-[0.85rem]" style={{ color: "var(--dim)" }}>
+          Members get US stocks and ETFs. Crypto isn&rsquo;t covered.{" "}
+          <Link href="/today" className="underline">
+            Back to Today
+          </Link>
+        </p>
+      );
+    }
     if (!isMarket(p.market)) {
       return (
         <p className="panel m-0 px-4 py-3 text-[0.85rem]" style={{ color: "var(--dim)" }}>
-          Unknown market &ldquo;{p.market}&rdquo;. Symbol pages live under /s/stocks/&hellip; and /s/crypto/&hellip;.
+          Unknown market &ldquo;{p.market}&rdquo;. Symbol pages live under /s/stocks/&hellip;.
         </p>
       );
     }

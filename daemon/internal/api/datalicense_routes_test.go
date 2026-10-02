@@ -44,11 +44,14 @@ func registeredAPIRoutes(t *testing.T) map[string]bool {
 }
 
 // A route cannot be both anonymous-public and licence-restricted: the 451 would
-// fire on the published product's own surface.
+// fire on the published product's own surface. Same for memberRoutes: a member
+// would be handed a route whose licence forbids serving it to them.
 func TestPublicRoutesNeverGoverned(t *testing.T) {
-	for path := range publicRoutes {
-		if _, _, governed := datalicense.RouteRedistributable(path); governed {
-			t.Errorf("%s is in publicRoutes AND RestrictedRoutes; an anonymous caller would get 451 on the public surface", path)
+	for name, routes := range map[string]map[string]bool{"publicRoutes": publicRoutes, "memberRoutes": memberRoutes} {
+		for path := range routes {
+			if _, _, governed := datalicense.RouteRedistributable(path); governed {
+				t.Errorf("%s is in %s AND RestrictedRoutes; a caller would get 451 on the surface it was opened for", path, name)
+			}
 		}
 	}
 }

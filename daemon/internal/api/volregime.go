@@ -1,6 +1,10 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+)
 
 // volRegime serves the platform's one validated-edge forecast: per-stock
 // volatility-regime calls (elevated vs calm next quarter), highest conviction
@@ -12,6 +16,15 @@ func (d Deps) volRegime(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpInternal(w, err)
 		return
+	}
+	if d.isMember(r) { // crypto is not covered for members (refuseMemberCrypto)
+		kept := fcs[:0]
+		for _, f := range fcs {
+			if f.Market != string(md.Crypto) {
+				kept = append(kept, f)
+			}
+		}
+		fcs = kept
 	}
 	high := 0
 	for _, f := range fcs {

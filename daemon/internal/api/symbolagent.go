@@ -47,6 +47,9 @@ func (d Deps) symbolAgent(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
+	if d.refuseMemberCrypto(w, r, s.Market) {
+		return
+	}
 	h := md.Horizon(r.URL.Query().Get("horizon"))
 	if h != md.H1d && h != md.H1w {
 		h = md.H1d

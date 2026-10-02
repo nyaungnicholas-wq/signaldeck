@@ -435,3 +435,74 @@ func TestSWRCache_KeysAreIndependent(t *testing.T) {
 		t.Fatalf("keys must not share entries: a=%v b=%v", a, b)
 	}
 }
+
+// Round 5 (F1): a PROOF cache (maxStale > 0) keeps its copy on three refresh
+// paths: no cold build slot, a build whose result belonged to another key
+// (uncachedResult), and a verify that never ran (errLedgerVerifyBusy). None of
+// them may renew the copy's age: maxStale counts from the build that MADE the
+// copy, so once that has passed the copy is not served.
+func TestSWRCache_AKeptProofCopyKeepsItsOriginalAge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		noSlot bool
+		build  func(context.Context) (map[string]any, error)
+	}{
+		{"no cold build slot", true, func(context.Context) (map[string]any, error) {
+			t.Error("the build ran with no slot")
+			return nil, nil
+		}},
+		{"result for another key", false, func(context.Context) (map[string]any, error) {
+			return nil, uncachedResult{map[string]any{"v": 2}}
+		}},
+		{"verify semaphore full", false, func(context.Context) (map[string]any, error) {
+			return nil, errLedgerVerifyBusy
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newSWRCache(time.Minute)
+			c.maxStale = 10 * time.Minute
+			orig := time.Now().Add(-3 * time.Minute)
+			e := &swrEntry{payload: map[string]any{"v": 1}, builtAt: orig, rebuilding: true}
+			c.ent["k"] = e
+			parent := context.Background()
+			if tc.noSlot { // every slot held and the parent gone: acquireColdSlot fails at once
+				for i := 0; i < maxConcurrentColdBuilds; i++ {
+					coldBuildSlots <- struct{}{}
+				}
+				ctx, cancel := context.WithCancel(parent)
+				cancel()
+				parent = ctx
+			}
+			_ = c.refresh(parent, e, "", "k", tc.build)
+			if tc.noSlot {
+				for i := 0; i < maxConcurrentColdBuilds; i++ {
+					<-coldBuildSlots
+				}
+			}
+
+			c.mu.Lock()
+			rebuilding, v, at := e.rebuilding, e.payload["v"], e.builtAt
+			c.mu.Unlock()
+			if rebuilding || v != 1 {
+				t.Fatalf("rebuilding=%v payload v=%v; want the copy kept and the refresh over", rebuilding, v)
+			}
+			if !at.Equal(orig) {
+				t.Fatalf("a refresh that kept the copy renewed its age: builtAt %v, want the original build's %v", at, orig)
+			}
+			// Time passes to maxStale after the ORIGINAL build (relative to builtAt
+			// as it stands, so a renewed age would leave the copy inside maxStale).
+			c.mu.Lock()
+			e.builtAt = e.builtAt.Add(-(c.maxStale - 3*time.Minute) - time.Second)
+			c.mu.Unlock()
+			if _, ok := c.peek("k"); ok {
+				t.Fatal("the kept copy was served past maxStale from its original build")
+			}
+			got, err := c.get(context.Background(), "k", func(context.Context) (map[string]any, error) {
+				return map[string]any{"v": 3}, nil
+			})
+			if err != nil || got["v"] != 3 {
+				t.Fatalf("got %v %v; want a fresh build, not the copy past maxStale", got, err)
+			}
+		})
+	}
+}

@@ -17,6 +17,10 @@ export default function useDashboardProof(): {
 
   useEffect(() => {
     let alive = true;
+    // A daemon that just restarted answers 503 "warming" until the record is
+    // built. get() waits that out (Retry-After, up to 3 min) and keeps the
+    // loading state; the pollMs tick that lands during the wait joins the same
+    // in-flight request rather than starting a second wait.
     const load = () =>
       trackRecordWithGate("1d")
         .then((d) => {

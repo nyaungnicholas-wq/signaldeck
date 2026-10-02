@@ -265,12 +265,16 @@ func (s *Store) InstHoldingsBySymbol(ctx context.Context, symbolID int64, limit 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// Only this symbol's rows (idx_inst_sym), each kept when its period is its
+	// manager's latest (one idx_inst_cik seek per row). The GROUP BY cik join
+	// this replaces walked every manager's history and built an automatic
+	// index on every request; the rows are identical
+	// (TestInstHoldingsBySymbolMatchesGroupByJoin).
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT h.cik, h.manager, h.period, h.symbol_id, h.cusip, h.name, h.value, h.shares
 		FROM inst_holdings h
-		JOIN (SELECT cik, MAX(period) AS mx FROM inst_holdings GROUP BY cik) t
-		  ON t.cik = h.cik AND t.mx = h.period
 		WHERE h.symbol_id = ?
+		  AND h.period = (SELECT MAX(p.period) FROM inst_holdings p WHERE p.cik = h.cik)
 		ORDER BY h.value DESC LIMIT ?`, symbolID, limit)
 	if err != nil {
 		return nil, err

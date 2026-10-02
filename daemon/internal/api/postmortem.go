@@ -1,9 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
+
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
 // postmortems serves the Research Lab's failure-attribution surface: the
@@ -38,11 +41,63 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var recentOut, clustersOut any = recent, clusters
+	if !d.isOperator(r) {
+		// fwdReturn is close/close-1 on two licensed vendor closes, keyed to a
+		// symbol and a time: RAW under the licence line in datalicense.go, the
+		// same row shape /api/export/outcomes.csv is governed for. This route is
+		// in publicRoutes, so everyone but the operator gets the row without it.
+		// An allowlist, not a copy with one field blanked: a column added to the
+		// store row later stays off this surface until someone lists it here.
+		pub := make([]publicPostmortemRow, 0, len(recent))
+		for _, p := range recent {
+			pub = append(pub, publicPostmortemRow{
+				Symbol: p.Symbol, Market: p.Market, Horizon: p.Horizon, Ts: p.Ts, Prob: p.Prob,
+				Up: p.Up, Primary: p.Primary, Secondary: p.Secondary, Reasons: p.Reasons,
+			})
+		}
+		recentOut = pub
+		// meanMag is the mean |fwdReturn| of a cluster. A cluster of one row is
+		// that row's magnitude, and recent[] carries the same row's symbol, ts
+		// and sign (up). The caller picks days, so no minimum count holds: any
+		// cluster can be narrowed to one row. So the field is withheld, not
+		// floored, and the cluster keeps its code and count.
+		pubC := make([]publicPostmortemCluster, 0, len(clusters))
+		for _, c := range clusters {
+			pubC = append(pubC, publicPostmortemCluster{Code: c.Code, Count: c.Count, Share: c.Share, MeanConv: c.MeanConv})
+		}
+		clustersOut = pubC
+	}
+
 	writeJSON(w, map[string]any{
 		"windowDays":   days,
 		"totalMisses":  total,
-		"clusters":     clusters, // biggest recurring failure mode first
-		"recent":       recent,
+		"clusters":     clustersOut, // biggest recurring failure mode first
+		"recent":       recentOut,
 		"taxonomyNote": "primary reason per resolved WRONG prediction; 'unexplained' means no recorded signal saw it coming (a missing-feature flag, not an error).",
 	})
+}
+
+// publicPostmortemRow is store.RecentPostmortemRow without fwdReturn: the
+// recent-misses row everyone but the operator receives.
+type publicPostmortemRow struct {
+	Symbol    string          `json:"symbol"`
+	Market    md.Market       `json:"market"`
+	Horizon   md.Horizon      `json:"horizon"`
+	Ts        int64           `json:"ts"`
+	Prob      float64         `json:"prob"`
+	Up        int             `json:"up"`
+	Primary   string          `json:"primary"`
+	Secondary string          `json:"secondary,omitempty"`
+	Reasons   json.RawMessage `json:"reasons"`
+}
+
+// publicPostmortemCluster is store.PostmortemCluster without meanMag: the
+// failure-mode cluster everyone but the operator receives. An allowlist, like
+// publicPostmortemRow.
+type publicPostmortemCluster struct {
+	Code     string  `json:"code"`
+	Count    int     `json:"count"`
+	Share    float64 `json:"share"`
+	MeanConv float64 `json:"meanConviction"`
 }
