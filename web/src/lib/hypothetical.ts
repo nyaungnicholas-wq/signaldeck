@@ -20,3 +20,11 @@ export const WHAT_SIGNALDECK_IS =
 export const SYMBOL_MODEL_LABEL = "This symbol's model";
 export const SYMBOL_MODEL_DESCRIPTION =
   "a statistical classifier on its own price and volume history";
+
+/**
+ * Beside a LIVE graded number (plan step 9, the volatility record): not
+ * hypothetical, so it does not say so, but it is still no promise.
+ */
+export const LIVE_GRADED_NOTE =
+  "Live graded record: forecasts frozen before the outcome and scored against it, not a backtest. " +
+  "Past accuracy does not guarantee future results.";

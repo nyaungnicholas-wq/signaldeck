@@ -242,6 +242,7 @@ type sentinelFixture struct {
 	sntl, sntc, sntw md.Symbol
 	evidenceID       string
 	variant          int
+	journalCall      int64 // a resolved member call graded from sentinel bars (scanMemberSurface)
 }
 
 // seedSentinels writes the sentinels into every vendor table, plus the
@@ -466,7 +467,7 @@ var memberProbeExempt = map[string]string{
 
 // memberProbeFloor is the measured size of the probed member surface. It may
 // only go up: a drop means routes left the scan.
-const memberProbeFloor = 43
+const memberProbeFloor = 51
 
 func memberProbes(fx sentinelFixture) map[string]memberProbe {
 	get := func(url, marker string) memberProbe { return memberProbe{method: "GET", url: url, marker: marker} }
@@ -488,6 +489,10 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		// redeems is driven in alertprefs_test.go.
 		"/api/alerts/unsubscribe": {method: "GET", url: "/api/alerts/unsubscribe?token=probe", marker: `value="probe"`},
 		"/api/auth/me":            get("/api/auth/me", `"username":"mira"`),
+		// Ask the data (plan step 10): the status read; off for members by
+		// default, so the refusal is served. ask_test.go drives POST against this
+		// store with the flag on and an echoing fake model.
+		"/api/ask": get("/api/ask", `"available":false`),
 		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"N":%d`, n)),
 		"/api/canary":             get("/api/canary", "SNTL_CANARY_MODEL"),
 		"/api/companies":          get("/api/companies?q=SNTL", "Sentinel Corp"),
@@ -501,9 +506,15 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/fundamentals":       get("/api/fundamentals?symbol=SNTL", "SharesOutstanding"),
 		// No seedable row: built per request and uncached, so the marker only
 		// has to prove the handler answered. Same below where noted.
-		"/api/health":         get("/api/health", `"openSignup":true`),
-		"/api/honesty":        {method: "GET", url: "/api/honesty", marker: fmt.Sprintf(`"independentN":%d`, n), strip: stripHonestyPoints},
-		"/api/insiders":       get("/api/insiders", "Jane Sentinel"),
+		"/api/health":   get("/api/health", `"openSignup":true`),
+		"/api/honesty":  {method: "GET", url: "/api/honesty", marker: fmt.Sprintf(`"independentN":%d`, n), strip: stripHonestyPoints},
+		"/api/insiders": get("/api/insiders", "Jane Sentinel"),
+		// The member's own journal (plan step 8): a call graded from sentinel
+		// bars; the grade is served, no close or return (journal_test.go).
+		"/api/journal": get("/api/journal", `"status":"resolved","outcome":"hit"`),
+		"/api/journal/withdraw": {method: "POST", url: "/api/journal/withdraw", body: map[string]int64{"id": fx.journalCall},
+			marker: "withdrawn only before", status: http.StatusConflict,
+			why: "the seeded call is resolved, so it is final; journal_test.go drives the 200"},
 		"/api/institutions":   get("/api/institutions?symbol=SNTL", "Sentinel Capital"),
 		"/api/ledger":         get("/api/ledger?symbol=SNTL&market=stocks", `"count":1`),
 		"/api/ledger/anchors": get("/api/ledger/anchors", `"mode":"stored"`), // per request, uncached
@@ -530,6 +541,9 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/version":            get("/api/version", `"version":"test"`),
 		"/api/vol-forecast/record": get("/api/vol-forecast/record", // cached
 			fmt.Sprintf(`"horizon":%d,"n":%d,`, pipeline.RVHorizons[0], perVariant)),
+		// Current HAR forecasts, gated on the record verdict (plan step 9): this
+		// store's record is INSUFFICIENT, so the gate answers and serves none.
+		"/api/vol-forecast/latest": get("/api/vol-forecast/latest", `"available":false`),
 		"/api/vol-regime": get("/api/vol-regime", "SNTL"),
 		"/api/watch":      {method: "POST", url: "/api/watch", body: watchBody("SNTL"), marker: "SNTL"},
 		"/api/watchlist":  get("/api/watchlist", "SNTL"),
@@ -669,6 +683,14 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		}
 		return u.ID
 	}
+	// The member's journal holds a call graded from sentinel-priced bars on its
+	// own symbol (SNTJ, so SNTL's bars and every marker built on them stay as
+	// seeded): its grade is served, its closes and return must not be.
+	sntj, err := st.UpsertSymbol(ctx, "SNTJ", md.Stocks, "Sentinel Journal Inc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.journalCall = seedResolvedJournalCall(t, st, uid("mira"), sntj.ID)
 	// The member watches SNTL, and holds an SNTC/USD row from before crypto
 	// left the member product; the operator watches SNTL.
 	for _, id := range []int64{fx.sntl.ID, fx.sntc.ID} {

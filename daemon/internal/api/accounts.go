@@ -47,7 +47,7 @@ const (
 // memberRoutes are the only non-public routes a non-admin account may call on
 // a published deployment. Every entry serves derived analytics or public-domain
 // filings, never a vendor price, bar, volume, quote or headline, and none spends
-// LLM budget. TestMemberRoutesServeNoLicensedData pins this against
+// LLM budget but /api/ask (flag-gated, capped). TestMemberRoutesServeNoLicensedData pins this against
 // datalicense.RestrictedRoutes and against the MIXED routes measured
 // 2026-09-30 (dashboard, screener, symbol, signal-report ...), whose "derived"
 // payloads still carry closes, volumes or price-quoting notes.
@@ -77,6 +77,16 @@ var memberRoutes = map[string]bool{
 	// link code, never an input that could personalise what is sent.
 	"/api/alert-prefs": true, "/api/alert-prefs/telegram-link": true,
 	"/api/alert-prefs/telegram-unlink": true,
+	// The member's own call journal (plan step 8): their calls and their
+	// grade, never a price or return, never an input to SignalDeck's forecasts.
+	"/api/journal": true, "/api/journal/withdraw": true,
+	// Ask the data (plan step 10): gated INSIDE the handler (403 until
+	// SIGNALDECK_MEMBER_COPILOT=1), member catalog entries only, so this one
+	// does spend LLM budget, capped per member per day (ask.go).
+	"/api/ask": true,
+	// The current HAR volatility forecasts (plan step 9): symbol, horizon,
+	// date and annualised vol only; no null, coefficient or outcome.
+	"/api/vol-forecast/latest": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published

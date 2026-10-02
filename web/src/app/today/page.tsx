@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import TodaysRead from "@/components/home/TodaysRead";
 import VolRegimeLead from "@/components/home/VolRegimeLead";
+import RiskFirst from "@/components/home/RiskFirst";
 import ProofStrip from "@/components/home/ProofStrip";
 import { WHAT_SIGNALDECK_IS } from "@/lib/hypothetical";
 
@@ -53,6 +54,8 @@ export default function TodayPage() {
           {WHAT_SIGNALDECK_IS}
         </p>
       </header>
+      {/* Risk first (plan step 9): leads only when the live volatility verdict passes. */}
+      {watch !== undefined && <RiskFirst watchSymbols={watch} />}
       {watch !== undefined && <TodaysRead watchSymbols={watch} />}
       <VolRegimeLead memberView />
       <ProofStrip />

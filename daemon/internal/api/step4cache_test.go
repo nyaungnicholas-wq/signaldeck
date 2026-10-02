@@ -28,6 +28,13 @@ import (
 )
 
 // shortColdServeWait shrinks the request-side wait for one test.
+// eventuallyWait bounds every "wait until it lands" loop below. Each loop
+// returns the moment its condition holds, so the bound only matters for a
+// failure; 2-5 s flaked under a full ./... run on a loaded host
+// (TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly, 2026-10-02) while the
+// same test passed 10/10 alone.
+const eventuallyWait = 30 * time.Second
+
 func shortColdServeWait(t *testing.T, d time.Duration) {
 	t.Helper()
 	orig := coldServeWait
@@ -132,7 +139,7 @@ func TestSWRCache_PersistedPayloadServesWithoutAnInlineBuild(t *testing.T) {
 		t.Fatal("serving the persisted body did not start a background rebuild")
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		if p, _, ok := loadPersistedPayload(file, "st9|1d"); ok && p["v"] == json.Number("2") {
 			break
@@ -176,7 +183,7 @@ func TestSWRBodyCache_PersistedBodyServesWithoutAnInlineBuild(t *testing.T) {
 	}
 	// The background rebuild lands and is persisted (and is done with the temp
 	// dir before the test removes it).
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		if b, _, ok := loadPersistedBody(file, "st9|record"); ok && strings.Contains(string(b), `"asOf":2`) {
 			break
@@ -203,7 +210,7 @@ func TestSWRCache_ColdBuildPastTheServeWaitAnswersWarming(t *testing.T) {
 		t.Fatalf("err = %v, want errWarming once coldServeWait passed", err)
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		got, err := c.get(ctx, "k", build)
 		if err == nil && got["v"] == 1 {
@@ -333,7 +340,7 @@ func TestLedgerVerify_DefaultResultIsComputedOncePerTTL(t *testing.T) {
 // waitNotRebuilding waits for e's background refresh to finish.
 func waitNotRebuilding(t *testing.T, e *swrEntry) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		sharedLedgerVerifyCache.mu.Lock()
 		busy := e.rebuilding
@@ -467,7 +474,7 @@ func TestLedgerVerify_AFailedRebuildStopsTheIntactAnswer(t *testing.T) {
 	if code, _ := verifyStatus(t, srv); code != http.StatusOK {
 		t.Fatalf("stale read: %d, want the stale 200 while the refresh runs", code)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		sharedLedgerVerifyCache.mu.Lock()
 		busy := e.rebuilding
@@ -861,7 +868,7 @@ func TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly(t *testing.T) {
 	}
 	waitPersisted := func(file, want string) {
 		t.Helper()
-		deadline := time.Now().Add(2 * time.Second) // the refresh behind a served body lands in the temp dir
+		deadline := time.Now().Add(eventuallyWait) // the refresh behind a served body lands in the temp dir
 		for {
 			if p, _, ok := loadPersistedPayload(file, "st2|1d"); ok && p["v"] == want {
 				return
@@ -917,7 +924,7 @@ func TestPersistedBody_AFailingRefreshStopsTheDiskCopyAfterTheWindow(t *testing.
 	c := newSWRCache(time.Minute)
 	idle := func() {
 		t.Helper()
-		deadline := time.Now().Add(2 * time.Second)
+		deadline := time.Now().Add(eventuallyWait)
 		for {
 			c.mu.Lock()
 			busy := c.ent["k"] != nil && c.ent["k"].rebuilding
@@ -955,7 +962,7 @@ func TestPersistedBody_AFailingRefreshStopsTheDiskCopyAfterTheWindow(t *testing.
 	if !strings.Contains(rec.Body.String(), "disk") {
 		t.Fatalf("inside the window: %d %s, want the disk body", rec.Code, rec.Body.String())
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		bc.mu.Lock()
 		busy := bc.ent["k"].rebuilding
@@ -1061,7 +1068,7 @@ func TestWarmCaches_AttributionLeadsThePass(t *testing.T) {
 		e := sharedAttributionLiveCache.ent[attributionCacheKey(d.St, h)]
 		return e != nil && e.payload != nil
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for !built(md.H1d) || !built(md.H1w) {
 		if time.Now().After(deadline) {
 			t.Fatal("attribution was not built while the pass waited on track-record: it is not first")
@@ -1114,7 +1121,7 @@ func TestAttributionRoute_NoSlotAnswersWarmingNotZeroEvidence(t *testing.T) {
 		t.Fatalf("currentStateFor with no slot = %v, %v; want errWarming", states, err)
 	}
 	free()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(eventuallyWait)
 	for {
 		if code, _ := get(); code == http.StatusOK {
 			break
@@ -1442,7 +1449,7 @@ func TestPersistedBody_PastTheWindowWithARefreshInFlightAnswersWarming(t *testin
 	if !strings.Contains(rec.Body.String(), "disk") {
 		t.Fatalf("inside the window: %d %s, want the disk body", rec.Code, rec.Body.String())
 	}
-	for deadline := time.Now().Add(2 * time.Second); renders.Load() == 0; {
+	for deadline := time.Now().Add(eventuallyWait); renders.Load() == 0; {
 		if time.Now().After(deadline) {
 			t.Fatal("the disk body started no refresh")
 		}

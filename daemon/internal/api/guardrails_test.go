@@ -33,6 +33,7 @@ var perUserRoutes = map[string]string{
 	"/api/watchlist":   "the member's own bookmark list; carries no forecast a non-watcher cannot read on /api/regimes",
 	"/api/auth/me":     "the session's own identity",
 	"/api/alert-prefs": "the member's own on/off delivery switches",
+	"/api/journal":     "the member's own calls and their grade; never a SignalDeck forecast, and no price or return",
 }
 
 // TestMemberForecastsAreImpersonal: two members with different watchlists and
@@ -156,9 +157,19 @@ var memberInputs = map[string]string{
 	"website": "sign-up honeypot", "hp": "waitlist honeypot", "source": "waitlist referral tag",
 	"credential":  "Google ID token",
 	"emailDigest": "daily-read email on/off (alert-prefs)",
+	// The member's OWN calls in the journal (plan step 8): what the member
+	// predicts, graded against the tape. These never reach, change or
+	// personalise SignalDeck's forecasts. symbol, market, horizon and id (listed
+	// above) are read by the journal too: the called ticker, "stocks", the
+	// call's horizon in sessions (1, 5, 21), and the member's own call id.
+	"call": "journal: the member's own call, up or down",
+	"note": "journal: the member's own note on their call (280 chars, shown only to them)",
 	// TradingView inbound alert body (shared-secret webhook; operator's own alerts, nothing served back).
 	"action": "TradingView alert action", "message": "TradingView alert text", "price": "TradingView alert price field",
 	"secret": "TradingView shared secret",
+	// Ask the data (plan step 10): the question goes to the model as the user
+	// turn; rows come only from the copilot catalog, never from this text.
+	"question": "ask the data: the member's question (500 chars)",
 }
 
 var personalInput = regexp.MustCompile(`(?i)capital|size|portfolio|position|risk|account|balance|equity|amount|qty|quantity|leverage`)

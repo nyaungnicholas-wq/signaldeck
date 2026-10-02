@@ -116,6 +116,8 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
 	d.registerAlertPrefs(mux)                     // member daily-read opt-ins + one-click unsubscribe (alertprefs.go)
+	d.registerJournal(mux)                        // member call journal: the member's own calls, graded (journal.go)
+	d.registerAsk(mux)                            // ask the data: cited answers from the copilot catalog (ask.go)
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	// Body-cached (60s SWR): under worker load the uncached build queued behind
 	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404
@@ -147,6 +149,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	// visitor — and the /volatility page's 15s server-side fetch — must never
 	// be the one to build it. WarmCaches keeps it hot.
 	mux.HandleFunc("GET /api/vol-forecast/record", d.serveVolRecord)
+	mux.HandleFunc("GET /api/vol-forecast/latest", d.serveVolLatest) // member: current HAR forecasts, derived fields only (plan step 9)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
 	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed

@@ -54,6 +54,9 @@ export const LICENCE_REFUSAL_TEXT =
   "redistributed, so this deployment does not serve them. Every derived signal " +
   "here — regimes, forecasts, risk — is computed from them and is unaffected.";
 
+import type { CallDirection, Journal } from "@/lib/journal";
+import type { AskAnswer, AskStatus } from "@/lib/ask";
+
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
 export const HORIZONS: Horizon[] = ["1h", "1d", "1w"];
@@ -620,6 +623,19 @@ export const api = {
   memberWatchlist: () => get<MemberWatchRow[]>("/api/watchlist"),
   watch: (symbol: string, market: Market) => post<SymbolInfo>("/api/watch", { symbol, market }),
   unwatch: (symbol: string, market: Market) => post<SymbolInfo>("/api/unwatch", { symbol, market }),
+  // Member call journal (daemon step 8): the member's own calls and their
+  // grade. The daemon never returns a price or return for a call (licence).
+  journal: () => get<Journal>("/api/journal"),
+  journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
+    post<Journal>("/api/journal", c),
+  journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
+  // Ask the data (plan step 10): cited answers from SignalDeck's own tables.
+  askStatus: () => get<AskStatus>("/api/ask"),
+  ask: (question: string) => post<AskAnswer>("/api/ask", { question }),
+  // Risk first (plan step 9). The record is validated by lib/riskHeadline, so
+  // it stays `unknown` here; latest is derived fields only (member route).
+  volForecastRecord: () => get<unknown>("/api/vol-forecast/record"),
+  volForecastLatest: () => get<VolForecastLatest>("/api/vol-forecast/latest"),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
 
@@ -716,6 +732,18 @@ export interface Me {
 
 /** A MEMBER's watchlist row: identity and data freshness only. The daemon
  *  strips closes, sparks, day change and scores for members (vendor-licensed). */
+/** GET /api/vol-forecast/latest: current HAR forecasts, annualised vol in percent. */
+export interface VolForecastLatest {
+  // The daemon serves forecasts only while the record's next-day verdict is
+  // BEATS THE NULLS; otherwise available is false and only reason is set.
+  available: boolean;
+  reason?: string;
+  verdict?: string;
+  forecasts?: { symbol: string; horizon: number; asOf: number; volPct: number }[];
+  what?: string;
+  caveat?: string;
+}
+
 export interface MemberWatchRow extends SymbolInfo {
   latestBarTs: number;
 }

@@ -55,6 +55,8 @@ const NAV: NavItem[] = [
     label: "WATCHLIST",
     match: ["/watchlist", "/deck", "/compare"],
   },
+  // Ask the data (daemon plan step 10): cited answers from SignalDeck's tables.
+  { href: "/ask", label: "ASK", match: ["/ask"] },
   {
     href: "/intel/news",
     label: "INTEL",
@@ -107,6 +109,8 @@ const MEMBER_NAV: NavItem[] = [
   { href: "/today", label: "TODAY", match: ["/today"] },
   { href: "/market/regimes", label: "REGIMES", match: ["/market/regimes", "/market/breadth"] },
   { href: "/watchlist", label: "WATCHLIST", match: ["/watchlist", "/s"] },
+  { href: "/journal", label: "MY CALLS", match: ["/journal"] },
+  { href: "/ask", label: "ASK", match: ["/ask"] }, // shown only while the daemon offers it to members
   { href: "/accuracy", label: "RECORD", match: ["/accuracy", "/proof", "/volatility"] },
 ];
 
@@ -414,6 +418,20 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (offLimits) router.replace("/today");
   }, [offLimits, router]);
+  // Members see ASK only when the daemon answers available (it is off for
+  // members until SIGNALDECK_MEMBER_COPILOT=1, and answers 403 to an ask).
+  const [askOpen, setAskOpen] = useState(false);
+  useEffect(() => {
+    if (!member) return;
+    let alive = true;
+    api
+      .askStatus()
+      .then((s) => alive && setAskOpen(s.available))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [member]);
 
   // Setup-checklist milestones are recorded here, from the one place every
   // navigation already passes through — cheaper and harder to forget than
@@ -451,7 +469,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   // SIMPLE shows three hubs plus the Advanced door; PRO shows all five. Members
   // get their own four; nothing renders until we know which, so a member never
   // sees the operator's hubs flash past.
-  const hubs = !known ? [] : member ? MEMBER_NAV : pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
+  const memberNav = askOpen ? MEMBER_NAV : MEMBER_NAV.filter((n) => n.href !== "/ask");
+  const hubs = !known ? [] : member ? memberNav : pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
 
   const navLinks = hubs.map((n) => {
     const active =

@@ -69,3 +69,17 @@ test("/account mounts the alerts panel with the digest copy and Telegram code in
   assert.ok(c.includes("within 15 minutes"));
   assert.ok(c.includes("prefs.telegramAvailable &&"), "Telegram must be gated on telegramAvailable");
 });
+
+test("Risk first (step 9): live note wording, rendered beside the forecast, mounted first on /today", async () => {
+  const { LIVE_GRADED_NOTE } = await import("./hypothetical.ts");
+  assert.match(LIVE_GRADED_NOTE, /^Live graded record/);
+  assert.match(LIVE_GRADED_NOTE, /Past accuracy does not guarantee future results\.$/);
+  assert.doesNotMatch(LIVE_GRADED_NOTE, /hypothetical/i); // a live graded number is not hypothetical
+  assert.match(src("../components/HypotheticalNote.tsx"), /live \? LIVE_GRADED_NOTE :/);
+  const rf = src("../components/home/RiskFirst.tsx");
+  assert.ok(rf.includes("<HypotheticalNote live />"));
+  assert.ok(rf.includes("riskHeadline(rec)"), "the headline must come from the verdict helper");
+  const today = src("../app/today/page.tsx");
+  const i = today.indexOf("<RiskFirst watchSymbols={watch} />");
+  assert.ok(i > 0 && i < today.indexOf("<TodaysRead "), "RiskFirst must sit above TodaysRead");
+});

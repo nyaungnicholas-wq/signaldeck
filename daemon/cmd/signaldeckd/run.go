@@ -47,6 +47,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/memberdigest"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/memberjournal"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -559,6 +560,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	fleet = append(fleet, cacheWarmWorkers(&warmTarget)...)
 	fleet = append(fleet, digestWorkers(st, remote)...)
 	fleet = append(fleet, memberDigestWorkers(st, remote, cfg)...)
+	// member-call-resolver (plan step 8): grades members' own journal calls
+	// after the close on trading days (internal/memberjournal).
+	fleet = append(fleet, &memberjournal.Resolver{St: st})
 	// Ops-notify wave (constructor appended at the END of this file) — the
 	// daily dead-man heartbeat + ledger-verify escalation (H9). BEFORE the
 	// watchdog spec snapshot so it's health-audited like every other worker.

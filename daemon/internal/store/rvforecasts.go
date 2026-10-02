@@ -171,3 +171,48 @@ func (s *Store) CountResolvedRV(ctx context.Context) (int, error) {
 		`SELECT COUNT(*) FROM rv_forecasts WHERE actual IS NOT NULL`).Scan(&n)
 	return n, err
 }
+// LatestRV is one current forecast as a member may read it: the symbol, the
+// horizon, the call bar and the forecast level. No null, coefficient or
+// outcome travels with it.
+type LatestRV struct {
+	Symbol  string
+	Horizon int
+	Ts      int64
+	RVHat   float64
+}
+
+// LatestRVForecasts returns, per horizon, every stock forecast frozen on that
+// horizon's most recent call bar. A symbol the runner skipped on that bar
+// (thin, stale) has no current forecast and is absent rather than shown an
+// older one as if it were today's.
+func (s *Store) LatestRVForecasts(ctx context.Context) ([]LatestRV, error) {
+	// The newest stock call bar per horizon is computed ONCE (one scan) and
+	// joined back. The correlated MAX(ts) this replaced re-scanned the table
+	// for every row: quadratic, measured at 28s on 40 days of rows on an
+	// uncached member route (TestLatestRVForecastsIsNotQuadratic).
+	rows, err := s.db.QueryContext(ctx, `
+		WITH latest AS (
+		  SELECT f.horizon, MAX(f.ts) AS ts
+		    FROM rv_forecasts f JOIN symbols sy ON sy.id = f.symbol_id
+		   WHERE sy.market = 'stocks'
+		   GROUP BY f.horizon)
+		SELECT sy.symbol, f.horizon, f.ts, f.rv_hat
+		  FROM latest l
+		  JOIN rv_forecasts f ON f.horizon = l.horizon AND f.ts = l.ts
+		  JOIN symbols sy ON sy.id = f.symbol_id
+		 WHERE sy.market = 'stocks'
+		 ORDER BY sy.symbol, f.horizon`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []LatestRV
+	for rows.Next() {
+		var r LatestRV
+		if err := rows.Scan(&r.Symbol, &r.Horizon, &r.Ts, &r.RVHat); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
