@@ -33,3 +33,7 @@ ops/data-integrity.json -text
 # as a line ending. The proofs themselves are binary and must never be touched.
 proofs/ots/*.txt -text
 proofs/ots/*.ots binary
+
+# The Go RV grader's parity fixture is compared byte-for-byte by
+# tools/rv_grader_parity.py --check; a CRLF checkout would read as stale.
+daemon/internal/rvgrade/testdata/*.json -text
