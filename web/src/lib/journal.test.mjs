@@ -51,3 +51,11 @@ test("/journal is a member page in the member nav, and renders the footer and co
   assert.doesNotMatch(page, /fmtPrice|lastClose|entryPrice|exitPrice/);
   assert.match(src("../app/journal/page.tsx"), /MemberJournal/);
 });
+
+test("member symbol page mounts the FINRA short panels only when the daemon opens them", () => {
+  const view = src("../components/symbol/MemberSymbolView.tsx");
+  assert.match(view, /memberFinra === true/);
+  for (const panel of ["ShortInterestPanel", "ShortVolumePanel"]) {
+    assert.ok(view.includes(`{finra && <${panel} `), `${panel} is mounted without the memberFinra gate`);
+  }
+});

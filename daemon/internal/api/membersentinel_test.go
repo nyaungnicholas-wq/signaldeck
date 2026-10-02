@@ -658,7 +658,14 @@ func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 
 func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config), variant int) {
 	ctx := context.Background()
-	srv, st, mb, d := newProductionServer(t, mutate, writeRegistry(t, thinWindowRegistry))
+	// The widest member surface: the FINRA routes open too (memberFINRARoutes;
+	// finra_member_test.go drives their default refusal).
+	srv, st, mb, d := newProductionServer(t, func(c *config.Config) {
+		c.MemberFINRA = true
+		if mutate != nil {
+			mutate(c)
+		}
+	}, writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
 	// The dashboard's global sections are ONE process-wide entry, not keyed by
 	// store: a warm pass from an earlier test (or an earlier -count iteration)

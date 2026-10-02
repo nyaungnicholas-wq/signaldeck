@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 )
 
 // perUserRoutes are the member-reachable GETs whose body legitimately depends
@@ -43,7 +45,9 @@ var perUserRoutes = map[string]string{
 // differs across members is personalised and fails.
 func TestMemberForecastsAreImpersonal(t *testing.T) {
 	ctx := context.Background()
-	srv, st, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	// FINRA routes open, so the comparison covers the widest member surface.
+	srv, st, mb, _ := newProductionServer(t, func(c *config.Config) { c.MemberFINRA = true },
+		writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
 	sharedDashCache.mu.Lock()
 	sharedDashCache.global = nil

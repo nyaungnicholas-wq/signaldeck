@@ -728,6 +728,9 @@ export interface Me {
    *  operator on a published deployment. Member pages key on THIS, never on
    *  !isAdmin — on a private deployment every account is the operator. */
   member?: boolean;
+  /** Whether the FINRA short routes are open to members (SIGNALDECK_MEMBER_FINRA);
+   *  off by default, so member pages hide the short panels instead of fetching a 403. */
+  memberFinra?: boolean;
 }
 
 /** A MEMBER's watchlist row: identity and data freshness only. The daemon

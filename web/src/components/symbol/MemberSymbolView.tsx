@@ -3,9 +3,10 @@
 // The symbol page as a MEMBER sees it. Price comes from TradingView's widget
 // (TradingView carries that data licence); everything else is SignalDeck's own
 // validated regime reads with their measured accuracy, the symbol's model tier,
-// and public-domain intel (SEC filings, Form 4, 13F, XBRL fundamentals, FINRA
-// short data, STOCK Act trades). Every panel here reads only routes in the
-// daemon's memberRoutes; the operator page next door reads ~27 more.
+// and public-domain intel (SEC filings, Form 4, 13F, XBRL fundamentals, STOCK
+// Act trades, and FINRA short data only while the daemon opens it to members,
+// SIGNALDECK_MEMBER_FINRA). Every panel here reads only routes in the daemon's
+// memberRoutes; the operator page next door reads ~27 more.
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -19,6 +20,7 @@ import ShortInterestPanel from "@/components/symbol/ShortInterestPanel";
 import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import { useMe } from "@/hooks/useMe";
 
 export default function MemberSymbolView({ symbol, market }: { symbol: string; market: Market }) {
   const [name, setName] = useState<string>("");
@@ -26,6 +28,9 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // FINRA short data is operator-only unless the daemon says otherwise; the
+  // panels are not even mounted until it does, so no refused fetch fires.
+  const finra = useMe().me?.memberFinra === true;
 
   useEffect(() => {
     let alive = true;
@@ -112,8 +117,8 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
           <CongressChip symbol={symbol} />
           <FinancialsPanel symbol={symbol} />
           <FilingsIntelPanel symbol={symbol} />
-          <ShortInterestPanel symbol={symbol} />
-          <ShortVolumePanel symbol={symbol} />
+          {finra && <ShortInterestPanel symbol={symbol} />}
+          {finra && <ShortVolumePanel symbol={symbol} />}
         </>
       )}
 
@@ -123,7 +128,7 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
         <Link href="/accuracy" className="underline">
           record
         </Link>
-        . Filings, insider, holder and short data are public SEC and FINRA records. Not financial advice.
+        . Filings, insider and holder data are public SEC records{finra ? "; short data is FINRA's" : ""}. Not financial advice.
       </p>
       <HypotheticalNote short className="px-1" />
     </div>
