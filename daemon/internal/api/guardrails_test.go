@@ -324,8 +324,7 @@ func scanMemberInputs(t *testing.T) inputScan {
 		// and the variables holding the request body (or a reader over it).
 		declared := map[string]ast.Expr{}
 		fromBody := map[string]bool{}
-		var mentionsBody func(e ast.Node) bool
-		mentionsBody = func(e ast.Node) bool {
+		mentionsBody := func(e ast.Node) bool {
 			found := false
 			ast.Inspect(e, func(n ast.Node) bool {
 				switch n := n.(type) {
