@@ -417,7 +417,20 @@ func (s *Store) AnchorDue(ctx context.Context, v LedgerVerification, p AnchorPol
 		return head, false, "", err
 	}
 	if hasLast {
-		if elapsed := now.Sub(time.Unix(last.Record.CreatedAt, 0)); elapsed < p.MinInterval {
+		// v.Intact cannot see a wholesale regeneration (the fabricated chain is
+		// internally perfect); the prior anchor can. Signing over a head the
+		// prior anchor contradicts would bury tamper evidence under a fresh,
+		// perfectly reproducing claim.
+		var stored string
+		err := s.db.QueryRowContext(ctx,
+			`SELECT entry_hash FROM prediction_ledger WHERE seq=?`, last.Record.LedgerSeq).Scan(&stored)
+		if err != nil && err != sql.ErrNoRows {
+			return head, false, "", err
+		}
+		if stored != last.Record.HeadHash {
+			return head, false, fmt.Sprintf("the newest prior anchor (ledger seq %d) no longer reproduces against the stored chain — refusing to sign a new anchor over a contradicted history", last.Record.LedgerSeq), nil
+		}
+		if elapsed :=now.Sub(time.Unix(last.Record.CreatedAt, 0)); elapsed < p.MinInterval {
 			return head, false,
 				fmt.Sprintf("cadence: %s since the last anchor, minimum %s", elapsed.Truncate(time.Second), p.MinInterval), nil
 		}

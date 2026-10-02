@@ -616,18 +616,37 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	appendLedgerRows(t, st, sym.ID, 12, 0.77)
+	appendLedgerRows(t, st, sym.ID, 15, 0.77) // past seq 12, so the operator anchor is not a (seq, key) duplicate
 	ver, err := st.VerifyLedger(ctx)
 	if err != nil {
 		t.Fatalf("verify fabricated chain: %v", err)
 	}
-	// A zero-cadence policy stands in for "enough time passed" — the operator
-	// only has to wait, which is not a defence.
-	if _, wrote, reason, err := st.AnchorDue(ctx, ver, store.AnchorPolicy{}, time.Now()); err != nil || !wrote {
-		t.Fatalf("anchor over fabricated chain: wrote=%v reason=%q err=%v", wrote, reason, err)
+	// The operator, who holds the key, signs an anchor over the fabrication
+	// dated past the cadence window. (This used to call AnchorDue, which only
+	// reports "due" and writes nothing — the fresh anchor never existed.)
+	sg, err := ledgeranchor.LoadOrCreateSigner(ledgeranchor.DefaultKeyPath())
+	if err != nil {
+		t.Fatal(err)
 	}
+	if wrote, err := st.AppendLedgerAnchor(ctx,
+		sg.Sign(time.Now().Add(-7*time.Hour).Unix(), 15, ver.Count, ver.HeadHash)); err != nil || !wrote {
+		t.Fatalf("operator anchor over fabricated chain: wrote=%v err=%v", wrote, err)
+	}
+	appendLedgerRows(t, st, sym.ID, 3, 0.77) // cadence and MinNewEntries now allow a third
 
 	v := getLedgerVerify(t, srv, "")
+	// The newest anchor reproduces but an older one does not: no new anchor,
+	// and the refusal says why.
+	if v.Tamper.Anchoring.Wrote || !strings.Contains(v.Tamper.Anchoring.Reason, "no longer reproduce") {
+		t.Errorf("anchoring over a contradicted chain: wrote=%v reason=%q", v.Tamper.Anchoring.Wrote, v.Tamper.Anchoring.Reason)
+	}
+	// A non-null provenAnterior* reads as proven; withheld while any anchor fails.
+	if v.Tamper.ProvenAnteriorThroughSeq != nil || v.Tamper.ProvenAnteriorThroughCount != nil {
+		t.Errorf("provenAnterior = %v/%v while an anchor fails, want null", v.Tamper.ProvenAnteriorThroughSeq, v.Tamper.ProvenAnteriorThroughCount)
+	}
+	if strings.Contains(v.Tamper.Claim, "No anchor currently reproduces") {
+		t.Errorf("claim says no anchor reproduces while the newer one does: %q", v.Tamper.Claim)
+	}
 	if v.Tamper.FailingAnchors < 1 {
 		t.Fatalf("failingAnchors = %d — a regenerated chain read clean, so the summary is still checking only the newest anchor",
 			v.Tamper.FailingAnchors)
@@ -847,8 +866,11 @@ func TestLedgerVerify_ARegeneratedChainReSignedAtTheSameAnchorSeqReadsAsTamper(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, wrote, reason, err := st.MaybeAnchorLedger(ctx, sg, ver, store.AnchorPolicy{}, time.Now()); err != nil || !wrote {
-		t.Fatalf("re-sign the fabricated head: wrote=%v reason=%q err=%v", wrote, reason, err)
+	// Written straight into the table: since 802e011 the daemon's own anchoring
+	// path refuses to sign over a head the prior anchor contradicts, so the
+	// attacker (who holds the key) bypasses it.
+	if wrote, err := st.AppendLedgerAnchor(ctx, sg.Sign(time.Now().Unix(), ver.HeadSeq, ver.Count, ver.HeadHash)); err != nil || !wrote {
+		t.Fatalf("re-sign the fabricated head: wrote=%v err=%v", wrote, err)
 	}
 	forged, _, err := st.LatestLedgerAnchor(ctx)
 	if err != nil || forged.RowSeq != honest.RowSeq || forged.Record.Sig == honest.Record.Sig {
@@ -860,5 +882,40 @@ func TestLedgerVerify_ARegeneratedChainReSignedAtTheSameAnchorSeqReadsAsTamper(t
 	if v.Tamper.FailingAnchors < 1 || v.Tamper.LocalAnchorsReproduce || !strings.Contains(v.Tamper.Claim, "TAMPER EVIDENCE") {
 		t.Fatalf("next default read after the regeneration: failingAnchors=%d localAnchorsReproduce=%v claim=%q — "+
 			"the result cached for the honest chain was served", v.Tamper.FailingAnchors, v.Tamper.LocalAnchorsReproduce, v.Tamper.Claim)
+	}
+}
+
+// TestLedgerVerify_UnpinnedStrayAnchorDoesNotBlockAnchoring: an anchor under an
+// unpinned key reads as failing, but anyone with DB write access can add one,
+// so it must not veto anchoring forever. The honest pinned anchor still catches
+// a regeneration (TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne).
+func TestLedgerVerify_UnpinnedStrayAnchorDoesNotBlockAnchoring(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 5, 0.5)
+	ver, err := st.VerifyLedger(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stray, err := ledgeranchor.LoadOrCreateSigner(filepath.Join(t.TempDir(), "stray.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := st.AppendLedgerAnchor(ctx,
+		stray.Sign(time.Now().Add(-7*time.Hour).Unix(), 5, ver.Count, ver.HeadHash)); err != nil || !wrote {
+		t.Fatalf("stray anchor: wrote=%v err=%v", wrote, err)
+	}
+	appendLedgerRows(t, st, sym.ID, 2, 0.5)
+
+	v := getLedgerVerify(t, srv, "")
+	if !v.Tamper.Anchoring.Wrote {
+		t.Fatalf("an unpinned stray anchor blocked anchoring: %q", v.Tamper.Anchoring.Reason)
+	}
+	if v.Tamper.FailingAnchors != 1 {
+		t.Errorf("failingAnchors = %d, want the stray still flagged (1)", v.Tamper.FailingAnchors)
 	}
 }

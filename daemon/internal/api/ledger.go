@@ -342,12 +342,52 @@ func (d Deps) buildLedgerVerify(ctx context.Context) (map[string]any, string, er
 	if err != nil {
 		return nil, "", err
 	}
-	anchoring := d.maybeAnchor(ctx, v)
-	av, err := d.St.VerifyLedgerAnchors(ctx, 0, false, ledgeranchor.TrustedKeys())
+	av, anchoring, err := d.anchorChecked(ctx, v, false)
 	if err != nil {
 		return nil, "", err
 	}
 	return ledgerVerifyPayload(v, fullWalk, av, anchoring, at), ledgerVerifyKeySeen(d.St, av), nil
+}
+
+// anchorChecked checks every anchor BEFORE anchoring (802e011). A newer anchor
+// over a fabricated chain reproduces fine; the honest OLDER anchor is the thing
+// that reports the history is gone, so every anchor is read, not just the
+// newest. A trusted (pinned, validly signed) anchor that no longer reproduces
+// vetoes signing a new one over a contradicted chain. Unpinned anchors still
+// read as failing in tamperEvidence but do not veto: anyone with DB write
+// access could add one, and a regeneration still breaks the honest pinned
+// anchor. Both paths that sign go through here: the cached default build
+// (recompute=false) and ?full=1 (recompute=true).
+func (d Deps) anchorChecked(ctx context.Context, v store.LedgerVerification, recompute bool) (store.LedgerAnchorVerification, map[string]any, error) {
+	av, err := d.St.VerifyLedgerAnchors(ctx, 0, recompute, ledgeranchor.TrustedKeys())
+	if err != nil {
+		return av, nil, err
+	}
+	contradicted, oldest := 0, int64(0)
+	for _, a := range av.Anchors {
+		if !a.OK && a.SignatureOK && a.PinnedKey {
+			if contradicted == 0 || a.Record.LedgerSeq < oldest {
+				oldest = a.Record.LedgerSeq
+			}
+			contradicted++
+		}
+	}
+	if contradicted > 0 {
+		return av, map[string]any{"wrote": false, "reason": fmt.Sprintf(
+			"%d trusted signed anchor(s) no longer reproduce (oldest at ledger seq %d) — refusing to sign a new anchor over a contradicted chain",
+			contradicted, oldest)}, nil
+	}
+	anchoring := d.maybeAnchor(ctx, v)
+	if wrote, _ := anchoring["wrote"].(bool); wrote {
+		// Count the anchor just written. On failure keep the earlier answer:
+		// the write succeeded and must not read as a 503. TrustedKeys is read
+		// AGAIN: the first anchor creates the signing key, so a set taken before
+		// it lacks the key and the anchor just written would read as failing.
+		if av2, err2 := d.St.VerifyLedgerAnchors(ctx, 0, recompute, ledgeranchor.TrustedKeys()); err2 == nil {
+			av = av2
+		}
+	}
+	return av, anchoring, nil
 }
 
 // anchorPolicy resolves the cadence from the environment.
@@ -503,8 +543,16 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 			"Entries appended after that anchor, and any history predating the first anchor, carry no anteriority proof even against that adversary. " +
 			"Against the OPERATOR, who does hold the key, nothing here is evidence: he can re-sign a fabricated chain and every check on this page passes. " +
 			"Only an anchor digest matched against a commitment held by a third party defeats that, and this endpoint verifies no such receipt — see externalWitness."
+	} else if av.ProvenThroughSeq != nil {
+		claim += " A newer anchor still reproduces, but an older signed anchor does not, so NOTHING in this ledger has anteriority evidence — only edit-detection."
 	} else {
 		claim += " No anchor currently reproduces, so NOTHING in this ledger has anteriority evidence — only edit-detection."
+	}
+	// provenAnterior* read as proven whenever non-null (api.ts: null means
+	// "nothing is proven"), so they carry the same gate as `proven`.
+	var provenSeq, provenCount, provenTs *int64
+	if proven {
+		provenSeq, provenCount, provenTs = av.ProvenThroughSeq, av.ProvenThroughCount, av.ProvenThroughTs
 	}
 	if av.Mode == "stored" {
 		claim += " This summary compared anchors against the STORED head hashes; ?full=1 re-derives the chain from payloads, which is the check an auditor should run."
@@ -533,9 +581,9 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 		// prose a client can drop.
 		"localAnchorsReproduce":           proven,
 		"localAnchorReproducesThroughSeq": av.ProvenThroughSeq,
-		"provenAnteriorThroughSeq":        av.ProvenThroughSeq,
-		"provenAnteriorThroughCount":      av.ProvenThroughCount,
-		"provenAnteriorAsOf":              av.ProvenThroughTs,
+		"provenAnteriorThroughSeq":        provenSeq,
+		"provenAnteriorThroughCount":      provenCount,
+		"provenAnteriorAsOf":              provenTs,
 		"anteriorityScope": "against an adversary WITHOUT the signing key; the operator holds it, " +
 			"so this is not evidence against him",
 
@@ -623,11 +671,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 		ledgerVerifyErr(w, ctx, err)
 		return
 	}
-	anchoring := d.maybeAnchor(ctx, v)
-	// Every anchor, not just the newest. A newer anchor over a fabricated chain
-	// reproduces fine; the honest OLDER anchor is the thing that reports the
-	// history is gone, and checking only the newest would never surface it.
-	av, err := d.St.VerifyLedgerAnchors(ctx, 0, true, ledgeranchor.TrustedKeys())
+	av, anchoring, err := d.anchorChecked(ctx, v, true)
 	if err != nil {
 		ledgerVerifyErr(w, ctx, err)
 		return

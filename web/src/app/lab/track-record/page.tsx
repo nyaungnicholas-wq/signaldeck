@@ -612,8 +612,10 @@ export default function TrackRecordPage() {
                     </div>
                     <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       Every flagship prediction is hash-chained (append-only). A verified
-                      chain means no historical prediction was silently edited or deleted —
-                      the record you&rsquo;re grading is the record that was made.
+                      chain means the stored rows are internally consistent — editing, deleting
+                      or reordering any one of them breaks a full recomputation. It does not prove when they were
+                      written: deleting every row and re-appending a fabricated chain also
+                      verifies intact. The proof page shows what the signed anchors add.
                     </p>
                     {current.ledger.head && (
                       <p className="tnum break-all text-[0.75rem]" style={{ color: "var(--faint)" }}>

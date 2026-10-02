@@ -453,6 +453,52 @@ func TestLedgerAnchor_NoDuplicateAnchorForTheSameHead(t *testing.T) {
 	}
 }
 
+// TestAnchorDue_RefusesOverAContradictedPriorAnchor: a regenerated chain still
+// verifies intact, so the intact gate alone let the cadence sign a NEW anchor
+// over history the newest prior anchor already contradicts — turning tamper
+// evidence into a fresh, perfectly reproducing claim. The stored entry hash at
+// the prior anchor's seq is one indexed lookup, and it must veto the anchor.
+func TestAnchorDue_RefusesOverAContradictedPriorAnchor(t *testing.T) {
+	for _, resetSeqs := range []bool{false, true} {
+		st := openTemp(t)
+		ctx := context.Background()
+		sg := testSigner(t)
+
+		appendN(t, st, 50)
+		anchorNow(t, st, sg, time.Unix(1_700_000_500, 0))
+
+		for _, q := range []string{`DELETE FROM prediction_ledger`, `DELETE FROM meta WHERE k='` + metaLedgerVerifyCkpt + `'`} {
+			if _, err := st.w.ExecContext(ctx, q); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if resetSeqs {
+			if _, err := st.w.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='prediction_ledger'`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		appendFabricated(t, st, 60)
+		v, err := st.VerifyLedger(ctx)
+		if err != nil || !v.Intact {
+			t.Fatalf("premise: fabricated chain must verify intact (intact=%v err=%v)", v.Intact, err)
+		}
+
+		_, due, reason, err := st.AnchorDue(ctx, v, AnchorPolicy{}, time.Unix(1_800_000_000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if due {
+			t.Fatalf("resetSeqs=%v: anchor due over a chain the prior anchor contradicts", resetSeqs)
+		}
+		if !strings.Contains(reason, "no longer reproduces") {
+			t.Errorf("resetSeqs=%v: refusal does not say why: %q", resetSeqs, reason)
+		}
+		if _, wrote, _, _ := st.MaybeAnchorLedger(ctx, sg, v, AnchorPolicy{}, time.Unix(1_800_000_000, 0)); wrote {
+			t.Errorf("resetSeqs=%v: MaybeAnchorLedger wrote over a contradicted chain", resetSeqs)
+		}
+	}
+}
+
 // TestLedgerAnchor_FreshKeyCannotVouchForAFabricatedHistory reproduces the
 // verifier's 2026-10-01 probe. A writer WITHOUT the signing key deletes every
 // anchor and every ledger row, regenerates a fabricated chain onto the same seq
