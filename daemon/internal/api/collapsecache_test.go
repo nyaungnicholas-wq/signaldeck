@@ -264,3 +264,58 @@ func TestTrackRecordRefusesWhenTheCollapseGateCannotRun(t *testing.T) {
 		t.Errorf("the refusal must say the gate could not be evaluated, got note %q", note)
 	}
 }
+
+// A horizon publishing figures with no measured window used to go ungated: the
+// gate checked only horizons with a positive distinct_days, so a registry with
+// none passed everything. It is now an error, which both callers withhold on.
+func TestCollapseGateRejectsAPublishedHorizonWithNoWindow(t *testing.T) {
+	row := func(label, days string, liveN int, acc string) string {
+		return fmt.Sprintf(`{"predictor": %q, "family": "direction", "live_n": %d, "live_acc": %s,
+			"ci": null, "ci_method": "withheld", "distinct_days": %s, "retire": false}`, label, liveN, acc, days)
+	}
+	reg := func(rows ...string) *registryFile {
+		var r registryFile
+		body := `{"graded_at": "2026-10-01T14:05:18", "refused_since": null, "rows": [` + strings.Join(rows, ",") + `]}`
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatalf("registry fixture: %v", err)
+		}
+		return &r
+	}
+	for _, tc := range []struct {
+		name    string
+		reg     *registryFile
+		wantErr bool
+	}{
+		{"no row has distinct_days", reg(row("directional-ensemble (1d)", "null", 900, "0.51")), true},
+		{"1w publishes, only 1d measured", reg(row("directional-ensemble (1d)", "3", 900, "0.51"),
+			row("directional-ensemble (1w)", "0", 400, "0.49")), true},
+		{"unmeasured row beside a measured one", reg(row("directional-ensemble (1d)", "3", 900, "0.51"),
+			row("prequential-majority (1d)", "null", 900, "0.50")), false},
+		{"row publishing nothing", reg(row("directional-ensemble (1w)", "null", 0, "null")), false},
+	} {
+		_, err := gatedHorizons(tc.reg)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: err=%v, wantErr=%v", tc.name, err, tc.wantErr)
+		}
+	}
+
+	// End to end: /api/accuracy withholds as a check outage, not a finding, and
+	// the cached path returns the same error rather than a pass.
+	_, st, d := newTestServer(t, nil)
+	freshHeartbeat(t, st)
+	d.RegistryPath = writeRegistry(t, `{"graded_at": "2026-10-01T14:05:18", "refused_since": null,
+		"grader_sha256": "x", "rows": [`+row("directional-ensemble (1d)", "null", 900, "0.51")+`]}`)
+	d.CollapseCache = &CollapseVerdictCache{}
+	rr := httptest.NewRecorder()
+	d.accuracy(rr, httptest.NewRequest("GET", "/api/accuracy", nil))
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if rr.Code != 503 || body["status"] != "REFUSED_UNAVAILABLE" || body["rows"] != nil {
+		t.Fatalf("FAIL-OPEN: an unmeasured horizon published (HTTP %d status=%v rows=%v)", rr.Code, body["status"], body["rows"])
+	}
+	if reason, _ := body["reason"].(string); !strings.Contains(reason, "graded window is unmeasured") {
+		t.Errorf("the refusal must name the unmeasured window, got %q", reason)
+	}
+}
