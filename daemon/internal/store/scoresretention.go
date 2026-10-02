@@ -31,19 +31,33 @@ type CompositeArchiveRow struct {
 	Payload  string
 }
 
+// scoresHeavySQL / compositeHeavySQL are the compactor's strip feeds. Their
+// "!= '[]'" / "!= '{}'" terms must match the partial indexes idx_scores_heavy /
+// idx_composite_heavy exactly, or SQLite falls back to walking every stripped
+// row (TestCompactorHeavyReadsUseThePartialIndexes reads these constants).
+const scoresHeavySQL = `
+		SELECT symbol_id, horizon, ts, score, components FROM scores
+		WHERE ts < ? AND components != '[]'
+		  AND EXISTS (SELECT 1 FROM scores s3
+		              WHERE s3.symbol_id=scores.symbol_id AND s3.horizon=scores.horizon
+		                AND s3.ts>scores.ts)
+		ORDER BY ts ASC LIMIT ?`
+
+const compositeHeavySQL = `
+		SELECT symbol_id, ts, horizon, score, curve_pct, edge, payload FROM composite_scores
+		WHERE ts < ? AND payload != '{}'
+		  AND EXISTS (SELECT 1 FROM composite_scores c3
+		              WHERE c3.symbol_id=composite_scores.symbol_id AND c3.horizon=composite_scores.horizon
+		                AND c3.ts>composite_scores.ts)
+		ORDER BY ts ASC LIMIT ?`
+
 // ScoresHeavyBelow returns up to limit scores rows older than cutoff that
 // still carry a components blob, oldest first — the compactor's strip feed.
 // Each (symbol, horizon)'s NEWEST row is carved out (never selected, never
 // stripped): a delisted or long-stalled symbol keeps its last rendered
 // decomposition instead of a blanked panel.
 func (s *Store) ScoresHeavyBelow(ctx context.Context, cutoff int64, limit int) ([]ScoreRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, horizon, ts, score, components FROM scores
-		WHERE ts < ? AND components != '[]'
-		  AND EXISTS (SELECT 1 FROM scores s3
-		              WHERE s3.symbol_id=scores.symbol_id AND s3.horizon=scores.horizon
-		                AND s3.ts>scores.ts)
-		ORDER BY ts ASC LIMIT ?`, cutoff, limit)
+	rows, err := s.db.QueryContext(ctx, scoresHeavySQL, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -117,38 +131,51 @@ const stripKeyChunk = 500
 // is enforced in SQL — a sustained archive failure or a window misconfig can
 // delay downsampling, but can never destroy an un-archived blob.
 //
-// ONE UTC DAY PER STATEMENT. As a single DELETE it walked every row below the
-// cutoff inside one write: 1m17s holding the write lock on 2026-10-01, with a
-// sign-in waiting 10.3 s behind it (12.7 s behind the strip pass). The keep rule
-// groups by ts/86400, so a day window [d, d+86400) never splits a group and the
-// result is identical; between days the priority gate lets account writes in.
+// ONE UTC DAY AT A TIME, IN SHORT BATCHES (pruneKeepDailyLast). As a single
+// DELETE it walked every row below the cutoff inside one write: 1m17s holding
+// the write lock on 2026-10-01, with a sign-in waiting 10.3 s behind it (12.7 s
+// behind the strip pass). Between batches the priority gate lets account
+// writes in.
 func (s *Store) PruneScoresKeepDailyLast(ctx context.Context, cutoff int64) (int64, error) {
+	return s.pruneKeepDailyLast(ctx, "scores", "components = '[]'", cutoff)
+}
+
+// pruneKeepDailyLast is the keep-the-last DELETE shared by scores and
+// composite_scores, one UTC day at a time and, within a day, in deleteInBatches'
+// short statements. A whole day as one statement still held the write lock
+// 1m36.8s (scores, 2026-10-01 22:45). Any batching ends at the same table: a
+// row is deleted only while a newer row of its (symbol, horizon, day) exists,
+// and the newest one never qualifies, so it is never deleted.
+//
+// The same-day test is a range (k.ts below the next midnight), not
+// k.ts/86400 = ts/86400: the division cannot seek, so for each day's newest
+// row the probe walked every later row of its (symbol, horizon).
+//
+// table and stripped are fixed literals from the two callers (stripped is the
+// archive-before-destroy sentinel), never input.
+func (s *Store) pruneKeepDailyLast(ctx context.Context, table, stripped string, cutoff int64) (int64, error) {
 	var lo sql.NullInt64
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT MIN(ts) FROM scores WHERE ts < ? AND components = '[]'`, cutoff).Scan(&lo); err != nil {
+		`SELECT MIN(ts) FROM `+table+` WHERE ts < ? AND `+stripped, cutoff).Scan(&lo); err != nil {
 		return 0, err
 	}
 	if !lo.Valid {
 		return 0, nil
 	}
+	del := `DELETE FROM ` + table + ` WHERE (symbol_id, horizon, ts) IN (
+		SELECT r.symbol_id, r.horizon, r.ts FROM ` + table + ` r
+		WHERE r.ts >= ? AND r.ts < ? AND r.` + stripped + ` AND EXISTS (
+			SELECT 1 FROM ` + table + ` k
+			WHERE k.symbol_id = r.symbol_id AND k.horizon = r.horizon
+			  AND k.ts > r.ts AND k.ts < (r.ts/86400 + 1) * 86400)
+		LIMIT ?)`
 	var total int64
 	for day := lo.Int64 - lo.Int64%86400; day < cutoff; day += 86400 {
-		res, err := s.w.ExecContext(ctx, `
-			DELETE FROM scores WHERE ts >= ? AND ts < ? AND components = '[]' AND EXISTS (
-				SELECT 1 FROM scores s2
-				WHERE s2.symbol_id = scores.symbol_id
-				  AND s2.horizon   = scores.horizon
-				  AND s2.ts/86400  = scores.ts/86400
-				  AND s2.ts        > scores.ts
-			)`, day, min(day+86400, cutoff))
-		if err != nil {
-			return total, err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return total, err
-		}
+		n, err := s.deleteInBatches(ctx, del, day, min(day+86400, cutoff))
 		total += n
+		if err != nil {
+			return total, err
+		}
 	}
 	return total, nil
 }
@@ -157,13 +184,7 @@ func (s *Store) PruneScoresKeepDailyLast(ctx context.Context, cutoff int64) (int
 // mirror the scores trio for composite_scores (payload sentinel '{}').
 
 func (s *Store) CompositeHeavyBelow(ctx context.Context, cutoff int64, limit int) ([]CompositeArchiveRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, ts, horizon, score, curve_pct, edge, payload FROM composite_scores
-		WHERE ts < ? AND payload != '{}'
-		  AND EXISTS (SELECT 1 FROM composite_scores c3
-		              WHERE c3.symbol_id=composite_scores.symbol_id AND c3.horizon=composite_scores.horizon
-		                AND c3.ts>composite_scores.ts)
-		ORDER BY ts ASC LIMIT ?`, cutoff, limit)
+	rows, err := s.db.QueryContext(ctx, compositeHeavySQL, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -213,19 +234,11 @@ func (s *Store) StripCompositePayload(ctx context.Context, rows []CompositeArchi
 	return total, nil
 }
 
+// PruneCompositeKeepDailyLast is PruneScoresKeepDailyLast for composite_scores
+// (payload sentinel '{}'), batched the same way: as one DELETE it held the write
+// lock 35.4 s on 2026-10-01 23:30.
 func (s *Store) PruneCompositeKeepDailyLast(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `
-		DELETE FROM composite_scores WHERE ts < ? AND payload = '{}' AND EXISTS (
-			SELECT 1 FROM composite_scores c2
-			WHERE c2.symbol_id = composite_scores.symbol_id
-			  AND c2.horizon   = composite_scores.horizon
-			  AND c2.ts/86400  = composite_scores.ts/86400
-			  AND c2.ts        > composite_scores.ts
-		)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.pruneKeepDailyLast(ctx, "composite_scores", "payload = '{}'", cutoff)
 }
 
 // Path returns the database file path (for disk-headroom checks by callers

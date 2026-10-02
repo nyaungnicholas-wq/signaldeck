@@ -1143,7 +1143,16 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	if trunc.Busy {
 		tn += " BUSY — WAL NOT truncated"
 		_, walAfter := g.St.FileSizes()
-		g.trackTruncateStall(ctx, trunc.LogFrames, walAfter)
+		// Key the stall on the CHECKPOINTED frame: that is where a pinned read
+		// snapshot stops the checkpoint. LogFrames is the WAL length, which a
+		// live writer grows between passes, so keyed on it the verdict never
+		// fired: 2026-10-01 the checkpoint sat at frame 1,652,206 for three
+		// hourly passes while the WAL grew 8.6 -> 11.1 GB, zero starved events.
+		// -1 means SQLite reported nothing: another connection held the
+		// checkpoint lock. That is not a pinned reader, so it is not a stall.
+		if trunc.Checkpointed >= 0 {
+			g.trackTruncateStall(ctx, trunc.Checkpointed, walAfter)
+		}
 		if walAfter >= walBusyAlertBytes {
 			_ = g.St.InsertDQ(ctx, md.DQEvent{
 				Ts:   time.Now().Unix(),

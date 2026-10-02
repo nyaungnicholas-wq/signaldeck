@@ -156,7 +156,14 @@ func Open(path string) (*Store, error) {
 	// The main writer goes through the priority gate so account writes on aw
 	// can win the SQLite lock at w's next transaction boundary.
 	gate := &priorityGate{}
-	w := openGated(db.Driver(), dsn, gate)
+	// _txlock=immediate on the main writer ONLY: its transactions take the write
+	// lock at BEGIN. Deferred, one that reads first (AppendLedger reads the chain
+	// head, then inserts) failed outright with SQLITE_BUSY_SNAPSHOT (517) when the
+	// account writer committed in between; busy_timeout never retries that.
+	// Every main-writer transaction is begun to write (a few, e.g. ApplyPaperStep,
+	// may find nothing to write after one point read); ReadOnly ones stay
+	// deferred (driver), and the read pools (Store.dsn) never begin one.
+	w := openGated(db.Driver(), dsn+"&_txlock=immediate", gate)
 	// SQLite allows exactly one writer — serialize writes on one connection.
 	w.SetMaxOpenConns(1)
 	if _, err := w.Exec(schemaSQL); err != nil {
@@ -185,7 +192,14 @@ func Open(path string) (*Store, error) {
 	// the SQLite write lock past 5s, and a person waiting on a confirmation is
 	// better served by a longer wait than an error. Still under the 15s bound
 	// the account handlers put on each request.
-	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1))
+	//
+	// wal_autocheckpoint(0): a commit with autocheckpoint on runs a PASSIVE
+	// checkpoint of every frame no reader still needs before it returns. After
+	// a long reader releases, that backlog can be millions of frames, and the
+	// first connection to commit copies all of it inside a one-row write (logged
+	// 2026-10-01 as 27-56 s single-row "holds"). A sign-in must never be that
+	// commit; the main writer still autocheckpoints, so the WAL stays bounded.
+	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1)+"&_pragma=wal_autocheckpoint(0)")
 	if err != nil {
 		db.Close() //nolint:errcheck
 		w.Close()  //nolint:errcheck
@@ -1139,23 +1153,38 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
 }
 
+// rollupSelect computes one symbol's coarse bars; rollupArgs binds it.
+//
+// The open/close probes pick the bucket by RANGE (ts from the bucket start, below
+// the next one), not by ts/bucket = b.ts/bucket. The division cannot seek, so
+// each probe walked every bar of the symbol's timeframe once per bucket: 60
+// days of minutes per hour bucket. Over the 72h window for all 2,950 symbols on
+// the 10-01 backup that was 18.3 s in the C CLI against 0.57 s by range, with
+// identical output (28,056 buckets); the Downsampler hit its 15m deadline on
+// every pass (rollup SHMD: context deadline exceeded, 2026-10-02 01:07).
+const rollupSelect = `
+		SELECT symbol_id, ?, (ts/?)*? AS bts,
+		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
+		     AND b2.ts >= b.ts/?*? AND b2.ts < b.ts/?*? + ? ORDER BY b2.ts LIMIT 1),
+		  MAX(high), MIN(low),
+		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
+		     AND b3.ts >= b.ts/?*? AND b3.ts < b.ts/?*? + ? ORDER BY b3.ts DESC LIMIT 1),
+		  SUM(volume)
+		FROM bars b
+		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
+		GROUP BY bts`
+
+// rollupArgs binds rollupSelect.
+func rollupArgs(symbolID int64, src, dst md.Timeframe, bucket, from, to int64) []any {
+	b := bucket
+	return []any{string(dst), b, b, b, b, b, b, b, b, b, b, b, b, symbolID, string(src), from, to}
+}
+
 // rollup computes the coarse bars on the read pool and writes them with verb
 // ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
 // per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
 func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.readThenWrite(ctx, `
-		SELECT symbol_id, ?, (ts/?)*? AS bts,
-		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
-		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
-		  MAX(high), MIN(low),
-		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
-		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
-		  SUM(volume)
-		FROM bars b
-		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
-		GROUP BY bts`,
-		[]any{string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-			symbolID, string(src), from, to},
+	_, err := s.readThenWrite(ctx, rollupSelect, rollupArgs(symbolID, src, dst, bucket, from, to),
 		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
 	return err
 }
@@ -1251,13 +1280,13 @@ func (s *Store) Snaps(ctx context.Context, symbolID int64, from, to int64, limit
 	return out, rows.Err()
 }
 
-// PruneSnaps enforces the snapshot ring retention.
+// PruneSnaps enforces the snapshot ring retention, in short batches so account
+// writes get in between (deleteInBatches): the Downsampler hands it up to a
+// 50k-row archive batch per call.
 func (s *Store) PruneSnaps(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM snapshots_1s WHERE ts<?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM snapshots_1s WHERE (symbol_id, ts) IN (
+		  SELECT symbol_id, ts FROM snapshots_1s WHERE ts < ? LIMIT ?)`, cutoff)
 }
 
 // ── scores & outcomes ───────────────────────────────────────────────────

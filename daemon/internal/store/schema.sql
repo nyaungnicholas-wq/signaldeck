@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS scores (
   PRIMARY KEY (symbol_id, horizon, ts)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_scores_ts ON scores (ts);
+-- The compactor's strip feed (ScoresHeavyBelow) wants rows that STILL carry a
+-- components blob, oldest first. On idx_scores_ts it walked every row below the
+-- cutoff, ~96% of them already stripped (3.21M of 3.30M on 2026-10-01): 46 s in
+-- the C CLI, and in the daemon one read snapshot open up to the worker's 3h
+-- deadline. That snapshot pinned the WAL: the checkpoint stayed at the same
+-- frame for hours while the WAL grew to 14 GB (2026-10-01, three timed-out
+-- passes). This partial index holds only the un-stripped rows, so the read
+-- touches just those (1.8 s on the same copy, same rows returned).
+CREATE INDEX IF NOT EXISTS idx_scores_heavy ON scores (ts) WHERE components != '[]';
 
 CREATE TABLE IF NOT EXISTS score_outcomes (
   symbol_id   INTEGER NOT NULL,
@@ -928,6 +937,8 @@ CREATE TABLE IF NOT EXISTS composite_scores (
   PRIMARY KEY (symbol_id, ts, horizon)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_composite_scores_ts ON composite_scores (ts DESC);
+-- CompositeHeavyBelow's twin of idx_scores_heavy (see there).
+CREATE INDEX IF NOT EXISTS idx_composite_heavy ON composite_scores (ts) WHERE payload != '{}';
 
 -- SIGNALS-hub overhaul review fix (appended): the composite-scorer's
 -- LatestPredictionsForScoring runs a MAX(ts) GROUP BY symbol_id WHERE horizon=?
