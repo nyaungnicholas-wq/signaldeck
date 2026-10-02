@@ -831,11 +831,11 @@ type Quiescer interface {
 // every minute and its deadline is 15m).
 const quiesceWindow = 3 * time.Second
 
-// truncateRetryWait is how long each RETRY of a blocked TRUNCATE waits for
-// readers while it holds the write lock and the main-writer connection. Short
-// on purpose: a sign-in or a worker write waits at most this long behind one,
-// and there is a free second between attempts.
-const truncateRetryWait = 100 * time.Millisecond
+// truncateRetryGap is the free time between RETRIES of a blocked TRUNCATE.
+// Each retry still waits the full checkpoint busy timeout for readers (see the
+// retry loop), so the gap is what bounds how much of a pass the write lock and
+// the main-writer connection are held: one 5s wait in every 15s, not all of it.
+const truncateRetryGap = 10 * time.Second
 
 // walIneffectiveRuns is how many consecutive passes may reclaim ZERO frames
 // while the WAL is still growing before that becomes its own dq event. Distinct
@@ -1104,17 +1104,19 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 		// rejects 0, and that rejection is CRITICAL, so writing the documented
 		// value turned fleet health red and ran the 300s default anyway.
 		//
-		// So the retries are SHORT AND SPACED: each waits at most
-		// truncateRetryWait for readers, then the connection and the write lock
-		// are free for a full second before the next. It was a 1s ticker around
-		// 5s attempts, so ticks queued and the attempts ran back to back: the
-		// single main-writer connection and the write lock were held for the
-		// whole budget (up to 5 minutes), and every worker write queued behind
-		// it. A retry only needs the reader-free INSTANT; it does not need to
-		// wait for one.
+		// So the retries are SPACED: each still waits the full busy timeout,
+		// then the connection and the write lock are free for truncateRetryGap.
+		// It was a 1s ticker around 5s attempts, so ticks queued and the
+		// attempts ran back to back, holding both for the whole budget (up to 5
+		// minutes). The wait itself must stay long: while TRUNCATE holds the
+		// write lock no frames are added, readers that start meanwhile read the
+		// database file, and only the readers already open must finish. A 100ms
+		// wait (2810f53) never outwaited them: against overlapping 200-800ms
+		// readers it won 0 of 12 attempts (2s: 11 of 12), and live on 2026-10-02
+		// 03:31 it lost 261 in a row.
 		retrySec := walTruncateRetrySec()
 		if retrySec > 0 {
-			gap := time.NewTimer(time.Second)
+			gap := time.NewTimer(truncateRetryGap)
 			defer gap.Stop()
 			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
 			defer deadline.Stop()
@@ -1128,14 +1130,14 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 				case <-gap.C:
 					attempts++
 					prior += trunc.Checkpointed
-					trunc, err = g.St.WALCheckpointTruncateWithin(ctx, truncateRetryWait)
+					trunc, err = g.St.WALCheckpointTruncate(ctx)
 					if err != nil {
 						break retryLoop
 					}
 					if !trunc.Busy {
 						break retryLoop
 					}
-					gap.Reset(time.Second) // the gap starts when the attempt has let go
+					gap.Reset(truncateRetryGap) // the gap starts when the attempt has let go
 				}
 			}
 		}

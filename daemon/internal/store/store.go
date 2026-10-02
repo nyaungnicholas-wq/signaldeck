@@ -2085,13 +2085,6 @@ func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult,
 	return s.walCheckpoint(ctx, "TRUNCATE", checkpointBusy)
 }
 
-// WALCheckpointTruncateWithin is WALCheckpointTruncate waiting at most wait for
-// readers, for callers that retry: each attempt holds the write lock (and the
-// single main-writer connection) only that long.
-func (s *Store) WALCheckpointTruncateWithin(ctx context.Context, wait time.Duration) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "TRUNCATE", wait)
-}
-
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention
 // deletes (the DB is auto_vacuum=NONE, so freed pages are otherwise only
 // reused, never returned to the filesystem). VACUUM briefly takes a write lock
