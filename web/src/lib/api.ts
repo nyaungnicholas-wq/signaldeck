@@ -4728,6 +4728,8 @@ export interface MarketRegimeRow {
   historicalAccuracy: number;
   ts: number;
   horizonDays: number;
+  /** The daemon's caveat on historicalAccuracy, verbatim (see regimeCaveat.ts). */
+  evidenceCaveat?: string;
 }
 
 export interface MarketRegimesPayload {

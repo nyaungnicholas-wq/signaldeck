@@ -25,14 +25,15 @@ test("every member surface renders its rows' caveat in a HelpTip", () => {
     ["../components/home/TodaysRead.tsx", "regimeCaveats([best.fc])"],
     ["../components/symbol/ValidatedSignalsPanel.tsx", "regimeCaveats([r])"],
     ["../components/MemberWatchlist.tsx", "regimeCaveats(["],
-    ["../app/market/regimes/page.tsx", "regimeCaveats(list)"]
+    ["../app/market/regimes/page.tsx", "regimeCaveats(list)"],
+    ["../app/market/breadth/page.tsx", "regimeCaveats(rows)"]
   ];
   for (const [file, rowsExpr] of surfaces) {
     const c = src(file);
     assert.ok(c.includes('from "@/lib/regimeCaveat"'), `${file} imports regimeCaveats`);
     assert.ok(c.includes(rowsExpr), `${file} feeds its rows to regimeCaveats`);
     assert.ok(c.includes('import HelpTip from "@/components/HelpTip"'), `${file} imports HelpTip`);
-    if (rowsExpr === "regimeCaveats(list)" || rowsExpr === "regimeCaveats([") {
+    if (rowsExpr === "regimeCaveats(list)" || rowsExpr === "regimeCaveats([" || rowsExpr === "regimeCaveats(rows)") {
       // One tip for a list of rows: each distinct caveat, as served.
       assert.match(c, /<HelpTip label="what these accuracies are">\s*\{caveats\.map\(\(c\) => \(\s*<span key=\{c\}[^>]*>\s*\{c\}\s*<\/span>/, `${file} renders each caveat as served`);
     } else {
@@ -52,7 +53,8 @@ test("no surface writes its own version of the caveat", () => {
     "../components/home/TodaysRead.tsx",
     "../components/symbol/ValidatedSignalsPanel.tsx",
     "../components/MemberWatchlist.tsx",
-    "../app/market/regimes/page.tsx"
+    "../app/market/regimes/page.tsx",
+    "../app/market/breadth/page.tsx"
   ];
   for (const file of surfaces) {
     assert.doesNotMatch(src(file), /BACKTEST CLAIM|not a live measurement/, `${file}: the caveat must come from the server, never a paraphrase in the page`);

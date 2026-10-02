@@ -11,6 +11,8 @@ import {
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 
 export default function MarketBreadthPage() {
   const [data, setData] = useState<MarketRegimesPayload | null>(null);
@@ -220,6 +222,8 @@ function BreadthRow({ kind, counts, i }: { kind: string; counts: Record<string, 
 
 function RegimeTable({ title, rows }: { title: string; rows: MarketRegimeRow[] }) {
   if (rows.length === 0) return null;
+  // The server's caveat on these rows' accuracies, verbatim, on the column header.
+  const caveats = regimeCaveats(rows);
   const subtitle = title === "Indices"
     ? "Market-wide indices and their regime status"
     : "Sector baskets and their regime status";
@@ -241,7 +245,20 @@ function RegimeTable({ title, rows }: { title: string; rows: MarketRegimeRow[] }
               <th>Call</th>
               <th className="text-right">Conviction</th>
               <th>Band</th>
-              <th className="text-right">Accuracy</th>
+              <th className="text-right">
+                <span className="inline-flex items-center gap-1">
+                  Accuracy
+                  {caveats.length > 0 ? (
+                    <HelpTip label="what these accuracies are">
+                      {caveats.map((c) => (
+                        <span key={c} className="mb-2 block last:mb-0">
+                          {c}
+                        </span>
+                      ))}
+                    </HelpTip>
+                  ) : null}
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>

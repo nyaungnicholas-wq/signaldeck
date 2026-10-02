@@ -116,7 +116,7 @@ func withoutCryptoForecasts(resp map[string]any) map[string]any {
 // regimesPersistFormat is the shape of the payload buildStructuralRegimes
 // returns, as persisted across restarts (cachepersist.go). BUMP IT whenever that
 // shape changes, or the first reads after the deploy serve the previous shape.
-const regimesPersistFormat = 1
+const regimesPersistFormat = 2
 
 // buildStructuralRegimes computes the full regimes payload. Pure build — no
 // HTTP — so the response cache can rebuild it off-request. Its shape is

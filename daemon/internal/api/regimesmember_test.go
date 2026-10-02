@@ -241,10 +241,18 @@ func TestMemberRegimesView_TypedAndPersistedShapes(t *testing.T) {
 	if err := json.Unmarshal(b, &decoded); err != nil {
 		t.Fatalf("unmarshal typed: %v", err)
 	}
-	// Test both shapes: typed and persisted (decoded)
+	// The shape loadPersistedPayload really returns after a restart: decoded
+	// with UseNumber, so historicalAccuracy is a json.Number.
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec.UseNumber()
+	var persisted map[string]any
+	if err := dec.Decode(&persisted); err != nil {
+		t.Fatalf("decode with UseNumber: %v", err)
+	}
 	for name, shape := range map[string]map[string]any{
 		"typed":     typed,
-		"persisted": decoded,
+		"decoded":   decoded,
+		"persisted": persisted,
 	} {
 		// Apply withoutCryptoForecasts (no crypto in shape, so it's a copy)
 		filtered := withoutCryptoForecasts(shape)
