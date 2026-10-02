@@ -237,7 +237,7 @@ function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: 
             value={r.effective_n != null ? r.effective_n.toLocaleString() : `${r.live_n.toLocaleString()} raw`}
           />
         </div>
-        {convictionGated ? (
+        {convictionGated && !sd30 ? (
           <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--warn)" }}>
             Accuracy withheld: this conviction slice is below the {minN}-observation evidence
             floor, and its early record runs worse than the base row (anti-calibrated). See the
@@ -348,6 +348,7 @@ async function loadPublicationStatus(): Promise<{
   graderSha256?: string;
   refusedSince?: string;
   rows: PublishedRow[];
+  withheldHorizons?: string[];
 } | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   try {
@@ -401,6 +402,7 @@ async function loadPublicationStatus(): Promise<{
       gradedAt: body.graded_at,
       graderSha256: body.grader_sha256,
       rows: (body.rows ?? []) as PublishedRow[],
+      withheldHorizons: (body.withheld_horizons ?? []) as string[],
     };
   } catch {
     // Unreachable daemon is not "no news". It is an unknown, and an unknown
@@ -662,7 +664,7 @@ export default async function AccuracyPage() {
 
       {/* ── RELIABILITY BINS: where the probabilities are actually wrong ── */}
       {reg?.calibration ? (
-        <CalibrationPanel cal={withoutHorizons(reg.calibration, withheldHorizons(pub.rows))} />
+        <CalibrationPanel cal={withoutHorizons(reg.calibration, withheldHorizons(pub.rows, pub.withheldHorizons))} />
       ) : null}
 
       {/* ── STRUCTURAL CLAIMS: PENDING means backtest, not evidence ── */}

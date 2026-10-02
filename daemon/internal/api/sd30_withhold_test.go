@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -320,5 +322,140 @@ func TestSD30_DeskAccuracyPhrase(t *testing.T) {
 	}
 	if got := deskAccuracyPhrase(0.512, "x"); got != "measured accuracy 51.2%" {
 		t.Fatalf("a measured accuracy must still print: %q", got)
+	}
+}
+
+func TestSD30_AccuracyEnvelopeNamesWithheldHorizons(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	d.RegistryPath = writeRegistry(t, sd30Registry)
+	srv := restartWith(t, d)
+	freshHeartbeat(t, st)
+	sd30On(t)
+	if _, body := getAccuracy(t, srv.URL); fmt.Sprint(body["withheld_horizons"]) != "[1d 1w]" {
+		t.Fatalf("withheld_horizons %v, want both directional horizons named by the switch", body["withheld_horizons"])
+	}
+	sd30Off(t)
+	if _, body := getAccuracy(t, srv.URL); body["withheld_horizons"] != nil {
+		t.Fatalf("flag off still names withheld horizons: %v", body["withheld_horizons"])
+	}
+}
+
+// A refused grader keeps its own reason first; SD-30 is still named beside it.
+func TestSD30_TrackRecordNamesSD30BesideARefusal(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	sd30SeedPerfect(t, st)
+	d.RegistryPath = writeRegistry(t, `{"status": "REFUSED", "refused_since": "2026-10-01T14:05:18", "rows": []}`)
+	sd30On(t)
+	resp, err := d.buildTrackRecord(context.Background(), md.H1d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, _ := resp["note"].(string)
+	if resp["gateReason"] != "refused" || !strings.Contains(note, "REFUSED since") || !strings.Contains(note, publication.SD30Reason) {
+		t.Fatalf("gateReason %v note %q: both reasons must be stated", resp["gateReason"], note)
+	}
+}
+
+func TestSD30_PredictionsLatestOffRestoresWinRate(t *testing.T) {
+	_, st, d := newTestServer(t, func(c *config.Config) {})
+	sd30SeedPerfect(t, st)
+	sd30Off(t)
+	resp, err := d.buildPredictionsLatest(context.Background(), md.H1d) // the build, not the shared cache
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, _ := resp["liveRecord"].(map[string]any)
+	label, _ := resp["trackLabel"].(string)
+	if live["winRate"] != 1.0 || strings.Contains(label, "SD-30") || !strings.Contains(label, "win rate 100.0%") {
+		t.Fatalf("flag off: liveRecord %v trackLabel %q", live, label)
+	}
+}
+
+func serveRecorded(t *testing.T, h http.HandlerFunc, path string) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s: %v (%s)", path, err, rec.Body.String())
+	}
+	return body
+}
+
+func TestSD30_CanaryWithheld(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	for _, m := range []string{"directional-ensemble-1d", "directional-ensemble-1h"} {
+		if err := st.UpsertCanaryTrial(t.Context(), store.CanaryTrial{Model: m, Incumbent: "v1", Challenger: "v2",
+			Decision: "hold", Serving: "v1", Reason: "challenger 63.0% vs incumbent 61.0%",
+			IncN: 300, IncAcc: 0.61, ChN: 120, ChAcc: 0.63, ChLower: 0.55, ChUpper: 0.70, Baseline: 0.58, DecidedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byModel := func(body map[string]any) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		trials, _ := body["trials"].([]any)
+		for _, x := range trials {
+			m, _ := x.(map[string]any)
+			name, _ := m["model"].(string)
+			out[name] = m
+		}
+		return out
+	}
+	sd30On(t)
+	got := byModel(serveRecorded(t, d.canaryTrials, "/api/canary"))
+	w := got["directional-ensemble-1d"]
+	for _, k := range []string{"incAcc", "chAcc", "chLower", "chUpper", "baseline"} {
+		if v, present := w[k]; !present || v != nil {
+			t.Fatalf("1d trial %s = %v (present %v), want an explicit null", k, v, present)
+		}
+	}
+	if w["decision"] != "withheld" || w["reason"] != publication.SD30Reason || w["serving"] != "v1" || jnum(w, "incN") != 300 {
+		t.Fatalf("1d trial keeps its facts and states the reason: %v", w)
+	}
+	if h := got["directional-ensemble-1h"]; h["incAcc"] != 0.61 || h["decision"] != "hold" {
+		t.Fatalf("a 1h trial is not SD-30's: %v", h)
+	}
+	sd30Off(t)
+	if w := byModel(serveRecorded(t, d.canaryTrials, "/api/canary"))["directional-ensemble-1d"]; w["incAcc"] != 0.61 || w["decision"] != "hold" {
+		t.Fatalf("flag off: %v", w)
+	}
+}
+
+func TestSD30_SelfAuditWithheld(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	for _, r := range []store.SelfAuditRow{
+		{Ts: 100, Metric: "calibration:1d", Value: 0.12, Status: "ok", Detail: "reliability 0.120"},
+		{Ts: 100, Metric: "calibration_level:1w", Value: 0.30, Status: "at_chance", Detail: "at chance"},
+		{Ts: 100, Metric: "prediction_bias:1d", Value: 0.04, Status: "ok", Detail: "bias +0.04"},
+		{Ts: 100, Metric: "factor_ic:trend", Value: 0.05, Status: "ok", Detail: "ic 0.05"},
+	} {
+		if err := st.InsertSelfAudit(t.Context(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byMetric := func(body map[string]any) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		fs, _ := body["findings"].([]any)
+		for _, x := range fs {
+			m, _ := x.(map[string]any)
+			name, _ := m["metric"].(string)
+			out[name] = m
+		}
+		return out
+	}
+	sd30On(t)
+	got := byMetric(serveRecorded(t, d.selfAudit, "/api/self-audit"))
+	for _, m := range []string{"calibration:1d", "calibration_level:1w", "prediction_bias:1d"} {
+		f := got[m]
+		if f["status"] != "withheld" || f["detail"] != publication.SD30Reason || jnum(f, "value") != 0 {
+			t.Fatalf("%s: %v", m, f)
+		}
+	}
+	if f := got["factor_ic:trend"]; f["status"] != "ok" || jnum(f, "value") != 0.05 {
+		t.Fatalf("a factor-IC finding is not SD-30's: %v", f)
+	}
+	sd30Off(t)
+	if f := byMetric(serveRecorded(t, d.selfAudit, "/api/self-audit"))["calibration:1d"]; f["status"] != "ok" || jnum(f, "value") != 0.12 {
+		t.Fatalf("flag off: %v", f)
 	}
 }

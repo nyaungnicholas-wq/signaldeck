@@ -63,6 +63,7 @@ func seedResolvedPrediction(t *testing.T, st *store.Store, symbolID int64, h md.
 // (winRate/brier/ic == null) and returns a "not yet significant (k/threshold)"
 // note. This is the honest, mostly-empty state the page must render today.
 func TestTrackRecord_GatedWhenThin(t *testing.T) {
+	sd30Off(t) // guards the pre-SD-30 path; with the flag on SD-30 would pass this whatever the guard does
 	srv, st := newTrackRecordServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")

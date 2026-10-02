@@ -93,4 +93,6 @@ test("SD-30: a horizon the daemon withholds is named; one it publishes is not", 
 	];
 	assert.deepEqual([...withheldHorizons(rows)], ["1d"]);
 	assert.equal(withheldHorizons([]).size, 0);
+	// The daemon's envelope list counts even with no row for that horizon.
+	assert.deepEqual([...withheldHorizons([], ["1d", "1w"])].sort(), ["1d", "1w"]);
 });

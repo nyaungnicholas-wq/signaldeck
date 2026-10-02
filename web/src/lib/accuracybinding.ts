@@ -99,6 +99,11 @@ export function unapprovedLabels(
  */
 export function withheldHorizons(
   publishedRows: ReadonlyArray<{ horizon?: string; figures_withheld?: string }>,
+  envelope: ReadonlyArray<string> = [],
 ): Set<string> {
-  return new Set(publishedRows.filter((r) => r.figures_withheld && r.horizon).map((r) => r.horizon as string));
+  // The envelope list comes from the switch itself, so a horizon with bins in
+  // the file but no row in this grade is still dropped.
+  const out = new Set(envelope);
+  for (const r of publishedRows) if (r.figures_withheld && r.horizon) out.add(r.horizon);
+  return out;
 }

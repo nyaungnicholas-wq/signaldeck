@@ -30,6 +30,7 @@ type selfAuditResp struct {
 // TestSelfAuditEndpoint: latest finding per metric is returned (newest run
 // wins), the note ships, and the empty state is honest.
 func TestSelfAuditEndpoint(t *testing.T) {
+	sd30Off(t) // stored rows served as stored: the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSelfAuditServer(t)
 	ctx := context.Background()
 

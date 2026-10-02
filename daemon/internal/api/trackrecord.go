@@ -293,8 +293,11 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// must not un-withhold it. The grader's own refusal and a collapse keep
 	// precedence, since each says something about the window itself.
 	withheld, sd30 := publication.DirectionalWithheld(string(h))
-	if sd30 && collapseReason == "" {
+	switch {
+	case sd30 && collapseReason == "":
 		gated, gateReason, collapseReason = true, "refused", withheld
+	case sd30:
+		collapseReason += ". Separately, " + withheld
 	}
 
 	resp := map[string]any{

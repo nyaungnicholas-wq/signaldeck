@@ -110,6 +110,10 @@ type accuracyResponse struct {
 	RefusedSince      string        `json:"refused_since,omitempty"`
 	GraderSHA256      string        `json:"grader_sha256,omitempty"`
 	Rows              []accuracyRow `json:"rows,omitempty"`
+	// WithheldHorizons names every horizon SD-30 withholds, whether or not a
+	// row for it is present, so a page drawing per-horizon figures from the
+	// registry FILE (the reliability bins) can drop them on the switch itself.
+	WithheldHorizons []string `json:"withheld_horizons,omitempty"`
 }
 
 type accuracyRow struct {
@@ -377,9 +381,16 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 
+	var withheldH []string
+	for _, h := range []string{"1d", "1w"} {
+		if _, ok := publication.DirectionalWithheld(h); ok {
+			withheldH = append(withheldH, h)
+		}
+	}
 	writeJSONStatus(w, http.StatusOK, accuracyResponse{
 		Status: "OK", GraderFresh: graderFresh, GeneratedAt: now,
 		GradedAt: reg.GradedAt, GraderSHA256: reg.GraderSHA256, Rows: rows,
+		WithheldHorizons: withheldH,
 	})
 }
 
