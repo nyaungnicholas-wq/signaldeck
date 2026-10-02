@@ -314,6 +314,9 @@ type Store interface {
 	RegimeForecasts(ctx context.Context) ([]store.RegimeForecast, error)
 	RegimeOutcomeCallsSince(ctx context.Context, since int64) ([]store.RegimeWeekCall, error)
 	VolForecasts(ctx context.Context) ([]store.VolForecast, error)
+	DigestTries(ctx context.Context, day string) ([]store.DigestTry, error)
+	SaveDigestTry(ctx context.Context, t store.DigestTry) error
+	PruneDigestTries(ctx context.Context, day string) error
 }
 
 const (
@@ -346,10 +349,11 @@ type Worker struct {
 	deferred int // members the last pass left for the next one
 	retry    int // members with a channel that failed and has a try left
 
-	// Per-day memory (reset when the ET date changes). ok holds each channel
-	// delivered today, so this process never sends it twice in a day even
-	// when MarkDigestSent fails. ponytail: in memory only; a restart between a
-	// member's two tries allows up to two more, persist if that matters.
+	// Per-day state (reloaded from the store when the ET date changes). ok
+	// holds each channel delivered today, so it is never sent twice in a day
+	// even when MarkDigestSent fails. Every change is mirrored into
+	// member_digest_tries (save), so a restart neither re-sends a delivered
+	// channel nor grants fresh tries past maxTries.
 	day   string
 	tries map[chanKey]int
 	ok    map[chanKey]bool
@@ -394,7 +398,18 @@ func (w *Worker) Run(ctx context.Context) (detail string, err error) {
 	}
 	day := et.Format("2006-01-02")
 	if w.day != day {
+		rows, err := w.St.DigestTries(ctx, day)
+		if err != nil {
+			return "", err
+		}
 		w.day, w.tries, w.ok = day, map[chanKey]int{}, map[chanKey]bool{}
+		for _, r := range rows {
+			k := chanKey{r.UserID, r.Channel}
+			w.tries[k], w.ok[k] = r.Tries, r.Delivered
+		}
+		if err := w.St.PruneDigestTries(ctx, day); err != nil {
+			slog.Warn("member-digest: earlier days' try rows not pruned", "err", err)
+		}
 	}
 	base := ""
 	if w.Base != nil {
@@ -442,7 +457,13 @@ func (w *Worker) Run(ctx context.Context) (detail string, err error) {
 			continue
 		}
 		for _, ch := range pending {
-			w.tries[chanKey{r.UserID, ch}]++ // spent even if the store fails below: bounded
+			k := chanKey{r.UserID, ch}
+			w.tries[k]++ // spent in memory even if the save fails: bounded in this process
+			// Recorded BEFORE the send: an unrecorded try would come back after
+			// a restart. A failed save sends nothing and retries the pass.
+			if err := w.save(ctx, k); err != nil {
+				return fmt.Sprintf("sent=%d failed=%d skipped=%d deferred=%d", sent, failed, skipped, deferred), err
+			}
 		}
 		delivered := w.deliver(ctx, r, pending, facts, base)
 		if delivered < 0 { // nothing watched: no read (the spent try bounds the rechecks)
@@ -522,6 +543,9 @@ func (w *Worker) deliver(ctx context.Context, r store.DigestRecipient, pending [
 				if chatGone(err) {
 					// Blocked or kicked: this chat will refuse forever.
 					w.tries[k] = maxTries
+					if err := w.save(ctx, k); err != nil {
+						slog.Warn("member-digest: spent tries not recorded; held in memory", "uid", r.UserID, "err", err)
+					}
 					if err := w.St.UnlinkTelegram(ctx, r.UserID); err != nil {
 						slog.Warn("member-digest: unlink after 403 failed", "uid", r.UserID, "err", err)
 					}
@@ -530,9 +554,19 @@ func (w *Worker) deliver(ctx context.Context, r store.DigestRecipient, pending [
 			}
 		}
 		w.ok[k] = true
+		if err := w.save(ctx, k); err != nil {
+			slog.Warn("member-digest: delivery not recorded; held in memory", "uid", r.UserID, "channel", ch, "err", err)
+		}
 		n++
 	}
 	return n
+}
+
+// save mirrors one channel's state for today into member_digest_tries, which
+// Run reloads after a restart.
+func (w *Worker) save(ctx context.Context, k chanKey) error {
+	return w.St.SaveDigestTry(ctx, store.DigestTry{UserID: k.uid, Day: w.day, Channel: k.ch,
+		Tries: w.tries[k], Delivered: w.ok[k]})
 }
 
 const metaTelegramOffset = "telegram_link_offset"
