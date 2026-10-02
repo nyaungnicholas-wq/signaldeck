@@ -128,25 +128,23 @@ func CollectDigestFacts(ctx context.Context, st *store.Store, now time.Time) (Di
 	})
 
 	// Resolved record per kind (all-time correct/total + this week's count) —
-	// the same rows the track-record regimes section grades.
-	resolved, err := st.ResolvedRegimeOutcomes(ctx, 50000)
+	// the same deduplicated tallies the track-record regimes section grades.
+	// It read ResolvedRegimeOutcomes(ctx, 50000) and counted raw rows, so past
+	// 50,000 graded calls it undercounted and a superseded row counted twice.
+	days, err := st.ResolvedRegimeOutcomeDays(ctx, since)
 	if err != nil {
 		return f, err
 	}
 	recs := map[string]*DigestKindRecord{}
-	for _, r := range resolved {
-		rec := recs[string(r.Kind)]
+	for _, d := range days {
+		rec := recs[d.Kind]
 		if rec == nil {
-			rec = &DigestKindRecord{Kind: string(r.Kind)}
-			recs[string(r.Kind)] = rec
+			rec = &DigestKindRecord{Kind: d.Kind}
+			recs[d.Kind] = rec
 		}
-		rec.Resolved++
-		if r.Correct == 1 {
-			rec.Correct++
-		}
-		if r.ResolvedAt >= since {
-			rec.NewThisWk++
-		}
+		rec.Resolved += d.N
+		rec.Correct += d.Correct
+		rec.NewThisWk += d.ResolvedSince
 	}
 	for _, rec := range recs {
 		f.Records = append(f.Records, *rec)

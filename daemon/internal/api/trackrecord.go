@@ -937,7 +937,7 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 	// independent observation per (symbol, kind, UTC-day): the dedup unique
 	// index guarantees this at write time and the query re-applies it, so a
 	// future schema change cannot silently pseudo-replicate.
-	days, err := d.St.ResolvedRegimeOutcomeDays(ctx)
+	days, err := d.St.ResolvedRegimeOutcomeDays(ctx, 0)
 	if err != nil {
 		return map[string]any{"available": false, "error": err.Error()}
 	}

@@ -593,12 +593,14 @@ func (s *Store) ResolvedRegimeOutcomes(ctx context.Context, limit int) ([]Regime
 
 // RegimeOutcomeDay is the graded regime calls of one kind on one UTC day of
 // call, already deduplicated: N calls, Correct of them right, SumClaimed the
-// sum of their frozen claimed accuracies.
+// sum of their frozen claimed accuracies, ResolvedSince how many were graded
+// at or after the since the caller passed.
 type RegimeOutcomeDay struct {
-	Kind       string
-	Day        int64
-	N, Correct int
-	SumClaimed float64
+	Kind          string
+	Day           int64
+	N, Correct    int
+	SumClaimed    float64
+	ResolvedSince int
 }
 
 // ResolvedRegimeOutcomeDays tallies every graded regime call by (kind, day) in
@@ -607,16 +609,18 @@ type RegimeOutcomeDay struct {
 // ResolvedRegimeOutcomes(ctx, 50000) for the track record: past 50,000 graded
 // calls (42,333 on the 2026-10-01 snapshot) that read dropped the oldest and
 // every per-kind count undercounted. Exact at any volume; on the snapshot it
-// returns 204 tallies in 0.06 s.
-func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context) ([]RegimeOutcomeDay, error) {
+// returns 204 tallies in 0.06 s. The weekly digest reads it too (it had the
+// same cap and no dedup), with since set to the start of its week.
+func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context, since int64) ([]RegimeOutcomeDay, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT kind, day, COUNT(*), COALESCE(SUM(correct), 0), COALESCE(SUM(historical_accuracy), 0)
+		SELECT kind, day, COUNT(*), COALESCE(SUM(correct), 0), COALESCE(SUM(historical_accuracy), 0),
+		       COALESCE(SUM(resolved_at >= ?), 0)
 		FROM (
-		  SELECT kind, day, correct, historical_accuracy,
+		  SELECT kind, day, correct, historical_accuracy, resolved_at,
 		         ROW_NUMBER() OVER (PARTITION BY symbol_id, kind, day ORDER BY ts DESC, id DESC) AS rn
 		  FROM regime_outcomes WHERE resolved_at IS NOT NULL
 		) WHERE rn = 1
-		GROUP BY kind, day ORDER BY kind, day`)
+		GROUP BY kind, day ORDER BY kind, day`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +628,7 @@ func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context) ([]RegimeOutcomeD
 	var out []RegimeOutcomeDay
 	for rows.Next() {
 		var d RegimeOutcomeDay
-		if err := rows.Scan(&d.Kind, &d.Day, &d.N, &d.Correct, &d.SumClaimed); err != nil {
+		if err := rows.Scan(&d.Kind, &d.Day, &d.N, &d.Correct, &d.SumClaimed, &d.ResolvedSince); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
