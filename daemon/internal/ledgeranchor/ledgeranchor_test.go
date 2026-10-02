@@ -183,3 +183,23 @@ func TestDefaultKeyPath_PrefersEnvAndStaysOutsideTheDatabase(t *testing.T) {
 		t.Errorf("default key path = %q, want ~/.signaldeck/ledger_anchor.key", got)
 	}
 }
+
+// TrustedKeys must trust the daemon's current key, and must never create one:
+// a verify that minted a key would trust whatever it just made.
+func TestTrustedKeys_CurrentKeyReadNeverCreated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "anchor.key")
+	t.Setenv(EnvKeyPath, path)
+	if got, want := len(TrustedKeys()), len(PinnedKeys()); got != want {
+		t.Fatalf("no key file: %d trusted keys, want the %d pinned", got, want)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("TrustedKeys created a key file (stat err=%v)", err)
+	}
+	sg, err := LoadOrCreateSigner(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !TrustedKeys().Has(sg.PublicKeyHex()) {
+		t.Fatal("the daemon's own current key is not trusted")
+	}
+}

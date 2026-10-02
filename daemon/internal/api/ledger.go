@@ -376,7 +376,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	// reproduces fine; the honest OLDER anchor is the thing that reports the
 	// history is gone, and checking only the newest would never surface it.
 	// It runs BEFORE anchoring: a failing anchor vetoes signing a new one.
-	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full)
+	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys())
 	var anchoring map[string]any
 	if err == nil && av.FailingAnchors > 0 {
 		anchoring = map[string]any{"wrote": false, "reason": fmt.Sprintf(
@@ -385,7 +385,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	} else if err == nil {
 		anchoring = d.maybeAnchor(r, v)
 		if wrote, _ := anchoring["wrote"].(bool); wrote {
-			av, err = d.St.VerifyLedgerAnchors(ctx, 0, full) // count the anchor just written
+			av, err = d.St.VerifyLedgerAnchors(ctx, 0, full, ledgeranchor.TrustedKeys()) // count the anchor just written
 		}
 	}
 	if err != nil {
@@ -449,7 +449,7 @@ func (d Deps) ledgerAnchors(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), ledgerVerifyTimeout)
 	defer cancel()
-	av, err := d.St.VerifyLedgerAnchors(ctx, limit, recompute)
+	av, err := d.St.VerifyLedgerAnchors(ctx, limit, recompute, ledgeranchor.TrustedKeys())
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			httpErr(w, http.StatusServiceUnavailable, "anchor verification exceeded "+ledgerVerifyTimeout.String()+" — retry without ?full=1")
@@ -465,8 +465,8 @@ func (d Deps) ledgerAnchors(w http.ResponseWriter, r *http.Request) {
 		"anchors":        av.Anchors,
 		"pubKeys":        av.DistinctPubKeys,
 		"tamperEvidence": tamperEvidence(av, map[string]any{"wrote": false, "reason": "anchors are written on the verify path"}),
-		"publishNote":    "post the newest anchor's `publish` line somewhere that timestamps it independently. A digest on a third party's record is the only evidence an operator holding the signing key cannot rewrite. Signature verification needs no secret: the public key is in every anchor row.",
-		"keyNote":        "the signing key lives outside the database (path from " + ledgeranchor.EnvKeyPath + ", owner-only 0600, generated on first use). A key stored beside the data it signs would prove nothing.",
+		"publishNote":    "post the newest anchor's `publish` line somewhere that timestamps it independently. A digest on a third party's record is the only evidence an operator holding the signing key cannot rewrite. Signature verification needs no secret, but a signature proves something only under a TRUSTED key: check each anchor pubKey against internal/ledgeranchor/pinned_pubkeys.txt (or a key published externally), not just against the row it sits in.",
+		"keyNote":        "the signing key lives outside the database (path from " + ledgeranchor.EnvKeyPath + ", owner-only 0600, generated on first use). A key stored beside the data it signs would prove nothing. Only anchors signed by the current key or a key pinned in internal/ledgeranchor/pinned_pubkeys.txt count; any other key reads as failing.",
 	}
 	writeJSON(w, out)
 }

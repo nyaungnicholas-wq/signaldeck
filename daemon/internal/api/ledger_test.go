@@ -657,6 +657,52 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 	}
 }
 
+// TestLedgerVerify_FreshKeyAnchorReadsAsTamper is the 2026-10-01 probe against
+// the endpoint: wipe the anchors, regenerate the chain, sign it with a freshly
+// generated key backdated 30 days. Before key pinning the default verify said
+// intact, failingAnchors=0, localAnchorsReproduce=true.
+func TestLedgerVerify_FreshKeyAnchorReadsAsTamper(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 12, 0.5)
+	if v := getLedgerVerify(t, srv, ""); !v.Tamper.Anchoring.Wrote {
+		t.Fatalf("honest chain not anchored: %+v", v.Tamper.Anchoring)
+	}
+
+	for _, q := range []string{
+		`DELETE FROM ledger_anchors`,
+		`DELETE FROM prediction_ledger`,
+		`DELETE FROM meta WHERE k='ledger_verify_checkpoint'`,
+		`DELETE FROM sqlite_sequence WHERE name='prediction_ledger'`,
+	} {
+		if _, err := st.DB().ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	appendLedgerRows(t, st, sym.ID, 12, 0.93)
+	ver, err := st.VerifyLedger(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := ledgeranchor.LoadOrCreateSigner(filepath.Join(t.TempDir(), "attacker.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, wrote, reason, err := st.MaybeAnchorLedger(ctx, fresh, ver, store.AnchorPolicy{}, time.Now().Add(-30*24*time.Hour)); err != nil || !wrote {
+		t.Fatalf("forged anchor: wrote=%v reason=%q err=%v", wrote, reason, err)
+	}
+
+	v := getLedgerVerify(t, srv, "")
+	if v.Tamper.FailingAnchors != 1 || v.Tamper.LocalAnchorsReproduce {
+		t.Fatalf("failingAnchors=%d localAnchorsReproduce=%v, want 1/false — a fresh key vouched for a fabricated history",
+			v.Tamper.FailingAnchors, v.Tamper.LocalAnchorsReproduce)
+	}
+}
+
 // ── Finding A11: the verify routes must be bounded, not a DoS lever ─────────
 
 // TestLedgerVerify_FullWalkRequiresAuth: the ?full=1 genesis walk is the

@@ -158,7 +158,10 @@ $new = $changed = $failed = 0
 foreach ($t in $tasks) {
     if ($t.Status -eq 'CREATE' -or ($t.Status -eq 'UPDATE' -and -not $t.Refused)) {
         try {
-            Register-ScheduledTask -TaskName $t.TaskName -Xml $t.WantXml -Force
+            # WantXml is TOKENISED ({{USER}}, {{REPO}}) because the comparison
+            # above needs it that way; registration needs the real values, or the
+            # task's principal and paths are literal placeholders.
+            Register-ScheduledTask -TaskName $t.TaskName -Xml (Expand-TaskTokens -Xml $t.WantXml -Repo $repo) -Force
             # Read-back verification
             $got = Get-ScheduledTask -TaskName $t.TaskName
             # LogonType
