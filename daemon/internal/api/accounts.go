@@ -79,7 +79,7 @@ var memberRoutes = map[string]bool{
 	"/api/alert-prefs/telegram-unlink": true,
 	// The member's own call journal (plan step 8): their calls and their
 	// grade, never a price or return, never an input to SignalDeck's forecasts.
-	"/api/journal": true, "/api/journal/withdraw": true,
+	"/api/journal": true, "/api/journal/withdraw": true, "/api/journal/symbols": true,
 	// Ask the data (plan step 10): gated INSIDE the handler (403 until
 	// SIGNALDECK_MEMBER_COPILOT=1), member catalog entries only, so this one
 	// does spend LLM budget, capped per member per day (ask.go).

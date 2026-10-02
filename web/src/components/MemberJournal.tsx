@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api, companiesList, type CompanyDirRow } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   HORIZONS,
   JOURNAL_FOOTER,
@@ -13,6 +13,7 @@ import {
   statusLabel,
   type Journal,
   type JournalCall,
+  type JournalPick,
   type CallDirection,
 } from "@/lib/journal";
 
@@ -45,7 +46,7 @@ export default function MemberJournal() {
 
   const [symbol, setSymbol] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ q: string; rows: CompanyDirRow[] } | null>(null);
+  const [results, setResults] = useState<{ q: string; rows: JournalPick[] } | null>(null);
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const [direction, setDirection] = useState<CallDirection>("up");
   const [horizon, setHorizon] = useState<number>(5);
@@ -81,10 +82,12 @@ export default function MemberJournal() {
     if (q.length < 1) return;
     let alive = true;
     const t = setTimeout(() => {
-      companiesList({ q, limit: 8 }).then(
+      // Tracked US stocks and ETFs with daily bars: exactly what the daemon
+      // accepts for a call. ETFs are not in the SEC directory (/api/companies).
+      api.journalSymbols(q).then(
         (res) => {
           if (alive) {
-            setResults({ q, rows: res.companies ?? [] });
+            setResults({ q, rows: res.symbols ?? [] });
             setSearchErr(null);
           }
         },
@@ -210,33 +213,29 @@ export default function MemberJournal() {
           {shown.length > 0 && (
             <ul className="m-0 flex max-w-[40rem] list-none flex-col gap-1 p-0">
               {shown.map((c) => (
-                <li key={c.ticker} className="flex items-center gap-3 border-b py-1" style={{ borderColor: "var(--border)" }}>
-                  <span className="mono w-20 shrink-0 font-bold">{c.ticker}</span>
+                <li key={c.symbol} className="flex items-center gap-3 border-b py-1" style={{ borderColor: "var(--border)" }}>
+                  <span className="mono w-20 shrink-0 font-bold">{c.symbol}</span>
                   <span className="min-w-0 flex-1 truncate text-[0.85rem]">{c.name}</span>
-                  <span className="hidden text-[0.75rem] sm:inline" style={{ color: "var(--faint)" }}>
-                    {c.exchange || "—"}
-                  </span>
-                  {c.tracked ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSymbol(c.ticker);
-                        setQuery("");
-                        setResults(null);
-                      }}
-                      className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
-                      style={{ color: "var(--accent)" }}
-                    >
-                      Pick
-                    </button>
-                  ) : (
-                    <button type="button" disabled className="chip min-h-[36px] px-3 text-[0.8rem]" style={{ color: "var(--faint)" }}>
-                      Not tracked
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSymbol(c.symbol);
+                      setQuery("");
+                      setResults(null);
+                    }}
+                    className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
+                    style={{ color: "var(--accent)" }}
+                  >
+                    Pick
+                  </button>
                 </li>
               ))}
             </ul>
+          )}
+          {results && results.q === q && q.length > 0 && shown.length === 0 && (
+            <p className="m-0 text-[0.8rem]" style={{ color: "var(--dim)" }}>
+              No tracked US stock or ETF matches &ldquo;{q}&rdquo;.
+            </p>
           )}
           {symbol && (
             <div className="flex items-center gap-2">

@@ -44,9 +44,12 @@ test("/journal is a member page in the member nav, and renders the footer and co
   assert.match(src("./memberPages.ts"), /"\/journal"/);
   assert.match(src("../components/Shell.tsx"), /href: "\/journal", label: "MY CALLS"/);
   const page = src("../components/MemberJournal.tsx");
-  for (const needle of ["JOURNAL_FOOTER", "JOURNAL_IMMUTABLE", "statsHeadline", "companiesList", "api.journalCall", "api.journalWithdraw"]) {
+  for (const needle of ["JOURNAL_FOOTER", "JOURNAL_IMMUTABLE", "statsHeadline", "api.journalSymbols", "api.journalCall", "api.journalWithdraw"]) {
     assert.ok(page.includes(needle), `MemberJournal.tsx does not use ${needle}`);
   }
+  // The picker offers exactly what POST /api/journal accepts: the daemon's
+  // journal symbols (ETFs included), not the SEC directory, which has no ETFs.
+  assert.doesNotMatch(page, /companiesList/);
   // The licence line: the page never asks for or prints a price.
   assert.doesNotMatch(page, /fmtPrice|lastClose|entryPrice|exitPrice/);
   assert.match(src("../app/journal/page.tsx"), /MemberJournal/);

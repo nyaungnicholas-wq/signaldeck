@@ -50,6 +50,12 @@ export interface JournalStats {
   minN: number;
 }
 
+/** One symbol the journal's picker offers (GET /api/journal/symbols). */
+export interface JournalPick {
+  symbol: string;
+  name: string;
+}
+
 export interface Journal {
   calls: JournalCall[];
   stats: JournalStats;

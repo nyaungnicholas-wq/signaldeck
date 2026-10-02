@@ -515,6 +515,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/journal/withdraw": {method: "POST", url: "/api/journal/withdraw", body: map[string]int64{"id": fx.journalCall},
 			marker: "withdrawn only before", status: http.StatusConflict,
 			why: "the seeded call is resolved, so it is final; journal_test.go drives the 200"},
+		// The journal's picker: identity only (ticker and name), never a close.
+		"/api/journal/symbols": get("/api/journal/symbols?q=SNTL", `"symbol":"SNTL"`),
 		"/api/institutions":   get("/api/institutions?symbol=SNTL", "Sentinel Capital"),
 		"/api/ledger":         get("/api/ledger?symbol=SNTL&market=stocks", `"count":1`),
 		"/api/ledger/anchors": get("/api/ledger/anchors", `"mode":"stored"`), // per request, uncached

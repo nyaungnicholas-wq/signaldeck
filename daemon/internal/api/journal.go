@@ -10,7 +10,6 @@ package api
 // rates and an interval.
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -113,17 +112,15 @@ func (d Deps) journalCreate(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "note is limited to 280 characters")
 		return
 	}
-	s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(body.Symbol)), md.Stocks)
-	if errors.Is(err, sql.ErrNoRows) {
-		httpErr(w, 404, "unknown symbol")
-		return
-	}
+	// Exactly what the picker (GET /api/journal/symbols) offers: one store
+	// predicate serves both, so an ETF the picker shows is never refused here.
+	s, ok, err := d.St.JournalSymbolByTicker(r.Context(), body.Symbol)
 	if err != nil {
 		httpInternal(w, err)
 		return
 	}
-	if !s.Active {
-		httpErr(w, 422, s.Symbol+" is not currently tracked")
+	if !ok {
+		httpErr(w, 404, "unknown symbol: the journal takes tracked US stocks and ETFs with daily data")
 		return
 	}
 	now := time.Now()
@@ -183,8 +180,30 @@ func (d Deps) journalWithdraw(w http.ResponseWriter, r *http.Request) {
 	d.writeJournal(w, r)
 }
 
+// journalSymbols is the journal's picker: tracked US stocks and ETFs with
+// daily bars matching q (ticker prefix or name), identity only. ETFs are not
+// in the SEC directory (/api/companies), so the picker cannot use it.
+// GET /api/journal/symbols?q=
+func (d Deps) journalSymbols(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.St.JournalSymbols(r.Context(), r.URL.Query().Get("q"), 8)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	type pick struct {
+		Symbol string `json:"symbol"`
+		Name   string `json:"name"`
+	}
+	out := make([]pick, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, pick{s.Symbol, s.Name})
+	}
+	writeJSON(w, map[string]any{"symbols": out})
+}
+
 func (d Deps) registerJournal(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/journal", d.journalGet)
+	mux.HandleFunc("GET /api/journal/symbols", d.journalSymbols)
 	mux.HandleFunc("POST /api/journal", d.journalCreate)
 	mux.HandleFunc("POST /api/journal/withdraw", d.journalWithdraw)
 }
