@@ -1486,6 +1486,9 @@ export interface PreregResponse {
   brokenAtSeq?: number;
   registeredBefore?: boolean;
   firstGradableOn?: string;
+  /** Live-graded structural calls so far, one per symbol per day (the count
+   *  every regime caveat states); null when the daemon could not read it. */
+  liveResolved?: number | null;
   whatThisIs?: string;
   howToUseIt?: string;
   whyChained?: string;
@@ -3721,23 +3724,57 @@ export interface StructRegimeKindDoc {
   tradeability?: string;
 }
 
+/** Per kind, what a member's sliced read no longer carries as rows: every row
+ *  of the kind, and the count and mean of those with a historicalAccuracy.
+ *  Always the WHOLE kind, whatever symbols were asked for (the same for every
+ *  member). Absent on the operator's full payload. */
+export interface RegimeKindStats {
+  count: number;
+  measured: number;
+  meanHistoricalAccuracy?: number;
+}
+
 export interface StructRegimes {
   forecasts: Record<string, StructRegimeForecast[]>;
   kinds: Record<string, StructRegimeKindDoc>;
   methodology: string;
   whyHonest: string;
+  /** Present only when the daemon sliced the rows (a member's read). */
+  kindStats?: Record<string, RegimeKindStats>;
+}
+
+/** The slice of /api/regimes a page needs (REGIMES-SIZE, 2026-10-02). The full
+ *  payload was 3.6 MB; a member's read now carries only the rows asked for (the
+ *  top of each kind by default). The operator always gets every row, so every
+ *  caller must also work on the full shape. */
+export interface RegimesQuery {
+  symbols?: string[];
+  kind?: string;
+  offset?: number;
+  limit?: number;
+}
+
+function regimesPath(q?: RegimesQuery): string {
+  const p = new URLSearchParams();
+  if (q?.symbols?.length) p.set("symbols", q.symbols.join(","));
+  if (q?.kind) p.set("kind", q.kind);
+  if (q?.offset) p.set("offset", String(q.offset));
+  if (q?.limit) p.set("limit", String(q.limit));
+  const s = p.toString();
+  return s ? `/api/regimes?${s}` : "/api/regimes";
 }
 
 /** The validated market-structure regime forecasts, grouped by kind, with the
  *  measured accuracy tiers + honesty caveats the daemon ships in-payload. */
-export async function structuralRegimes(): Promise<StructRegimes> {
+export async function structuralRegimes(q?: RegimesQuery): Promise<StructRegimes> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = await get<any>("/api/regimes");
+  const raw = await get<any>(regimesPath(q));
   return {
     forecasts: (raw.forecasts ?? {}) as Record<string, StructRegimeForecast[]>,
     kinds: (raw.kinds ?? {}) as Record<string, StructRegimeKindDoc>,
     methodology: String(raw.methodology ?? ""),
     whyHonest: String(raw.whyHonest ?? ""),
+    kindStats: (raw.kindStats ?? undefined) as Record<string, RegimeKindStats> | undefined,
   };
 }
 
@@ -3966,14 +4003,15 @@ export interface StructRegimesWithEarnings extends StructRegimes {
 
 /** structuralRegimes() plus the appended earningsWindows/earningsNote fields
  *  (the original normalizer drops unknown keys, so this reads them too). */
-export async function structuralRegimesWithEarnings(): Promise<StructRegimesWithEarnings> {
+export async function structuralRegimesWithEarnings(q?: RegimesQuery): Promise<StructRegimesWithEarnings> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = await get<any>("/api/regimes");
+  const raw = await get<any>(regimesPath(q));
   return {
     forecasts: (raw.forecasts ?? {}) as Record<string, StructRegimeForecast[]>,
     kinds: (raw.kinds ?? {}) as Record<string, StructRegimeKindDoc>,
     methodology: String(raw.methodology ?? ""),
     whyHonest: String(raw.whyHonest ?? ""),
+    kindStats: (raw.kindStats ?? undefined) as Record<string, RegimeKindStats> | undefined,
     earningsWindows: (raw.earningsWindows ?? undefined) as
       | Record<string, EarningsWindowLabel>
       | undefined,

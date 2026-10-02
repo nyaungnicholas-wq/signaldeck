@@ -240,8 +240,12 @@ var survivedFindings = []survivedFinding{
 		Evidence: "54,969 independent observations, 24 quarters, non-overlapping 21-session sampling, " +
 			"quarter-block bootstrap intervals, survivorship-clean universe including delisted names. " +
 			"Independently re-implemented and replicated within two jackknife standard errors.",
-		Caveat: "This is a BACKTEST measurement; no live forecast has resolved yet, and the first " +
-			"gradable date is 2026-08-07. Accuracy is not return: at the very-high band the mean " +
+		// E-CAVEAT-DATE (2026-10-02): this said "no live forecast has resolved
+		// yet", which stopped being true once grading began. Static content
+		// cannot hold a count, so it points at the live record instead.
+		Caveat: "This is a BACKTEST measurement, not the live record: live resolutions began " +
+			"after the first gradable date, 2026-08-07, and how they compare with these bands is " +
+			"on /api/track-record. Accuracy is not return: at the very-high band the mean " +
 			"forward 21-day return is NEGATIVE (-0.39%) while the lower bands are positive. The " +
 			"mechanism is trend persistence plus distance, not a discovery.",
 	},

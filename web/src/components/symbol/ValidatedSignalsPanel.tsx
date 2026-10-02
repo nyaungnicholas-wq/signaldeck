@@ -35,6 +35,7 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 /** Reading order: the validated edge first, the un-tradeable trends last. */
@@ -78,6 +79,7 @@ interface Row {
   n: number;
   horizonDays?: number;
   tradeability?: string;
+  evidenceCaveat?: string;
 }
 
 function toRow(f: StructRegimeForecast): Row {
@@ -90,6 +92,7 @@ function toRow(f: StructRegimeForecast): Row {
     n: f.n,
     horizonDays: f.horizonDays,
     tradeability: f.tradeability,
+    evidenceCaveat: f.evidenceCaveat,
   };
 }
 
@@ -103,6 +106,7 @@ function volToRow(f: VolRegimeForecast, tradeability?: string): Row {
     n: f.n,
     horizonDays: 63,
     tradeability,
+    evidenceCaveat: f.evidenceCaveat,
   };
 }
 
@@ -147,7 +151,8 @@ export default function ValidatedSignalsPanel({
         memberView
           ? Promise.reject(new ApiError(403, "member view"))
           : signalReport(symbol, market, "overview"),
-        structuralRegimes(),
+        // A member's read carries only this symbol's rows (REGIMES-SIZE).
+        structuralRegimes({ symbols: [symbol] }),
         volRegime(),
       ]);
       if (!alive) return;
@@ -281,6 +286,11 @@ export default function ValidatedSignalsPanel({
               <span className="chip tnum" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
                 banded accuracy {pct(r.historicalAccuracy)}
               </span>
+              {regimeCaveats([r]).map((c) => (
+                <HelpTip key={c} label="what this accuracy is">
+                  {c}
+                </HelpTip>
+              ))}
               <span className="chip">{r.tier}</span>
               <span className="tnum chip">n={r.n.toLocaleString("en-US")}</span>
               {!memberView && <Link

@@ -145,7 +145,8 @@ var memberInputs = map[string]string{
 	// What to look up: the same public answer for anyone who asks.
 	"symbol": "ticker to look up", "market": "stocks/futures (crypto refused for members)",
 	"q": "company or journal-symbol search (ticker or name)", "ticker": "TradingView webhook ticker (shared-secret inbound, serves nothing)",
-	"id": "claim, research-ledger or lineage id", "kind": "lineage node kind / model-health forecast kind",
+	"id": "claim, research-ledger or lineage id", "kind": "lineage node kind / model-health or regimes forecast kind",
+	"symbols": "regimes: tickers to look up, comma-separated; each row is the same public row, totals cover the whole kind",
 	"horizon": "forecast horizon (1d, 21d...)", "feature": "evidence list filter", "status": "evidence list filter",
 	"form": "SEC form type filter", "code": "Form 4 transaction-code filter", "manager": "13F manager filter",
 	"chamber": "STOCK Act chamber filter", "member": "a member of Congress, by name (STOCK Act filter)",

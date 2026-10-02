@@ -96,16 +96,30 @@ type PostmortemCluster struct {
 	MeanConv float64 `json:"meanConviction"`
 }
 
-// PostmortemClusters aggregates stored postmortems by primary reason over the
-// most recent `withinDays` days (0 ⇒ all time), biggest cluster first. This is
-// the "cluster failures / discover patterns" surface the Research Lab reads.
-func (s *Store) PostmortemClusters(ctx context.Context, sinceTs int64) ([]PostmortemCluster, int, error) {
-	rows, err := s.db.QueryContext(ctx, `
+// pmClustersSQL and pmRecentSQL are the two reads behind /api/postmortems,
+// named so TestPostmortemReadsUseTheirIndexes can EXPLAIN them: each must stay
+// on its index in schema.sql (SLOW-OPS, 2026-10-02) rather than scan the table.
+const (
+	pmClustersSQL = `
 		SELECT primary_reason, COUNT(*), AVG(magnitude), AVG(conviction)
 		FROM prediction_postmortems
 		WHERE created_at >= ?
 		GROUP BY primary_reason
-		ORDER BY COUNT(*) DESC, primary_reason ASC`, sinceTs)
+		ORDER BY COUNT(*) DESC, primary_reason ASC`
+	pmRecentSQL = `
+		SELECT sym.symbol, sym.market, pm.horizon, pm.ts, pm.prob, pm.up, pm.fwd_return,
+		       pm.primary_reason, pm.secondary_reason, pm.reasons
+		FROM prediction_postmortems pm
+		JOIN symbols sym ON sym.id = pm.symbol_id
+		ORDER BY pm.ts DESC
+		LIMIT ?`
+)
+
+// PostmortemClusters aggregates stored postmortems by primary reason over the
+// most recent `withinDays` days (0 ⇒ all time), biggest cluster first. This is
+// the "cluster failures / discover patterns" surface the Research Lab reads.
+func (s *Store) PostmortemClusters(ctx context.Context, sinceTs int64) ([]PostmortemCluster, int, error) {
+	rows, err := s.db.QueryContext(ctx, pmClustersSQL, sinceTs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -151,13 +165,7 @@ func (s *Store) RecentPostmortems(ctx context.Context, limit int) ([]RecentPostm
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT sym.symbol, sym.market, pm.horizon, pm.ts, pm.prob, pm.up, pm.fwd_return,
-		       pm.primary_reason, pm.secondary_reason, pm.reasons
-		FROM prediction_postmortems pm
-		JOIN symbols sym ON sym.id = pm.symbol_id
-		ORDER BY pm.ts DESC
-		LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, pmRecentSQL, limit)
 	if err != nil {
 		return nil, err
 	}

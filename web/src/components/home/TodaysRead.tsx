@@ -37,6 +37,8 @@ import type {
   StructRegimeForecast,
 } from "@/lib/api";
 import { structuralRegimes } from "@/lib/api";
+import { regimeCaveats } from "@/lib/regimeCaveat";
+import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 function symbolHref(symbol: string, market?: Market): string {
@@ -123,9 +125,13 @@ export default function TodaysRead({
 
   // One fetch of the validated regime forecasts. Failure is non-fatal: the card
   // falls back to an honest empty state rather than to the directional number.
+  // A member's read carries only the rows asked for (REGIMES-SIZE): the
+  // watchlist's rows, or with no watchlist the top of each kind, which holds
+  // the best read across the market. The operator always gets every row.
+  const symKey = (watchList ?? []).join(",");
   useEffect(() => {
     let alive = true;
-    structuralRegimes()
+    structuralRegimes(symKey ? { symbols: symKey.split(",") } : undefined)
       .then((r) => {
         if (alive) setByKind(r.forecasts as Record<string, Forecast[]>);
       })
@@ -135,7 +141,7 @@ export default function TodaysRead({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [symKey]);
 
   const watchSymbols = useMemo(
     () => new Set(watchList ?? (dash?.watchlist?.sparks ?? []).map((s) => s.symbol)),
@@ -185,14 +191,19 @@ export default function TodaysRead({
           >
             {/* NOT "Measured". historicalAccuracy is a constant read from
                 structregime.go's offline lookup table (accuracyFor), and every
-                Forecast this package returns today is evidenceBacktest. Checked
-                on the live corpus: regime_outcomes.resolved_at is NULL on all
-                37,857 structural rows, so ZERO of these calls has ever been
-                graded — while this line was calling the number "measured". */}
+                Forecast this package returns today is evidenceBacktest, whether
+                or not calls of its kind have since resolved live. How many have
+                is the row's evidenceCaveat (in the HelpTip below, from the
+                daemon's live count); how they scored is /api/track-record's. */}
             Backtested accuracy in this conviction band:{" "}
             <span className="tnum font-semibold" style={{ color: "var(--text)" }}>
               {pct(best.fc.historicalAccuracy)}
             </span>{" "}
+            {regimeCaveats([best.fc]).map((c) => (
+              <HelpTip key={c} label="what this accuracy is">
+                {c}
+              </HelpTip>
+            ))}{" "}
             (conviction <span className="tnum">{best.fc.conviction.toFixed(2)}</span>
             {best.fc.n > 0 ? (
               <>

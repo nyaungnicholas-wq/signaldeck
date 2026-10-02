@@ -19,6 +19,8 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 
 type Chip = { label: string; regime: string; accuracy: number };
 
@@ -51,7 +53,7 @@ export default function MemberWatchlist() {
   useEffect(() => {
     let alive = true;
     const load = async () => {
-      const [w, r, v] = await Promise.allSettled([api.memberWatchlist(), structuralRegimes(), volRegime()]);
+      const [w, v] = await Promise.allSettled([api.memberWatchlist(), volRegime()]);
       if (!alive) return;
       if (w.status === "fulfilled") {
         setRows(w.value ?? []);
@@ -59,8 +61,17 @@ export default function MemberWatchlist() {
       } else {
         setLoadErr(errText(w.reason));
       }
-      if (r.status === "fulfilled") setRegimes(Object.values(r.value.forecasts ?? {}).flat());
       if (v.status === "fulfilled") setVols(v.value.forecasts ?? []);
+      // Only the watched symbols' regime rows (REGIMES-SIZE): the member read
+      // of /api/regimes is sliced, so it is asked for once the list is known.
+      const syms = w.status === "fulfilled" ? [...new Set((w.value ?? []).map((x) => x.symbol))] : [];
+      if (syms.length === 0) return;
+      try {
+        const r = await structuralRegimes({ symbols: syms });
+        if (alive) setRegimes(Object.values(r.forecasts ?? {}).flat());
+      } catch {
+        // As before: a failed regimes read leaves the chips as they were.
+      }
     };
     void load();
     return () => {
@@ -101,6 +112,13 @@ export default function MemberWatchlist() {
     if (v) out.push({ label: "vol63", regime: v.regime, accuracy: v.historicalAccuracy });
     return out;
   };
+
+  // The caveats of the rows behind the chips on show: every watched symbol's
+  // regime rows, and the vol63 row of each watched symbol.
+  const caveats = regimeCaveats([
+    ...regimes,
+    ...vols.filter((v) => (rows ?? []).some((r) => r.symbol === v.symbol && r.market === v.market)),
+  ]);
 
   const watch = async (ticker: string) => {
     setBusy(`add:${ticker}`);
@@ -270,7 +288,17 @@ export default function MemberWatchlist() {
         <Link href="/accuracy" className="underline">
           record
         </Link>
-        . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.
+        . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.{" "}
+        {/* The chips' accuracies, qualified in the daemon's own words (verbatim). */}
+        {caveats.length > 0 ? (
+          <HelpTip label="what these accuracies are">
+            {caveats.map((c) => (
+              <span key={c} className="mb-2 block last:mb-0">
+                {c}
+              </span>
+            ))}
+          </HelpTip>
+        ) : null}
       </p>
       <HypotheticalNote short />
     </section>

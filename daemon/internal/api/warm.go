@@ -82,11 +82,19 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 // while the key the page does read builds cold in front of a visitor. Nothing
 // in web/src requests /api/predictions/latest or /api/xs-factor, so neither is
 // warmed. TestWarmCaches_WarmsTheKeysTheWebRequests pins the list.
+//
+// A PASS CUT SHORT BY ITS CONTEXT RETURNS ctx.Err() (H7, 2026-10-02). The steps
+// that ran into a done context are not logged as failed, but the pass did not
+// warm what came after them, so it must not come back nil. Before this a pass
+// that hit the worker's 15-minute run deadline was filed "ok" with everything
+// after the deadline unwarmed. The runner tells the two causes apart from its
+// own contexts: a shutdown is filed ok, a blown deadline or a watchdog cut is
+// filed timeout.
 func (d Deps) WarmCaches(ctx context.Context) error {
 	ctx = waitForBuild(ctx)
 	var errs []error
 	note := func(what string, err error) bool {
-		if err == nil || ctx.Err() != nil { // a shutdown is not a failed step
+		if err == nil || ctx.Err() != nil { // a done context is reported once, at the end
 			return false
 		}
 		if errors.Is(err, errWarming) || errors.Is(err, errLedgerVerifyBusy) {
@@ -183,6 +191,9 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// every visitor EXCEPT the first one after a restart, and on a published
 	// deployment that visitor is anonymous and unauthenticated.
 	warmBody("/api/research-ledger", "", d.St.CacheKey()+"|research-ledger", sharedResearchLedgerSWR, d.researchLedger)
+	if ctx.Err() != nil {
+		errs = append(errs, fmt.Errorf("warm pass cut short: %w", ctx.Err()))
+	}
 	return errors.Join(errs...)
 }
 

@@ -625,11 +625,15 @@ const loopSilentAfterDays = 3
 // that makes silence diagnostic: below the floor, silence is the refusal working.
 func (s *Store) LoopEngineHealth(ctx context.Context, minObs int, now time.Time) (LoopEngineHealth, error) {
 	h := LoopEngineHealth{MinObs: minObs, LastRunAge: -1, State: LoopEngineLive, Healthy: true}
-	stats, err := s.ResearchWeeksStats(ctx)
-	if err != nil {
+	// The row count only (SLOW-OPS, 2026-10-02). This read ResearchWeeksStats,
+	// which also counts distinct symbols and weeks and computes coverage over
+	// every daily bar in the corpus span: 2.4 s alone on the 2026-10-01
+	// snapshot against 0.009 s for the count, and /api/research-loop, which
+	// reads this on every request, answered in 86-150 s on a loaded daemon.
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM research_weeks`).Scan(&h.CorpusRows); err != nil {
 		return h, err
 	}
-	h.CorpusRows = stats.Rows
 
 	var day sql.NullString
 	if err := s.db.QueryRowContext(ctx,
