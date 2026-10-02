@@ -9,9 +9,14 @@ import sqlite3
 import hashlib
 import base64
 import os
+import re
 import subprocess
 import sys
 import tempfile
+
+# Strict hex, like Go's hex.DecodeString: bytes.fromhex also accepts spaces.
+HEX = re.compile(r"[0-9a-fA-F]+")
+
 
 def check(db_path, pinned_path, openssl="openssl"):
     try:
@@ -19,6 +24,10 @@ def check(db_path, pinned_path, openssl="openssl"):
             pinned = {line.split("#")[0].strip().lower() for line in f} - {""}
     except OSError as e:
         return None, f"pinned key file unreadable: {e}"
+    # The daemon refuses a pinned file with any malformed key line
+    # (ledgeranchor.ParseKeySet); so does this.
+    if any(len(k) != 64 or not HEX.fullmatch(k) for k in pinned):
+        return None, "pinned key file has a line that is not a 32-byte hex public key"
 
     # One read-only connection, so the anchor and the ledger rows it is checked
     # against come from one database state.
@@ -51,13 +60,9 @@ def check(db_path, pinned_path, openssl="openssl"):
             conn.close()
 
     msg = f"signaldeck-ledger-anchor|v1|alg=ed25519|created_at={created_at}|ledger_seq={ledger_seq}|ledger_count={ledger_count}|head={head_hash}".encode()
-    try:
-        pub = bytes.fromhex(pub_key)
-        sig_bytes = bytes.fromhex(sig)
-        if len(pub) != 32 or len(sig_bytes) != 64:
-            raise ValueError
-    except ValueError:
+    if len(pub_key) != 64 or len(sig) != 128 or not HEX.fullmatch(pub_key) or not HEX.fullmatch(sig):
         return None, "malformed public key or signature"
+    pub, sig_bytes = bytes.fromhex(pub_key), bytes.fromhex(sig)
 
     try:
         with tempfile.TemporaryDirectory() as td:
@@ -82,6 +87,10 @@ def check(db_path, pinned_path, openssl="openssl"):
     except (OSError, subprocess.SubprocessError) as e:
         return None, f"openssl unavailable, cannot verify the signature: {e}"
 
+    if result.returncode != 0 and "Signature Verification Failure" not in result.stdout:
+        # e.g. an OpenSSL older than 3.0 has no -rawin: no verdict, not tamper.
+        why = (result.stderr.strip().splitlines() or ["no output"])[0]
+        return None, f"openssl could not check the signature (OpenSSL 3 needed): {why}"
     if result.returncode != 0 or "Signature Verified Successfully" not in result.stdout:
         return None, "signature does not verify under the recorded public key"
 

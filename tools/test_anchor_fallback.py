@@ -104,6 +104,21 @@ class TestAnchorFallback(unittest.TestCase):
         self.assertIsNone(line)
         self.assertIn("unpinned", reason.lower())
 
+    def test_malformed_pinned_line_is_refused(self):
+        with open(self.pinned_path, "a") as f:
+            f.write("not-a-key\n")
+        self.anchor()
+        line, reason = af.check(self.db_path, self.pinned_path)
+        self.assertIsNone(line)
+        self.assertIn("pinned key file", reason)
+
+    def test_hex_with_spaces_is_refused(self):
+        # Go's hex.DecodeString refuses it, so the daemon would fail this anchor.
+        self.anchor(sig=SIG[:64] + " " + SIG[65:])
+        line, reason = af.check(self.db_path, self.pinned_path)
+        self.assertIsNone(line)
+        self.assertIn("malformed", reason)
+
     @unittest.skipUnless(OPENSSL, "openssl not installed")
     def test_stale_digest_is_refused(self):
         self.anchor(digest="0"*64)
