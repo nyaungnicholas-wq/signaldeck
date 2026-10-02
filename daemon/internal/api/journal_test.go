@@ -57,9 +57,9 @@ func TestJournalMemberFlow(t *testing.T) {
 		return v
 	}
 	aapl := sym("AAPL", md.Stocks)
-	// The journal takes a symbol only once it has daily data (what the picker
-	// offers): one settled bar long before any call made here.
-	if err := st.UpsertBars(ctx, []md.Bar{{SymbolID: aapl.ID, TF: md.TF1d, Ts: 1_699_920_000,
+	// The journal takes a symbol only with recent daily data (what the picker
+	// offers): one bar on the session before today's, before any entry session.
+	if err := st.UpsertBars(ctx, []md.Bar{{SymbolID: aapl.ID, TF: md.TF1d, Ts: prevSessionTs(time.Now()),
 		Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}}); err != nil {
 		t.Fatal(err)
 	}

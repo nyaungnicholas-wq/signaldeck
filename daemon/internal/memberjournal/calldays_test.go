@@ -2,8 +2,10 @@ package memberjournal
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -218,5 +220,22 @@ func TestSummarizeCountsCallDaysNotCalls(t *testing.T) {
 	}
 	if !s.Withheld {
 		t.Error("Withheld = false, want true (CallDays=29 < 30)")
+	}
+}
+
+// TestPickableSinceIsTenSessionsBack: the journal's recency cutoff is the ET
+// midnight of the 10th trading session before now's session date, less the
+// bar-stamp slack, counting only trading days (holidays and weekends skipped).
+func TestPickableSinceIsTenSessionsBack(t *testing.T) {
+	ny := marketcal.Loc()
+	for _, c := range []struct{ now, want time.Time }{
+		// Fri 2026-10-02: back over 10/1 ... 9/18, no holidays.
+		{time.Date(2026, 10, 2, 10, 0, 0, 0, ny), time.Date(2026, 9, 18, 0, 0, 0, 0, ny)},
+		// Fri 2026-01-02: skips 2026-01-01 and 2025-12-25.
+		{time.Date(2026, 1, 2, 10, 0, 0, 0, ny), time.Date(2025, 12, 17, 0, 0, 0, 0, ny)},
+	} {
+		if got, want := PickableSince(c.now), c.want.Unix()-stampSlack; got != want {
+			t.Errorf("PickableSince(%v) = %v, want %v", c.now, time.Unix(got, 0).In(ny), time.Unix(want, 0).In(ny))
+		}
 	}
 }
