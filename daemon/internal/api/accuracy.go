@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -490,14 +491,37 @@ func loadRegistry(override string) (*registryFile, error) {
 			lastErr = err
 			continue
 		}
-		var reg registryFile
-		if err := json.Unmarshal(b, &reg); err != nil {
-			return nil, err
+		for reads := 1; ; reads++ {
+			var reg registryFile
+			perr := json.Unmarshal(b, &reg)
+			if perr == nil {
+				return &reg, nil
+			}
+			if reads > registryParseRetries {
+				return nil, fmt.Errorf("%w (%d reads over ~1s): %w", errRegistryUnparsed, reads, perr)
+			}
+			registryRetryWait()
+			if b, err = os.ReadFile(p); err != nil {
+				return nil, err
+			}
 		}
-		return &reg, nil
 	}
 	return nil, lastErr
 }
+
+// A registry that does not parse may be one caught mid-rewrite: the grader
+// writes it in place (open "w" then json.dump, tools/accuracy_registry.py,
+// whose sha256 is pinned in the prereg chain, so it cannot be made atomic
+// there). A parse failure is re-read registryParseRetries times, one
+// registryRetryWait apart, before it is believed. registryRetryWait is a var so
+// a test can make the writer finish during the wait.
+const registryParseRetries = 3
+
+var registryRetryWait = func() { time.Sleep(330 * time.Millisecond) }
+
+// errRegistryUnparsed marks a registry that never parsed. It may still be a
+// torn read, so a refusal built on it is served but never cached.
+var errRegistryUnparsed = errors.New("accuracy registry did not parse")
 
 func writeAccuracyRefusal(w http.ResponseWriter, body accuracyResponse) {
 	writeJSONStatus(w, http.StatusServiceUnavailable, body)
