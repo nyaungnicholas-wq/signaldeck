@@ -455,6 +455,9 @@ func envIntOr(k string, def int) int {
 // taking the first bar at-or-after base+horizon.
 type OutcomeResolver struct {
 	St *store.Store
+	// page and writeCap are 0 in production (outcomePage, outcomeWriteCap);
+	// tests shrink them.
+	page, writeCap int
 }
 
 // Name implements workers.Worker.
@@ -486,11 +489,39 @@ func horizonTF(h md.Horizon) md.Timeframe {
 	return md.TF1d
 }
 
+// outcomePage is one keyset read of a horizon's pending queue. outcomeWriteCap
+// bounds the rows ONE pass resolves or voids per horizon, so a pass writes at
+// most 12,000 rows (about 3x the pre-fix volume), outcomeWriteChunk rows per
+// transaction. Sizing, 2026-10-02: ~807k mature 1d and ~612k mature 1w rows
+// owed, ~36k new rows a day per horizon; 4,000 a pass on the 10-minute cadence
+// is ~500k a day per horizon, so the backlog drains in about two days.
+const (
+	outcomePage     = 4000
+	outcomeWriteCap = 4000
+)
+
 // Run resolves matured outcomes, per horizon so short windows never starve
 // behind the large immature 1w backlog.
+//
+// PAGED PAST WHAT IT SKIPS (2026-10-02). It read ONE oldest-first batch of 4000
+// per horizon. A row that waits forever (CRNX: its last 1d bar, 08-31, is the
+// forward bar, so it never settles) stays oldest and stays in that batch:
+// ~3,000 of every 4,000 1d and 1w rows were CRNX, each pass resolved ~1,000,
+// and the published 1d/1w record stood weeks behind (newest graded score 09-04
+// on 10-01; 807k mature 1d rows owed on 10-02). The prediction resolver had the
+// same wedge (SD-11). Each horizon now pages through its queue in (ts,
+// symbol_id) order until it has outcomeWriteCap writes or reaches the end, so a
+// skipped row costs a read, never a slot. Guards and labels are unchanged.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved, voided, waiting := 0, 0, 0
+	page, writeCap := o.page, o.writeCap
+	if page <= 0 {
+		page = outcomePage
+	}
+	if writeCap <= 0 {
+		writeCap = outcomeWriteCap
+	}
 	// Delisted names never print a forward bar: void their rows at once instead of
 	// parking them 30 days at the head of the oldest-first LIMIT-1500 queue, where
 	// they starved every live row behind them (measured 2026-09-09, see DelistedSymbolIDs).
@@ -509,115 +540,41 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
-		// 4000 per horizon per pass (was 1500): once the head-of-line rows were voided
-		// (2026-09-07 stale base, 2026-09-09 delisted) the window resolved ~1,300 rows
-		// per horizon per 10-minute pass against a 1.5M-row mature backlog, an 18 s
-		// run; 4000 clears it in days instead of weeks at ~50 s a pass.
-		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 4000)
-		if err != nil {
-			return "", err
-		}
-		for _, p := range pending {
-			base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+		afterTs, afterSym := int64(-1), int64(0)
+		for written := 0; written < writeCap; {
+			pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), afterTs, afterSym, page)
 			if err != nil {
 				return "", err
 			}
-			if !okBase {
-				// No base bar: unusual (score implies data). Void if very old.
-				if now-p.Ts > 30*24*3600 {
-					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-						return "", err
-					}
+			var batch []store.OutcomeWrite
+			for _, p := range pending {
+				if written+len(batch) == writeCap {
+					break
+				}
+				w, ok, err := o.judge(ctx, h, tf, p, now, delisted, marketByID)
+				if err != nil {
+					return "", err
+				}
+				if !ok {
+					waiting++
+					continue
+				}
+				batch = append(batch, w)
+				if w.Void {
 					voided++
 				} else {
-					waiting++
+					resolved++
 				}
-				continue
 			}
-			// Anchor the window to the base bar, not to a UTC-midnight guess.
-			// Daily bars carry the same 6h DST stamp slack the prediction
-			// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
-			// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
-			// by 1h and grades an 8-session move as one week.
-			target := base.Ts + horizonSeconds(h)
-			if tf == md.TF1d {
-				target -= resolverDSTSlackSecs
-			}
-			if now < target {
-				waiting++
-				continue
-			}
-			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
-			if err != nil {
+			if err := o.St.ResolveOutcomes(ctx, h, batch); err != nil {
 				return "", err
 			}
-			if !okFwd && delisted[p.SymbolID] {
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-				continue
+			written += len(batch)
+			if len(pending) < page {
+				break // end of the queue
 			}
-			// STALE BASE (audit 2026-09-07): the score was struck against a bar
-			// whose window closed more than 3 horizons before the score itself
-			// and nothing ever printed after it. That row can never resolve;
-			// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
-			// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
-			if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-				continue
-			}
-			switch {
-			case okFwd && base.Close > 0:
-				// A forward bar far past the target means a data/session hole;
-				// resolving would mislabel a multi-period move as one horizon.
-				// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
-				// carries): from the slackened target a pre-holiday Friday's next 1d
-				// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
-				// For stocks the NYSE calendar decides; crypto trades every day.
-				// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
-				// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
-				gap := fwd.Ts-target > 3*horizonSeconds(h)
-				if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
-					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
-				}
-				if gap {
-					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-						return "", err
-					}
-					voided++
-					continue
-				}
-				// SETTLED ONLY. The same guard the prediction resolver carries
-				// (pipeline/predict.go) and with the same measurement behind it:
-				// of 4,000 resolved 1d rows, 37.8% were frozen before their
-				// forward bar's 16:00 ET close, mislabelling about 3.7% of the
-				// record against a price that had not happened yet. This resolver
-				// runs through the session too, so a daily bar read mid-morning
-				// carries live prices. "A later bar exists" needs no knowledge of
-				// exchange hours, half-days, DST or crypto's 24h day.
-				if _, settled, serr := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); serr != nil {
-					return "", serr
-				} else if !settled {
-					waiting++
-					continue
-				}
-				ret := fwd.Close/base.Close - 1
-				if err := o.St.ResolveOutcome(ctx, p.SymbolID, h, p.Ts, ret); err != nil {
-					return "", err
-				}
-				resolved++
-			case now-p.Ts > 30*24*3600:
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-			default:
-				waiting++ // forward data not in yet; next pass
-			}
+			last := pending[len(pending)-1]
+			afterTs, afterSym = last.Ts, last.SymbolID
 		}
 	}
 	// The prediction resolver only visits rows that HAVE a forward bar, so forecasts on
@@ -633,6 +590,81 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 		}
 	}
 	return fmt.Sprintf("resolved %d, voided %d, waiting %d, dead predictions voided %d", resolved, voided, waiting, dead), nil
+}
+
+// judge decides one pending row: a write (graded, or void) and true, or false
+// to leave it waiting for a later pass.
+func (o *OutcomeResolver) judge(ctx context.Context, h md.Horizon, tf md.Timeframe, p md.ScoreOutcome, now int64, delisted map[int64]bool, marketByID map[int64]md.Market) (store.OutcomeWrite, bool, error) {
+	void := store.OutcomeWrite{SymbolID: p.SymbolID, Ts: p.Ts, Void: true}
+	base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+	if err != nil {
+		return void, false, err
+	}
+	if !okBase {
+		// No base bar: unusual (score implies data). Void if very old.
+		return void, now-p.Ts > 30*24*3600, nil
+	}
+	// Anchor the window to the base bar, not to a UTC-midnight guess.
+	// Daily bars carry the same 6h DST stamp slack the prediction
+	// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
+	// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
+	// by 1h and grades an 8-session move as one week.
+	target := base.Ts + horizonSeconds(h)
+	if tf == md.TF1d {
+		target -= resolverDSTSlackSecs
+	}
+	if now < target {
+		return void, false, nil
+	}
+	fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
+	if err != nil {
+		return void, false, err
+	}
+	if !okFwd && delisted[p.SymbolID] {
+		return void, true, nil
+	}
+	// STALE BASE (audit 2026-09-07): the score was struck against a bar
+	// whose window closed more than 3 horizons before the score itself
+	// and nothing ever printed after it. That row can never resolve;
+	// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
+	// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
+	if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
+		return void, true, nil
+	}
+	switch {
+	case okFwd && base.Close > 0:
+		// A forward bar far past the target means a data/session hole;
+		// resolving would mislabel a multi-period move as one horizon.
+		// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
+		// carries): from the slackened target a pre-holiday Friday's next 1d
+		// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
+		// For stocks the NYSE calendar decides; crypto trades every day.
+		// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
+		// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
+		gap := fwd.Ts-target > 3*horizonSeconds(h)
+		if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
+			gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+		}
+		if gap {
+			return void, true, nil
+		}
+		// SETTLED ONLY. The same guard the prediction resolver carries
+		// (pipeline/predict.go) and with the same measurement behind it:
+		// of 4,000 resolved 1d rows, 37.8% were frozen before their
+		// forward bar's 16:00 ET close, mislabelling about 3.7% of the
+		// record against a price that had not happened yet. This resolver
+		// runs through the session too, so a daily bar read mid-morning
+		// carries live prices. "A later bar exists" needs no knowledge of
+		// exchange hours, half-days, DST or crypto's 24h day.
+		if _, settled, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); err != nil || !settled {
+			return void, false, err
+		}
+		return store.OutcomeWrite{SymbolID: p.SymbolID, Ts: p.Ts, FwdReturn: fwd.Close/base.Close - 1}, true, nil
+	case now-p.Ts > 30*24*3600:
+		return void, true, nil
+	default:
+		return void, false, nil // forward data not in yet; next pass
+	}
 }
 
 // ── DQAuditor ───────────────────────────────────────────────────────────
