@@ -5,16 +5,34 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// prevSessionTs is the ET-midnight stamp of the last trading session before
+// now's session date: always inside the journal's recency window
+// (memberjournal.PickableSince), and never a call's entry session, so a
+// call made now can still be withdrawn.
+func prevSessionTs(now time.Time) int64 {
+	d := marketcal.SessionDate(now)
+	for {
+		d = d.AddDate(0, 0, -1)
+		if marketcal.IsTradingDay(d) {
+			return d.Unix()
+		}
+	}
+}
 
 // TestJournalPickerOffersWhatTheJournalAccepts: the journal's picker (GET
 // /api/journal/symbols) and POST /api/journal share one store predicate
 // (JournalSymbols / JournalSymbolByTicker), so a member can pick the ETFs the
 // daemon has daily bars for, which the SEC directory behind /api/companies
-// never lists, and the server accepts exactly what the picker offers.
+// never lists, and the server accepts exactly what the picker offers. A tape
+// that stopped (no daily bar in the last ~10 sessions: a delisted ticker) is
+// neither offered nor accepted.
 func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 	ctx := t.Context()
 	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
@@ -27,15 +45,20 @@ func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const pickBarTs = 1_699_920_000 // a settled day long before any call here
+	recent := prevSessionTs(time.Now())
+	const staleTs = 1_699_920_000 // 2023: far outside the ~10-session window
+	bar := func(s md.Symbol, tf md.Timeframe, ts int64) {
+		must(st.UpsertBars(ctx, []md.Bar{{SymbolID: s.ID, TF: tf, Ts: ts, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}}))
+	}
 	sym := func(ticker, name string, tfs ...md.Timeframe) md.Symbol {
 		s, err := st.UpsertSymbol(ctx, ticker, md.Stocks, name)
 		must(err)
 		for _, tf := range tfs {
-			must(st.UpsertBars(ctx, []md.Bar{{SymbolID: s.ID, TF: tf, Ts: pickBarTs, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}}))
+			bar(s, tf, recent)
 		}
 		return s
 	}
+	bar(sym("STALE", "Stale Tape Inc"), md.TF1d, staleTs) // tape stopped: a delisted ticker
 	sym("SPY", "SPDR S&P 500 ETF Trust", md.TF1d) // an ETF: no SEC directory row
 	sym("AAPL", "AAPL", md.TF1d)
 	sym("NOBAR", "No Bars Corp")
@@ -76,9 +99,9 @@ func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 	if got := picker("apple"); len(got) != 1 || got[0] != (pick{"AAPL", "Apple Inc."}) {
 		t.Errorf("picker apple: %+v, want only AAPL as Apple Inc.", got)
 	}
-	for _, q := range []string{"nobar", "hourly", "gone"} {
+	for _, q := range []string{"nobar", "hourly", "gone", "stale"} {
 		if got := picker(q); len(got) != 0 {
-			t.Errorf("picker %s: %+v, want nothing (no daily bar or inactive)", q, got)
+			t.Errorf("picker %s: %+v, want nothing (no recent daily bar, or inactive)", q, got)
 		}
 	}
 
@@ -91,7 +114,7 @@ func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 	if code, body := call(mira, "spy", "up", 5); code != 200 {
 		t.Errorf("a call on the ETF the picker offered: %d %.300s", code, body)
 	}
-	for _, s := range []string{"NOBAR", "HOURLY", "GONE", "ZZZZ"} {
+	for _, s := range []string{"NOBAR", "HOURLY", "GONE", "STALE", "ZZZZ"} {
 		if code, body := call(mira, s, "up", 5); code != 404 || !strings.Contains(body, "unknown symbol") {
 			t.Errorf("a call on %s: %d %.300s, want 404 unknown symbol", s, code, body)
 		}

@@ -79,6 +79,19 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 		t.Fatalf("UpsertBars BTC/USD: %v", err)
 	}
 
+	// STALE: tracked and active, but its tape stopped long before the recency
+	// cutoff (a delisted ticker the daemon never deactivated).
+	staleSym, err := st.UpsertSymbol(ctx, "STALE", md.Stocks, "Stale Tape Inc")
+	if err != nil {
+		t.Fatalf("UpsertSymbol STALE: %v", err)
+	}
+	if err := st.UpsertBars(ctx, []md.Bar{{SymbolID: staleSym.ID, TF: md.TF1d, Ts: 1_000_000_000, Open: 10, High: 11, Low: 9, Close: 10.5, Volume: 1000}}); err != nil {
+		t.Fatalf("UpsertBars STALE: %v", err)
+	}
+	// The recency cutoff (memberjournal.PickableSince in production): every
+	// fixture bar above sits after it except STALE's.
+	const since = int64(1_500_000_000)
+
 	// Insert companies for AAPL
 	if err := st.UpsertCompanies(ctx, []CompanyRow{
 		{CIK: 320193, Ticker: "AAPL", Name: "Apple Inc.", Exchange: "", SIC: "", SICDesc: "", UpdatedTs: 0},
@@ -87,7 +100,7 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 	}
 
 	// 1. JournalSymbols(ctx, "spy", 8) -> [SPY, SPYG]
-	got, err := st.JournalSymbols(ctx, "spy", 8)
+	got, err := st.JournalSymbols(ctx, "spy", 8, since)
 	if err != nil {
 		t.Fatalf("JournalSymbols(\"spy\", 8): %v", err)
 	}
@@ -100,7 +113,7 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 	}
 
 	// 2. JournalSymbols(ctx, "apple", 8) -> [AAPL] with Name from companies
-	got, err = st.JournalSymbols(ctx, "apple", 8)
+	got, err = st.JournalSymbols(ctx, "apple", 8, since)
 	if err != nil {
 		t.Fatalf("JournalSymbols(\"apple\", 8): %v", err)
 	}
@@ -121,8 +134,9 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 		{"gone", "GONE"},
 		{"bitcoin", "BTC/USD"},
 		{"btc", "BTC/USD"},
+		{"stale", "STALE"},
 	} {
-		got, err := st.JournalSymbols(ctx, tc.query, 8)
+		got, err := st.JournalSymbols(ctx, tc.query, 8, since)
 		if err != nil {
 			t.Fatalf("JournalSymbols(%q, 8) for %s: %v", tc.query, tc.desc, err)
 		}
@@ -132,7 +146,7 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 	}
 
 	// 4. JournalSymbols(ctx, "  ", 8) -> zero rows
-	got, err = st.JournalSymbols(ctx, "  ", 8)
+	got, err = st.JournalSymbols(ctx, "  ", 8, since)
 	if err != nil {
 		t.Fatalf("JournalSymbols(\"  \", 8): %v", err)
 	}
@@ -155,9 +169,10 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 		{"GONE", false, 0, "", ""},
 		{"BTC/USD", false, 0, "", ""},
 		{"ZZZZ", false, 0, "", ""},
+		{"STALE", false, 0, "", ""},
 	}
 	for _, tc := range testCases {
-		gotJS, ok, err := st.JournalSymbolByTicker(ctx, tc.ticker)
+		gotJS, ok, err := st.JournalSymbolByTicker(ctx, tc.ticker, since)
 		if err != nil {
 			t.Fatalf("JournalSymbolByTicker(%q): %v", tc.ticker, err)
 		}
@@ -179,16 +194,25 @@ func TestJournalSymbolsOffersExactlyWhatTheJournalAccepts(t *testing.T) {
 		}
 	}
 
+	// Control: with no cutoff STALE is offered and accepted, so the cutoff
+	// alone is what drops it.
+	if got, err := st.JournalSymbols(ctx, "stale", 8, 0); err != nil || len(got) != 1 || got[0].Symbol != "STALE" {
+		t.Errorf("JournalSymbols(stale, 8, 0) = %v, %v; want STALE", got, err)
+	}
+	if _, ok, err := st.JournalSymbolByTicker(ctx, "STALE", 0); err != nil || !ok {
+		t.Errorf("JournalSymbolByTicker(STALE, 0) = %v, %v; want ok", ok, err)
+	}
+
 	// 6. Agreement: for queries in []string{"s", "a", "n", "h", "g", "b"} and every row from JournalSymbols,
 	//    JournalSymbolByTicker(row.Symbol) must be ok with same ID.
 	queries := []string{"s", "a", "n", "h", "g", "b"}
 	for _, q := range queries {
-		rows, err := st.JournalSymbols(ctx, q, 8)
+		rows, err := st.JournalSymbols(ctx, q, 8, since)
 		if err != nil {
 			t.Fatalf("JournalSymbols(%q, 8): %v", q, err)
 		}
 		for _, row := range rows {
-			gotJS, ok, err := st.JournalSymbolByTicker(ctx, row.Symbol)
+			gotJS, ok, err := st.JournalSymbolByTicker(ctx, row.Symbol, since)
 			if err != nil {
 				t.Fatalf("JournalSymbolByTicker(%q): %v", row.Symbol, err)
 			}

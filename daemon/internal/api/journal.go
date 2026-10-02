@@ -114,13 +114,13 @@ func (d Deps) journalCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// Exactly what the picker (GET /api/journal/symbols) offers: one store
 	// predicate serves both, so an ETF the picker shows is never refused here.
-	s, ok, err := d.St.JournalSymbolByTicker(r.Context(), body.Symbol)
+	s, ok, err := d.St.JournalSymbolByTicker(r.Context(), body.Symbol, memberjournal.PickableSince(d.now()))
 	if err != nil {
 		httpInternal(w, err)
 		return
 	}
 	if !ok {
-		httpErr(w, 404, "unknown symbol: the journal takes tracked US stocks and ETFs with daily data")
+		httpErr(w, 404, "unknown symbol: the journal takes tracked US stocks and ETFs with recent daily data")
 		return
 	}
 	now := time.Now()
@@ -180,12 +180,13 @@ func (d Deps) journalWithdraw(w http.ResponseWriter, r *http.Request) {
 	d.writeJournal(w, r)
 }
 
-// journalSymbols is the journal's picker: tracked US stocks and ETFs with
-// daily bars matching q (ticker prefix or name), identity only. ETFs are not
+// journalSymbols is the journal's picker: tracked US stocks and ETFs with a
+// daily bar in the last memberjournal.PickableSessions sessions, matching q
+// (ticker prefix or name), identity only. ETFs are not
 // in the SEC directory (/api/companies), so the picker cannot use it.
 // GET /api/journal/symbols?q=
 func (d Deps) journalSymbols(w http.ResponseWriter, r *http.Request) {
-	rows, err := d.St.JournalSymbols(r.Context(), r.URL.Query().Get("q"), 8)
+	rows, err := d.St.JournalSymbols(r.Context(), r.URL.Query().Get("q"), 8, memberjournal.PickableSince(d.now()))
 	if err != nil {
 		httpInternal(w, err)
 		return

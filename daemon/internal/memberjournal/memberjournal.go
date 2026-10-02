@@ -38,6 +38,27 @@ const (
 // Horizons are the allowed call horizons in trading sessions.
 var Horizons = map[int]bool{1: true, 5: true, 21: true}
 
+// PickableSessions is the recency rule for what a member may call: a daily
+// bar within the last PickableSessions trading sessions. A delisted ticker's
+// tape stops, so it drops out of the picker and POST /api/journal without
+// relying on symbols.delisted_at, which a live ETF on a recycled ticker can
+// carry from the ticker's previous company (store/tickerreuse.go).
+const PickableSessions = 10
+
+// PickableSince is the earliest daily-bar stamp that keeps a symbol callable
+// at now: the ET midnight of the PickableSessions-th trading session before
+// now's session date, less the bar-stamp slack.
+func PickableSince(now time.Time) int64 {
+	d := marketcal.SessionDate(now)
+	for n := 0; n < PickableSessions; {
+		d = d.AddDate(0, 0, -1)
+		if marketcal.IsTradingDay(d) {
+			n++
+		}
+	}
+	return d.Unix() - stampSlack
+}
+
 // Schedule fixes a call's entry and exit sessions at creation. Entry is the
 // first session whose CLOSE is strictly after created (a call at 15:59 ET
 // enters on that day's close, one at 16:00 on the next session's); exit is
