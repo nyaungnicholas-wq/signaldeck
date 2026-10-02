@@ -107,6 +107,7 @@ const MEMBER_NAV: NavItem[] = [
   { href: "/today", label: "TODAY", match: ["/today"] },
   { href: "/market/regimes", label: "REGIMES", match: ["/market/regimes", "/market/breadth"] },
   { href: "/watchlist", label: "WATCHLIST", match: ["/watchlist", "/s"] },
+  { href: "/journal", label: "MY CALLS", match: ["/journal"] },
   { href: "/accuracy", label: "RECORD", match: ["/accuracy", "/proof", "/volatility"] },
 ];
 

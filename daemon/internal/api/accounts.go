@@ -77,6 +77,9 @@ var memberRoutes = map[string]bool{
 	// link code, never an input that could personalise what is sent.
 	"/api/alert-prefs": true, "/api/alert-prefs/telegram-link": true,
 	"/api/alert-prefs/telegram-unlink": true,
+	// The member's own call journal (plan step 8): their calls and their
+	// grade, never a price or return, never an input to SignalDeck's forecasts.
+	"/api/journal": true, "/api/journal/withdraw": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published

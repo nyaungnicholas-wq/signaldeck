@@ -116,6 +116,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
 	d.registerAlertPrefs(mux)                     // member daily-read opt-ins + one-click unsubscribe (alertprefs.go)
+	d.registerJournal(mux)                        // member call journal: the member's own calls, graded (journal.go)
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	// Body-cached (60s SWR): under worker load the uncached build queued behind
 	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404

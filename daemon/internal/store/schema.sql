@@ -305,6 +305,43 @@ CREATE TABLE IF NOT EXISTS member_alert_prefs (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_member_alert_prefs_code
   ON member_alert_prefs (telegram_link_code) WHERE telegram_link_code IS NOT NULL;
 
+-- Member call journal (2026-10-01, plan step 8): a member's OWN direction calls,
+-- graded close-to-close by member-call-resolver (internal/memberjournal). No
+-- price or return is stored: the grade is all a member is shown (licence,
+-- datalicense.go D1). entry_ts / exit_due_ts are the session-close instants the
+-- calendar fixed at creation. Calls are immutable: the triggers below refuse
+-- any change to what was called, and any change at all once a call settles.
+CREATE TABLE IF NOT EXISTS member_calls (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  symbol_id    INTEGER NOT NULL REFERENCES symbols(id),
+  market       TEXT NOT NULL CHECK (market = 'stocks'),
+  call         TEXT NOT NULL CHECK (call IN ('up','down')),
+  horizon      INTEGER NOT NULL CHECK (horizon IN (1,5,21)),
+  note         TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 280),
+  created_ts   INTEGER NOT NULL,
+  entry_ts     INTEGER NOT NULL,
+  exit_due_ts  INTEGER NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','void','withdrawn')),
+  outcome      TEXT CHECK (outcome IN ('hit','miss')),
+  resolved_ts  INTEGER,
+  withdrawn_ts INTEGER,
+  CHECK ((status = 'resolved') = (outcome IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_member_calls_user ON member_calls (user_id, created_ts);
+CREATE INDEX IF NOT EXISTS idx_member_calls_open ON member_calls (status, exit_due_ts);
+CREATE TRIGGER IF NOT EXISTS member_calls_immutable
+BEFORE UPDATE OF user_id, symbol_id, market, call, horizon, note, created_ts, entry_ts, exit_due_ts ON member_calls
+BEGIN
+  SELECT RAISE(ABORT, 'member calls are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS member_calls_settled_final
+BEFORE UPDATE ON member_calls
+WHEN old.status <> 'open'
+BEGIN
+  SELECT RAISE(ABORT, 'a settled member call is final');
+END;
+
 -- ── storage-permanence wave (appended block — keep at END of file so ──────
 -- ── parallel schema edits by other agents never collide) ─────────────────
 

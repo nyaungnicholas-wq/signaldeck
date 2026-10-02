@@ -7,7 +7,7 @@ import { isPublicRoute } from "@/lib/publicRoutes";
  * render a wall of 403s. Shell sends members home from anything else, and
  * HubTabs hides the tabs that lead there.
  */
-const MEMBER_PAGES = ["/today", "/market/regimes", "/market/breadth", "/watchlist", "/account"];
+const MEMBER_PAGES = ["/today", "/market/regimes", "/market/breadth", "/watchlist", "/journal", "/account"];
 
 export function memberMayVisit(pathname: string): boolean {
   return isPublicRoute(pathname) || MEMBER_PAGES.includes(pathname) || pathname.startsWith("/s/");

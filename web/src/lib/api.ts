@@ -54,6 +54,8 @@ export const LICENCE_REFUSAL_TEXT =
   "redistributed, so this deployment does not serve them. Every derived signal " +
   "here — regimes, forecasts, risk — is computed from them and is unaffected.";
 
+import type { CallDirection, Journal } from "@/lib/journal";
+
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
 export const HORIZONS: Horizon[] = ["1h", "1d", "1w"];
@@ -620,6 +622,12 @@ export const api = {
   memberWatchlist: () => get<MemberWatchRow[]>("/api/watchlist"),
   watch: (symbol: string, market: Market) => post<SymbolInfo>("/api/watch", { symbol, market }),
   unwatch: (symbol: string, market: Market) => post<SymbolInfo>("/api/unwatch", { symbol, market }),
+  // Member call journal (daemon step 8): the member's own calls and their
+  // grade. The daemon never returns a price or return for a call (licence).
+  journal: () => get<Journal>("/api/journal"),
+  journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
+    post<Journal>("/api/journal", c),
+  journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
 
