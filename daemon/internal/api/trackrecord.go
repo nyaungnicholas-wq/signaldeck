@@ -200,7 +200,7 @@ func (d Deps) cachedTrackRecord(ctx context.Context, h md.Horizon) (map[string]a
 // as persisted across restarts (cachepersist.go). BUMP IT whenever that shape
 // changes (a field added, renamed or re-typed), or the first reads after the
 // deploy serve the previous build's shape.
-const trackRecordPersistFormat = 1
+const trackRecordPersistFormat = 2 // 2: ledger.tamperEvidence + brokenAtSeq (PROOFSTRIP)
 
 // buildTrackRecord computes the full track-record payload for one horizon.
 // Pure build — no HTTP — so the response cache can rebuild it off-request.
