@@ -569,7 +569,9 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/self-audit":         get("/api/self-audit", "SNTL_AUDIT_DETAIL"),
 		"/api/short-interest":     get("/api/short-interest?symbol=SNTL&market=stocks", "2026-09-15"),
 		"/api/shorts":             get("/api/shorts", "SNTL"),
-		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", "SNTL_PERSONALITY"),
+		// The seeded sample size, not the personality: a member gets a fixed line in
+		// place of a personality that quotes a hit rate (SD-30 / n=1 rows).
+		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", `"nSamples":60`),
 		"/api/track-record":       get("/api/track-record", fmt.Sprintf(`"cluster":{"n":%d`, n)),
 		"/api/unwatch":            {method: "POST", url: "/api/unwatch", body: watchBody("SNTW"), marker: "SNTW"},
 		"/api/version":            get("/api/version", `"version":"test"`),
