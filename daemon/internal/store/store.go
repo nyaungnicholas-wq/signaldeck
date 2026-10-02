@@ -1368,11 +1368,18 @@ func (s *Store) ScoreHistory(ctx context.Context, symbolID int64, h md.Horizon, 
 // queue across all horizons) is essential: at steady state each symbol carries
 // ~10k immature 1w rows spanning a week, which would otherwise sit ahead of
 // every freshly-mature 1h/1d row in ts order and starve them indefinitely.
-func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff int64, limit int) ([]md.ScoreOutcome, error) {
+//
+// Keyset-paged on (ts, symbol_id), strictly after (afterTs, afterSym); pass
+// (-1, 0) for the head. The resolver pages PAST rows it skips: read as one
+// oldest-first batch, rows that can never settle (a symbol whose last bar is
+// the forward bar) sat at the head of every pass and shrank the batch for
+// everything behind them (2026-10-02: ~3,000 CRNX rows of every 4,000).
+func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff, afterTs, afterSym int64, limit int) ([]md.ScoreOutcome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol_id, horizon, ts, score FROM score_outcomes
-		WHERE resolved_at IS NULL AND horizon=? AND ts<=? ORDER BY ts LIMIT ?`,
-		string(h), cutoff, limit)
+		WHERE resolved_at IS NULL AND horizon=? AND ts<=? AND (ts, symbol_id) > (?, ?)
+		ORDER BY ts, symbol_id LIMIT ?`,
+		string(h), cutoff, afterTs, afterSym, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1398,15 +1405,7 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 // were the last to carry the right key. Derivation identical to
 // BackfillScoreSettleTs, so the two agree by construction.
 func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
-	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
-		  settle_ts = (
-		    SELECT MAX(b.ts) FROM bars b
-		    WHERE b.symbol_id = score_outcomes.symbol_id
-		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
-		  )
-		WHERE symbol_id=? AND horizon=? AND ts=?`,
-		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
+	_, err := s.w.ExecContext(ctx, resolveOutcomeSQL, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err
 }
 
@@ -1414,10 +1413,66 @@ func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon
 // data ever arrived — delisted symbol, dead feed) so it stops clogging the
 // unresolved queue. fwd_return stays NULL; the honesty page excludes it.
 func (s *Store) ResolveOutcomeVoid(ctx context.Context, symbolID int64, h md.Horizon, ts int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`,
-		time.Now().Unix(), symbolID, string(h), ts)
+	_, err := s.w.ExecContext(ctx, voidOutcomeSQL, time.Now().Unix(), symbolID, string(h), ts)
 	return err
+}
+
+const (
+	resolveOutcomeSQL = `
+		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = score_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
+		  )
+		WHERE symbol_id=? AND horizon=? AND ts=?`
+	voidOutcomeSQL = `UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`
+	// outcomeWriteChunk rows per transaction: the readThenWrite batch size,
+	// a few-ms write-lock hold per chunk.
+	outcomeWriteChunk = 200
+)
+
+// OutcomeWrite is one ResolveOutcomes row: a graded forward return, or Void.
+type OutcomeWrite struct {
+	SymbolID  int64
+	Ts        int64
+	FwdReturn float64
+	Void      bool
+}
+
+// ResolveOutcomes applies ResolveOutcome / ResolveOutcomeVoid (the same SQL)
+// to many rows of one horizon, outcomeWriteChunk rows per transaction, so the
+// main writer is taken once per chunk instead of once per row (the resolver
+// wrote ~3,700 rows a pass one statement at a time, each queued behind the
+// whole fleet on the single writer connection). Chunks commit separately; a
+// failure part-way leaves the rest unresolved for the next pass.
+func (s *Store) ResolveOutcomes(ctx context.Context, h md.Horizon, ws []OutcomeWrite) error {
+	now := time.Now().Unix()
+	for start := 0; start < len(ws); start += outcomeWriteChunk {
+		if err := s.resolveOutcomeChunk(ctx, h, now, ws[start:min(start+outcomeWriteChunk, len(ws))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) resolveOutcomeChunk(ctx context.Context, h md.Horizon, now int64, ws []OutcomeWrite) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, w := range ws {
+		if w.Void {
+			_, err = tx.ExecContext(ctx, voidOutcomeSQL, now, w.SymbolID, string(h), w.Ts)
+		} else {
+			_, err = tx.ExecContext(ctx, resolveOutcomeSQL, w.FwdReturn, now, w.SymbolID, string(h), w.Ts)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ResolvedOutcomes returns resolved (score, fwd_return) pairs for the honesty
