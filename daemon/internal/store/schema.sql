@@ -1406,6 +1406,17 @@ CREATE TABLE IF NOT EXISTS prediction_postmortems (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_postmortem_primary ON prediction_postmortems(primary_reason);
 CREATE INDEX IF NOT EXISTS idx_postmortem_created ON prediction_postmortems(created_at);
+-- SLOW-OPS (2026-10-02): /api/postmortems answered in 28-150 s on a loaded
+-- daemon (0 bytes past the 90 s write deadline) while its two reads take
+-- 0.2 s and 0.7 s alone, because both scanned the whole 80 MB table: the
+-- recent feed (ORDER BY ts DESC LIMIT 100) had no ts index, and the clusters
+-- walked idx_postmortem_primary with a row lookup per postmortem to read
+-- created_at, magnitude and conviction. Measured on the 2026-10-01 snapshot
+-- (291,730 rows): recent 0.69 s -> 0.0003 s, clusters 0.17-0.27 s -> 0.02 s.
+-- Built in 0.14 s and 0.31 s on that 6.6 GB copy; 4.4 MB and 15.3 MB.
+CREATE INDEX IF NOT EXISTS idx_postmortem_ts ON prediction_postmortems(ts);
+CREATE INDEX IF NOT EXISTS idx_postmortem_reason_cover
+  ON prediction_postmortems(primary_reason, created_at, magnitude, conviction);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- RESEARCH LAB — HYPOTHESIS REGISTRY (appended block — do not merge above).
