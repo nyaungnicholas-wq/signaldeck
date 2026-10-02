@@ -70,4 +70,26 @@ func TestRollupBucketEdges(t *testing.T) {
 	if h := hours[1]; h.Ts != 7200 || h.Open != 20 || h.Close != 20.5 || h.Volume != 4 {
 		t.Fatalf("hour 2: %+v, want ts 7200 O20 C20.5 V4", h)
 	}
+
+	// The 1h -> 1d compaction binds the same query with an 86400 bucket.
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: sym.ID, TF: md.TF1h, Ts: 86400, Open: 30, High: 31, Low: 29, Close: 30.5, Volume: 1},
+		{SymbolID: sym.ID, TF: md.TF1h, Ts: 172800 - 3600, Open: 32, High: 35, Low: 28, Close: 33, Volume: 2},
+		{SymbolID: sym.ID, TF: md.TF1h, Ts: 172800, Open: 40, High: 41, Low: 39, Close: 40.5, Volume: 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RollupMissing(ctx, sym.ID, md.TF1h, md.TF1d, 86400, 86400, 259200); err != nil {
+		t.Fatal(err)
+	}
+	days, err := st.Bars(ctx, sym.ID, md.TF1d, 86400, 259200, 0)
+	if err != nil || len(days) != 2 {
+		t.Fatalf("want 2 daily bars: %v %d", err, len(days))
+	}
+	if d := days[0]; d.Ts != 86400 || d.Open != 30 || d.High != 35 || d.Low != 28 || d.Close != 33 || d.Volume != 3 {
+		t.Fatalf("day 1: %+v, want ts 86400 O30 H35 L28 C33 V3", d)
+	}
+	if d := days[1]; d.Ts != 172800 || d.Open != 40 || d.Close != 40.5 {
+		t.Fatalf("day 2: %+v, want ts 172800 O40 C40.5", d)
+	}
 }

@@ -31,19 +31,33 @@ type CompositeArchiveRow struct {
 	Payload  string
 }
 
+// scoresHeavySQL / compositeHeavySQL are the compactor's strip feeds. Their
+// "!= '[]'" / "!= '{}'" terms must match the partial indexes idx_scores_heavy /
+// idx_composite_heavy exactly, or SQLite falls back to walking every stripped
+// row (TestCompactorHeavyReadsUseThePartialIndexes reads these constants).
+const scoresHeavySQL = `
+		SELECT symbol_id, horizon, ts, score, components FROM scores
+		WHERE ts < ? AND components != '[]'
+		  AND EXISTS (SELECT 1 FROM scores s3
+		              WHERE s3.symbol_id=scores.symbol_id AND s3.horizon=scores.horizon
+		                AND s3.ts>scores.ts)
+		ORDER BY ts ASC LIMIT ?`
+
+const compositeHeavySQL = `
+		SELECT symbol_id, ts, horizon, score, curve_pct, edge, payload FROM composite_scores
+		WHERE ts < ? AND payload != '{}'
+		  AND EXISTS (SELECT 1 FROM composite_scores c3
+		              WHERE c3.symbol_id=composite_scores.symbol_id AND c3.horizon=composite_scores.horizon
+		                AND c3.ts>composite_scores.ts)
+		ORDER BY ts ASC LIMIT ?`
+
 // ScoresHeavyBelow returns up to limit scores rows older than cutoff that
 // still carry a components blob, oldest first — the compactor's strip feed.
 // Each (symbol, horizon)'s NEWEST row is carved out (never selected, never
 // stripped): a delisted or long-stalled symbol keeps its last rendered
 // decomposition instead of a blanked panel.
 func (s *Store) ScoresHeavyBelow(ctx context.Context, cutoff int64, limit int) ([]ScoreRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, horizon, ts, score, components FROM scores
-		WHERE ts < ? AND components != '[]'
-		  AND EXISTS (SELECT 1 FROM scores s3
-		              WHERE s3.symbol_id=scores.symbol_id AND s3.horizon=scores.horizon
-		                AND s3.ts>scores.ts)
-		ORDER BY ts ASC LIMIT ?`, cutoff, limit)
+	rows, err := s.db.QueryContext(ctx, scoresHeavySQL, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -170,13 +184,7 @@ func (s *Store) pruneKeepDailyLast(ctx context.Context, table, stripped string, 
 // mirror the scores trio for composite_scores (payload sentinel '{}').
 
 func (s *Store) CompositeHeavyBelow(ctx context.Context, cutoff int64, limit int) ([]CompositeArchiveRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, ts, horizon, score, curve_pct, edge, payload FROM composite_scores
-		WHERE ts < ? AND payload != '{}'
-		  AND EXISTS (SELECT 1 FROM composite_scores c3
-		              WHERE c3.symbol_id=composite_scores.symbol_id AND c3.horizon=composite_scores.horizon
-		                AND c3.ts>composite_scores.ts)
-		ORDER BY ts ASC LIMIT ?`, cutoff, limit)
+	rows, err := s.db.QueryContext(ctx, compositeHeavySQL, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -227,8 +235,8 @@ func (s *Store) StripCompositePayload(ctx context.Context, rows []CompositeArchi
 }
 
 // PruneCompositeKeepDailyLast is PruneScoresKeepDailyLast for composite_scores
-// (payload sentinel '{}'), one UTC day per statement for the same reason: as one
-// DELETE it held the write lock 35.4 s on 2026-10-01 23:30.
+// (payload sentinel '{}'), batched the same way: as one DELETE it held the write
+// lock 35.4 s on 2026-10-01 23:30.
 func (s *Store) PruneCompositeKeepDailyLast(ctx context.Context, cutoff int64) (int64, error) {
 	return s.pruneKeepDailyLast(ctx, "composite_scores", "payload = '{}'", cutoff)
 }

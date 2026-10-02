@@ -102,7 +102,7 @@ func TestCompositeDailyPruneLetsAnAccountWriteIn(t *testing.T) {
 func TestScoresDailyPruneBatchesWithinADay(t *testing.T) {
 	st := openTemp(t)
 	ctx := context.Background()
-	const syms, perDay = 50, 100 // one day, 4,950 deletable rows
+	const syms, perDay = 50, 400 // one day, 19,950 deletable rows: ~20 batches
 	if _, err := st.w.ExecContext(ctx, `
 		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i < ?)
 		INSERT INTO scores (symbol_id, horizon, ts, score, components)

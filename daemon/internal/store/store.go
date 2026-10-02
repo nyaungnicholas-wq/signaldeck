@@ -160,8 +160,9 @@ func Open(path string) (*Store, error) {
 	// lock at BEGIN. Deferred, one that reads first (AppendLedger reads the chain
 	// head, then inserts) failed outright with SQLITE_BUSY_SNAPSHOT (517) when the
 	// account writer committed in between; busy_timeout never retries that.
-	// Every main-writer transaction writes; ReadOnly ones stay deferred (driver),
-	// and the read pools (Store.dsn) never begin one.
+	// Every main-writer transaction is begun to write (a few, e.g. ApplyPaperStep,
+	// may find nothing to write after one point read); ReadOnly ones stay
+	// deferred (driver), and the read pools (Store.dsn) never begin one.
 	w := openGated(db.Driver(), dsn+"&_txlock=immediate", gate)
 	// SQLite allows exactly one writer — serialize writes on one connection.
 	w.SetMaxOpenConns(1)
