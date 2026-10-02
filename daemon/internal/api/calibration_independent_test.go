@@ -59,6 +59,7 @@ func seedSymbolDays(t *testing.T, st *store.Store, nSyms, nDays, perDay int) {
 }
 
 func TestCalibrationNCountsIndependentSymbolDays(t *testing.T) {
+	sd30Off(t) // exercises the pre-SD-30 calibration path; the withhold has its own tests
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 	seedSymbolDays(t, st, 3, 12, 5)
 	body := callCalibration(t, d, "1d")
@@ -89,6 +90,7 @@ func TestCalibrationNCountsIndependentSymbolDays(t *testing.T) {
 // 40 independent observations over 5 days clear the N floor and must still be
 // gated: observations on one day share one market move.
 func TestCalibrationGatesOnDistinctDays(t *testing.T) {
+	sd30Off(t) // exercises the pre-SD-30 calibration path; the withhold has its own tests
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 	seedSymbolDays(t, st, 8, 5, 1)
 	body := callCalibration(t, d, "1d")
@@ -139,6 +141,7 @@ func TestCalibrationGatesOnDistinctDays(t *testing.T) {
 }
 
 func TestCalibrationGatesThinIndependentN(t *testing.T) {
+	sd30Off(t) // exercises the pre-SD-30 calibration path; the withhold has its own tests
 	_, st, d := newTestServer(t, func(c *config.Config) {})
 	seedSymbolDays(t, st, 2, 12, 3)
 	body := callCalibration(t, d, "1d")
