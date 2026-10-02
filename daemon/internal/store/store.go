@@ -185,7 +185,14 @@ func Open(path string) (*Store, error) {
 	// the SQLite write lock past 5s, and a person waiting on a confirmation is
 	// better served by a longer wait than an error. Still under the 15s bound
 	// the account handlers put on each request.
-	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1))
+	//
+	// wal_autocheckpoint(0): a commit with autocheckpoint on runs a PASSIVE
+	// checkpoint of every frame no reader still needs before it returns. After
+	// a long reader releases, that backlog can be millions of frames, and the
+	// first connection to commit copies all of it inside a one-row write (logged
+	// 2026-10-01 as 27-56 s single-row "holds"). A sign-in must never be that
+	// commit; the main writer still autocheckpoints, so the WAL stays bounded.
+	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1)+"&_pragma=wal_autocheckpoint(0)")
 	if err != nil {
 		db.Close() //nolint:errcheck
 		w.Close()  //nolint:errcheck
