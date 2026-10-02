@@ -134,39 +134,43 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 	// The daily caps count every ask that reaches the model, including a plan
 	// the catalog then refuses (it cost an LLM call). Everything above (401,
 	// 403, 503, a 400 question, one already in flight, no headroom) refused
-	// before any LLM call and is not counted; nor is a refusal below, whose
-	// pool slot is handed back.
+	// before any LLM call and is not counted; nor is a pool refusal below,
+	// which hands both counts back.
 	//
 	// The pool is decided on the value its own increment returns, never on a
 	// read before it: with check-then-increment, N members asking at once at
-	// askMemberPool-1 all read a free slot and all ran (H-9).
-	if member {
-		pool, err := d.St.IncrAskCount(ctx, askMemberPoolUID, day)
-		if err != nil {
-			httpInternal(w, err)
-			return
-		}
-		if pool > askMemberPool {
-			d.undoPoolSlot(ctx, day)
-			httpErr(w, http.StatusTooManyRequests, "today's member questions are used up; they reset at UTC midnight")
-			return
-		}
-	}
+	// askMemberPool-1 all read a free slot and all ran (H-9). It is taken only
+	// after the member's own cap passes, so a capped member never holds a slot,
+	// and the hand-back ignores the request's cancellation: an abandoned ask
+	// must not keep a slot it never used.
 	limit := askCapOperator
 	if member {
 		limit = askCapMember
 	}
 	n, err := d.St.IncrAskCount(ctx, uid, day)
-	if err != nil || n > limit {
-		if member {
-			d.undoPoolSlot(ctx, day)
-		}
-		if err != nil {
-			httpInternal(w, err)
-			return
-		}
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	if n > limit {
 		httpErr(w, http.StatusTooManyRequests, "you have used today's questions; the limit resets at UTC midnight")
 		return
+	}
+	if member {
+		pool, err := d.St.IncrAskCount(ctx, askMemberPoolUID, day)
+		if err != nil || pool > askMemberPool {
+			undo := context.WithoutCancel(ctx)
+			if err == nil {
+				d.undoAsk(undo, askMemberPoolUID, day)
+			}
+			d.undoAsk(undo, uid, day)
+			if err != nil {
+				httpInternal(w, err)
+				return
+			}
+			httpErr(w, http.StatusTooManyRequests, "today's member questions are used up; they reset at UTC midnight")
+			return
+		}
 	}
 	// Opened only now: every refusal above costs no connection.
 	db, err := d.St.OpenQueryOnly()
@@ -191,12 +195,12 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// undoPoolSlot hands back the member-pool slot of an ask refused before any
-// LLM call. A failed undo leaves the pool one short (it refuses early, never
-// late), so it is logged rather than turned into an error.
-func (d Deps) undoPoolSlot(ctx context.Context, day string) {
-	if err := d.St.UndoAskCount(ctx, askMemberPoolUID, day); err != nil {
-		slog.Warn("ask the data: member pool slot not handed back", "err", err)
+// undoAsk hands back one count (a member's own, or the pool's under
+// askMemberPoolUID) for an ask refused before any LLM call. A failed undo only
+// refuses early, never late, so it is logged rather than turned into an error.
+func (d Deps) undoAsk(ctx context.Context, uid int64, day string) {
+	if err := d.St.UndoAskCount(ctx, uid, day); err != nil {
+		slog.Warn("ask the data: ask count not handed back", "uid", uid, "err", err)
 	}
 }
 

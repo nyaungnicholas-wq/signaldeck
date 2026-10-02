@@ -10,8 +10,8 @@ import (
 )
 
 // TestAskMemberPoolIsAtomic (H-9): sixteen members asking at once with one pool
-// slot left get exactly one answer; the refused hand their slot back, and so
-// does a member refused at their own cap.
+// slot left get exactly one answer and the refused hand their slot back; a
+// member refused at their own cap never takes a slot.
 func TestAskMemberPoolIsAtomic(t *testing.T) {
 	fake := &statsLLM{echoLLM: echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}}
 	d, _, _ := privateAskServer(t, fake)
