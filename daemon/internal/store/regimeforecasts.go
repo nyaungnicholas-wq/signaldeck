@@ -37,6 +37,7 @@ func (s *Store) DeleteRegimeForecast(ctx context.Context, symbolID int64, kind s
 // RegimeForecastsForSymbol returns one symbol's current forecasts across all
 // kinds — the "regime stack" on the per-signal report page.
 func (s *Store) RegimeForecastsForSymbol(ctx context.Context, symbolID int64) ([]RegimeForecast, error) {
+	live := s.LiveRegimeResolutions(ctx)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.symbol, s.market, r.ts, r.kind, r.horizon_days, r.regime,
 		       r.conviction, r.historical_accuracy, r.tier, r.rank, r.n
@@ -55,7 +56,7 @@ func (s *Store) RegimeForecastsForSymbol(ctx context.Context, symbolID int64) ([
 			return nil, err
 		}
 		v.Kind = structregime.Kind(kind)
-		hydrateForecastCaveats(&v)
+		hydrateForecastCaveats(&v, live)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -64,6 +65,7 @@ func (s *Store) RegimeForecastsForSymbol(ctx context.Context, symbolID int64) ([
 // RegimeForecasts returns every stored forecast, highest conviction first
 // within each kind.
 func (s *Store) RegimeForecasts(ctx context.Context) ([]RegimeForecast, error) {
+	live := s.LiveRegimeResolutions(ctx)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.symbol, s.market, r.ts, r.kind, r.horizon_days, r.regime,
 		       r.conviction, r.historical_accuracy, r.tier, r.rank, r.n
@@ -82,10 +84,40 @@ func (s *Store) RegimeForecasts(ctx context.Context) ([]RegimeForecast, error) {
 			return nil, err
 		}
 		v.Kind = structregime.Kind(kind)
-		hydrateForecastCaveats(&v)
+		hydrateForecastCaveats(&v, live)
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// LiveRegimeResolutions counts the live-graded calls of each kind, one per
+// (symbol, UTC day): the same independent set /api/track-record's regimes
+// section grades. It is the one source of the live status every served
+// caveat states (the regime rows, /api/prereg). 0.04 s on the 2026-10-01 snapshot (the resolved partial
+// index). nil when it cannot be read, so the caveat says nothing about a
+// count it does not have.
+func (s *Store) LiveRegimeResolutions(ctx context.Context) map[string]int {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind, COUNT(*) FROM (
+		  SELECT DISTINCT kind, symbol_id, day FROM regime_outcomes WHERE resolved_at IS NOT NULL
+		) GROUP BY kind`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string]int{}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return nil
+		}
+		out[kind] = n
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return out
 }
 
 // hydrateForecastCaveats repopulates the honesty fields the table does not store.
@@ -105,7 +137,12 @@ func (s *Store) RegimeForecasts(ctx context.Context) ([]RegimeForecast, error) {
 //
 // They are derived, not per-row: the values come from package accessors, so
 // repopulating on read is correct and needs no migration.
-func hydrateForecastCaveats(v *RegimeForecast) {
+//
+// The caveat states the row kind's CURRENT live status (E-CAVEAT-DATE,
+// 2026-10-02): live maps kind -> live-graded calls (LiveRegimeResolutions). A
+// nil map, when that count could not be read, ships the caveat that points at
+// the live record without describing it, never a guessed count.
+func hydrateForecastCaveats(v *RegimeForecast, live map[string]int) {
 	if v.Evidence == "" {
 		v.Evidence = "backtest"
 	}
@@ -113,7 +150,11 @@ func hydrateForecastCaveats(v *RegimeForecast) {
 		v.FirstGradableOn = structregime.FirstGradableOnDate()
 	}
 	if v.EvidenceCaveat == "" {
-		v.EvidenceCaveat = structregime.EvidenceCaveatText()
+		if live == nil {
+			v.EvidenceCaveat = structregime.EvidenceCaveatText()
+		} else {
+			v.EvidenceCaveat = structregime.EvidenceCaveatFor(live[string(v.Kind)])
+		}
 	}
 	if v.Tradeability == "" {
 		v.Tradeability = structregime.TradeabilityFor(v.Kind, v.Conviction)

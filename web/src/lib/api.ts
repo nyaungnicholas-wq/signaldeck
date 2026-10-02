@@ -1472,6 +1472,9 @@ export interface PreregResponse {
   brokenAtSeq?: number;
   registeredBefore?: boolean;
   firstGradableOn?: string;
+  /** Live-graded structural calls so far, one per symbol per day (the count
+   *  every regime caveat states); null when the daemon could not read it. */
+  liveResolved?: number | null;
   whatThisIs?: string;
   howToUseIt?: string;
   whyChained?: string;

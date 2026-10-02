@@ -21,6 +21,7 @@ import { prereg, ApiError, type PreregResponse, type PreregRecord } from "@/lib/
 import Skeleton from "@/components/Skeleton";
 import { specFields, type SpecField } from "@/lib/specfields";
 import FullRecord from "@/components/proof/FullRecord";
+import { liveResolvedNote } from "@/lib/regimeCaveat";
 
 function when(r: PreregRecord): string {
   if (r.registeredOn) return r.registeredOn;
@@ -119,7 +120,14 @@ export default function Registrations() {
               {frozenEarly} of {timed.length}
             </strong>
           </span>
-          {data.firstGradableOn ? <span>first gradable {data.firstGradableOn}</span> : null}
+          {data.firstGradableOn ? (
+            <span>
+              first gradable {data.firstGradableOn}
+              {/* The live status beside the date (E-CAVEAT-DATE): the date alone
+                  read as "not graded yet" long after it passed. */}
+              {liveResolvedNote(data.liveResolved)}
+            </span>
+          ) : null}
         </div>
 
         {/* The claims themselves. Scrolls in its own box so a long chain cannot

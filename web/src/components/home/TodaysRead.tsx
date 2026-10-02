@@ -191,10 +191,10 @@ export default function TodaysRead({
           >
             {/* NOT "Measured". historicalAccuracy is a constant read from
                 structregime.go's offline lookup table (accuracyFor), and every
-                Forecast this package returns today is evidenceBacktest. Checked
-                on the live corpus: regime_outcomes.resolved_at is NULL on all
-                37,857 structural rows, so ZERO of these calls has ever been
-                graded — while this line was calling the number "measured". */}
+                Forecast this package returns today is evidenceBacktest, whether
+                or not calls of its kind have since resolved live. How many have
+                is the row's evidenceCaveat (in the HelpTip below, from the
+                daemon's live count); how they scored is /api/track-record's. */}
             Backtested accuracy in this conviction band:{" "}
             <span className="tnum font-semibold" style={{ color: "var(--text)" }}>
               {pct(best.fc.historicalAccuracy)}

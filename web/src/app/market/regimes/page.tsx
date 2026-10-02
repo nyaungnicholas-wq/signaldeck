@@ -479,7 +479,7 @@ export default function RegimesPage() {
     <div className="page-enter space-y-4">
       <PageHero
         title="Market Regimes"
-        subtitle="The market's current structural state — trend, volatility and liquidity regimes, with the BACKTESTED accuracy of each state. These claims are not yet live records: no structural forecast has been graded."
+        subtitle="The market's current structural state — trend, volatility and liquidity regimes, with the BACKTESTED accuracy of each state. These accuracies are backtest claims, not the live record: how resolved calls actually scored is graded separately on the record."
         live
       />
 
@@ -518,11 +518,11 @@ export default function RegimesPage() {
               />
             )}
             {/* "BACKTESTED", not "MEASURED": these are constants from
-                structregime.go's offline lookup table, and all 37,857
-                structural rows have resolved_at NULL — nothing here has ever
-                been graded. sub= says how many forecasts actually carried a
-                number, so an average over 3 of 40 cannot read as an average
-                over 40. */}
+                structregime.go's offline lookup table, never the live grade of
+                resolved calls (that is /api/track-record's; the accuracy
+                column's HelpTip carries the daemon's live count per kind).
+                sub= says how many forecasts actually carried a number, so an
+                average over 3 of 40 cannot read as an average over 40. */}
             {(() => {
               const acc = avgAccuracy(trendForecasts.concat(liqForecasts).concat(volForecasts));
               return (

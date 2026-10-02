@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { regimeCaveats } from "./regimeCaveat.ts";
+import { liveResolvedNote, regimeCaveats } from "./regimeCaveat.ts";
 
 const src = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
@@ -57,4 +57,17 @@ test("no surface writes its own version of the caveat", () => {
   for (const file of surfaces) {
     assert.doesNotMatch(src(file), /BACKTEST CLAIM|not a live measurement/, `${file}: the caveat must come from the server, never a paraphrase in the page`);
   }
+});
+
+// E-CAVEAT-DATE (2026-10-02): /proof's "first gradable 2026-08-07" read as "not
+// graded yet" long after the date passed. The chip now carries the daemon's
+// live count beside it: how many resolved, never how they scored.
+test("the /proof first-gradable chip states the live count", () => {
+  assert.equal(liveResolvedNote(undefined), "");
+  assert.equal(liveResolvedNote(null), "");
+  assert.equal(liveResolvedNote(0), " · none resolved live yet");
+  assert.equal(liveResolvedNote(1), " · 1 call resolved live");
+  assert.equal(liveResolvedNote(42333), " · 42,333 calls resolved live");
+  const c = src("../components/proof/Registrations.tsx");
+  assert.match(c, /first gradable \{data\.firstGradableOn\}[\s\S]{0,300}\{liveResolvedNote\(data\.liveResolved\)\}/);
 });

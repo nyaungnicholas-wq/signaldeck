@@ -16,3 +16,14 @@ export function regimeCaveats(rows: ReadonlyArray<{ evidenceCaveat?: string }>):
   }
   return out;
 }
+
+/** The live status beside /proof's "first gradable" date, from the daemon's
+ *  liveResolved count (the same count every regime caveat states). Says how
+ *  many calls resolved, never how they scored; says nothing when the count is
+ *  absent (an older daemon, or one that could not read it). */
+export function liveResolvedNote(n: number | null | undefined): string {
+  if (n == null) return "";
+  if (n <= 0) return " · none resolved live yet";
+  if (n === 1) return " · 1 call resolved live";
+  return ` · ${n.toLocaleString("en-US")} calls resolved live`;
+}

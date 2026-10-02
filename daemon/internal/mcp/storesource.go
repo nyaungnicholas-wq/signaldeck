@@ -47,8 +47,9 @@ func (s StoreSource) Verdicts(ctx context.Context) ([]Verdict, error) {
 			// enough of them reconstruct the schedule.
 			AsOfDay:      time.Unix(r.Ts, 0).UTC().Format("2006-01-02"),
 			Tradeability: structregime.TradeabilityFor(r.Kind, r.Conviction),
-			// Shipped verbatim from the package that owns the sentence.
-			EvidenceCaveat:  structregime.EvidenceCaveatText(),
+			// Shipped verbatim as the store hydrated it: the package's sentence
+			// with this kind's current live status (E-CAVEAT-DATE).
+			EvidenceCaveat:  r.EvidenceCaveat,
 			FirstGradableOn: structregime.FirstGradableOnDate(),
 		})
 	}
