@@ -11,7 +11,7 @@ import { loginAsSmokeUser } from "./smokeuser";
 // ProofStrip, the panel the bug was reported in.
 const PAGES = [
   { path: "/today", anchor: "What paper P&L means" },
-  { path: "/s/crypto/BTC", anchor: "why these are the validated ones" },
+  { path: "/s/stocks/AAPL", anchor: "why these are the validated ones" },
 ];
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 720 },
