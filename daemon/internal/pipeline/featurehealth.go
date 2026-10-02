@@ -61,6 +61,9 @@ func (w *FeatureHealthGrader) Name() string { return "feature-health" }
 // for another day.
 func (w *FeatureHealthGrader) Interval() time.Duration { return 6 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *FeatureHealthGrader) Heavy() bool { return true }
+
 func (w *FeatureHealthGrader) Run(ctx context.Context) (string, error) {
 	now := time.Now()
 	if w.Now != nil {

@@ -29,8 +29,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-
-	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
 // metaLedgerVerifyCkpt stores the last intact verification checkpoint.
@@ -68,9 +66,8 @@ func (s *Store) VerifyLedgerCached(ctx context.Context) (LedgerVerification, boo
 	if err != nil {
 		return LedgerVerification{}, false, err
 	}
-	var prefixCount int64
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM prediction_ledger WHERE seq<=?`, ck.Seq).Scan(&prefixCount); err != nil {
+	prefixCount, err := s.countLedger(ctx, 0, ck.Seq)
+	if err != nil {
 		return LedgerVerification{}, false, err
 	}
 	if storedHash != ck.Hash || prefixCount != ck.Count {
@@ -78,42 +75,13 @@ func (s *Store) VerifyLedgerCached(ctx context.Context) (LedgerVerification, boo
 	}
 
 	// Suffix walk: rows after the checkpoint, chained from the anchored hash.
-	res := LedgerVerification{Intact: true, Count: ck.Count, HeadSeq: ck.Seq, HeadHash: ck.Hash}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
-		       feature_hash, model_version, prev_hash, entry_hash
-		FROM prediction_ledger WHERE seq>? ORDER BY seq ASC`, ck.Seq)
+	res, err := s.walkLedger(ctx,
+		LedgerVerification{Intact: true, Count: ck.Count, HeadSeq: ck.Seq, HeadHash: ck.Hash}, ck.Seq, ck.Hash)
 	if err != nil {
 		return LedgerVerification{}, false, err
 	}
-	defer rows.Close() //nolint:errcheck
-	running := ck.Hash
-	for rows.Next() {
-		var e LedgerEntry
-		var hz string
-		var symID sql.NullInt64
-		if err := rows.Scan(&e.Seq, &e.PredictedAt, &symID, &hz, &e.BarTs,
-			&e.RawProb, &e.CalProb, &e.FeatureHash, &e.ModelVersion,
-			&e.PrevHash, &e.EntryHash); err != nil {
-			return LedgerVerification{}, false, err
-		}
-		e.SymbolID = symID.Int64
-		e.Horizon = md.Horizon(hz)
-		want := hashEntry(running, e)
-		if e.PrevHash != running || e.EntryHash != want {
-			seq := e.Seq
-			res.Intact = false
-			res.BrokenAtSeq = &seq
-			res.Count++
-			res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
-			return res, false, rows.Err() // broken suffix: no checkpoint advance
-		}
-		running = e.EntryHash
-		res.Count++
-		res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
-	}
-	if err := rows.Err(); err != nil {
-		return LedgerVerification{}, false, err
+	if !res.Intact {
+		return res, false, nil // broken suffix: no checkpoint advance
 	}
 	if err := s.saveLedgerCkpt(ctx, res); err != nil {
 		return LedgerVerification{}, false, err

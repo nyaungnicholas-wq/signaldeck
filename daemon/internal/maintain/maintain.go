@@ -891,9 +891,10 @@ func (g *StorageGovernor) Name() string { return "storage-governor" }
 // (default 10) instead, so a pass whose TRUNCATE lost tries again in ten minutes
 // rather than sitting out the hour with a large file on disk.
 //
-// KNOW WHAT THIS CANNOT DO. The runner computes a worker's next fire ONCE, when
-// the previous run ends, and then sleeps (maxScheduledGap is 24h, so nothing
-// re-reads this mid-sleep). A boot storm that arrives while the governor is
+// KNOW WHAT THIS CANNOT DO. The runner re-reads this when a run ends
+// (workers.retime) and then sleeps; nothing re-reads it mid-sleep. (Until
+// 2026-10-02 it was read only once, at boot, so the pressure branch never took
+// effect at all.) A boot storm that arrives while the governor is
 // asleep therefore does NOT pull the next pass forward — measured 2026-08-18, a
 // deploy took the WAL from 38 MB to 861 MB in four minutes and this method was
 // never consulted; the file was reclaimed by SQLite's own autocheckpoint

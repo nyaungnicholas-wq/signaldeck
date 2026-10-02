@@ -24,6 +24,9 @@ func (w *ForecastTrainer) Name() string { return "forecast-trainer" }
 // Interval implements workers.Worker.
 func (w *ForecastTrainer) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *ForecastTrainer) Heavy() bool { return true }
+
 // Run trains and stores forecasts for all active symbols.
 func (w *ForecastTrainer) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)

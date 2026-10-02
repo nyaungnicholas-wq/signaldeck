@@ -81,6 +81,9 @@ type ExpectancyTrainer struct {
 func (w *ExpectancyTrainer) Name() string            { return "expectancy-trainer" }
 func (w *ExpectancyTrainer) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *ExpectancyTrainer) Heavy() bool { return true }
+
 // symbolPairs is one symbol's contribution to a horizon's fleet grade.
 type symbolPairs struct {
 	id     int64
