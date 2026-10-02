@@ -5,6 +5,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import HelpTip from "@/components/HelpTip";
 import ReliabilityDiagram from "./ReliabilityDiagram";
+import { brierSkillSub } from "@/lib/calibration";
 
 type CalHorizon = "1d" | "1w";
 const CAL_HORIZONS: CalHorizon[] = ["1d", "1w"];
@@ -181,14 +182,7 @@ export default function CalibrationPanel({
                 valueColor={
                   data?.brierSkill == null ? "var(--dim)" : data.brierSkill > 0 ? "var(--bid)" : "var(--ask)"
                 }
-                sub={
-                  data?.brierSkill == null
-                    ? data?.gated && data.brierNote
-                      ? data.brierNote
-                      : "not gradable yet — needs resolved outcomes on both sides"
-                    : `vs always forecasting the ${((data.baseRate ?? 0) * 100).toFixed(1)}% base rate; ` +
-                      (data.brierSkill > 0 ? "positive = real probabilistic skill" : "negative = worse than the constant")
-                }
+                sub={brierSkillSub(data)}
               />
               <Stat
                 label="resolved"
