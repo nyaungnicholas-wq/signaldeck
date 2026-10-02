@@ -19,21 +19,34 @@ test("INSUFFICIENT: a progress strip with the API's own per-horizon counts, no p
   assert.match(riskHeadline(rec({ horizon: 1, distinctDays: 33, verdict: "INSUFFICIENT" })).text, /33 of 60/);
 });
 
-test("PASS: keyed on the verdict string; leads, with the graded numbers", () => {
-  const r = riskHeadline(rec({ horizon: 1, distinctDays: 61, verdict: "BEATS THE NULLS", vsRandomWalk: -0.0421, vsEwma: -0.0123 }));
+test("PASS: keyed on the verdict string; leads, with the registered statistic", () => {
+  // The pooled row means sit beside the grade on purpose: the copy must print
+  // grade.headline.meanDiff, never vsEwma / vsRandomWalk.
+  const r = riskHeadline(rec({ horizon: 1, distinctDays: 61, verdict: "BEATS THE NULLS",
+    vsRandomWalk: -0.0421, vsEwma: -0.5, grade: { headline: { meanDiff: -0.0123 } } }));
   assert.equal(r.state, "pass");
   assert.equal(r.lead, true);
-  assert.equal(r.vsRandomWalk, -0.0421);
-  assert.match(r.text, /beaten its pre-registered baselines in a live test/);
-  assert.match(r.text, /random walk −0\.042, versus RiskMetrics EWMA −0\.012/);
-  assert.match(r.text, /graded over 61 trading days/);
+  assert.equal(r.meanDiff, -0.0123);
+  assert.match(r.text, /next-day realized volatility forecast passed its pre-registered live test against RiskMetrics EWMA/);
+  assert.match(r.text, /mean daily QLIKE loss difference −0\.012 \(negative favours the forecast\) over 61 trading days/);
+  assert.match(r.text, /not a guarantee of future accuracy/);
+  // Only horizon 1 is graded; nothing claims the next-week forecast, or a random walk.
+  assert.doesNotMatch(r.text, /next.week|random walk|−0\.500|−0\.042/);
+});
+
+test("PASS without the registered statistic: no number at all, never the pooled one", () => {
+  const r = riskHeadline(rec({ horizon: 1, distinctDays: 61, verdict: "BEATS THE NULLS", vsEwma: -0.5 }));
+  assert.equal(r.state, "pass");
+  assert.equal(r.meanDiff, undefined);
+  assert.match(r.text, /against RiskMetrics EWMA over 61 trading days\. That is a test result/);
+  assert.doesNotMatch(r.text, /−0\.500/);
 });
 
 test("the decision ignores the numbers: winning numbers without the pass verdict do not promote", () => {
   const r = riskHeadline(rec({ horizon: 1, distinctDays: 61, verdict: "ACCRUING", vsRandomWalk: -0.5, vsEwma: -0.5 }));
   assert.equal(r.state, "accruing");
   assert.equal(r.lead, false);
-  assert.doesNotMatch(r.text, /beaten/);
+  assert.doesNotMatch(r.text, /passed|beat/);
 });
 
 test("past the floor the true day count shows, not a clamped 60", () => {
@@ -76,6 +89,6 @@ test("missing or malformed payloads fall back to 'not available' with no claim",
     assert.equal(r.state, "unavailable", JSON.stringify(b));
     assert.equal(r.lead, false);
     assert.match(r.text, /not available/);
-    assert.doesNotMatch(r.text, /beaten|did not beat/);
+    assert.doesNotMatch(r.text, /passed|beat/);
   }
 });

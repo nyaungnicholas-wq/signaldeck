@@ -25,9 +25,13 @@ export interface RiskHeadline {
   text: string;
   minDays: number;
   horizons: RiskHorizon[];
-  /** Headline-cell numbers, present only when the record carried them. */
-  vsRandomWalk?: number;
-  vsEwma?: number;
+  /**
+   * The registered statistic, present only when the record carried it: the
+   * headline cell's mean daily QLIKE loss differential, forecast minus
+   * RiskMetrics EWMA (grade.headline.meanDiff). Not the pooled vsEwma beside
+   * it, which averages rows rather than days and decides nothing.
+   */
+  meanDiff?: number;
 }
 
 export const PASS_VERDICT = "BEATS THE NULLS";
@@ -69,21 +73,23 @@ export function riskHeadline(record: unknown): RiskHeadline {
   const base = { minDays, horizons };
 
   if (verdict === PASS_VERDICT) {
-    const vsRandomWalk = num(head.vsRandomWalk);
-    const vsEwma = num(head.vsEwma);
+    // Only the horizon-1 cell is graded and only it decides, and the cell is
+    // the forecast against RiskMetrics EWMA alone: the copy names exactly that.
+    const grade = head.grade as { headline?: { meanDiff?: unknown } } | null | undefined;
+    const meanDiff = num(grade?.headline?.meanDiff);
     const nums =
-      vsRandomWalk !== undefined && vsEwma !== undefined
-        ? ` Mean QLIKE loss versus a random walk ${signed(vsRandomWalk)}, versus RiskMetrics EWMA ${signed(vsEwma)} (lower is better),`
+      meanDiff !== undefined
+        ? `: mean daily QLIKE loss difference ${signed(meanDiff)} (negative favours the forecast)`
         : "";
     return {
       ...base,
       state: "pass",
       lead: true,
-      vsRandomWalk,
-      vsEwma,
+      meanDiff,
       text:
-        "SignalDeck’s next-day and next-week realized volatility forecast has beaten its pre-registered " +
-        `baselines in a live test.${nums} graded over ${days} trading days.`,
+        "SignalDeck’s next-day realized volatility forecast passed its pre-registered live test against " +
+        `RiskMetrics EWMA${nums} over ${days} trading days. That is a test result over those days, ` +
+        "not a guarantee of future accuracy.",
     };
   }
   if (FAIL_VERDICTS.includes(verdict)) {
