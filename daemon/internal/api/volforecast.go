@@ -22,10 +22,28 @@ import (
 // a handful of real observations.
 const RVMinDistinctDays = 60
 
-// RVRecordCaveat is the verbatim caveat string that must accompany every
-// live volatility record. It appears in every response to ensure readers
-// never mistake its absence for a claim of safety or validity.
+// RVRecordCaveat is the verbatim caveat that accompanies every live volatility
+// record whose headline verdict is not the registered pass. A caveat appears
+// in every response so readers never mistake its absence for a claim of safety
+// or validity.
 const RVRecordCaveat = "LIVE RECORD, ACCRUING. This is not a claim of skill. The comparison is against a random walk and RiskMetrics EWMA(0.94), lower loss is better, and no verdict is published until the pre-registered minimum evidence is met. Backtest figures are reported separately and are never mixed with these."
+
+// rvRecordCaveat is the caveat for a record whose headline verdict is v over
+// days distinct trading days. On BEATS THE NULLS, "not a claim of skill" would
+// contradict the verdict printed beside it, so a pass gets its own words, and
+// they claim no more than the registered test does: a pass over the stated
+// window, not a guarantee.
+func rvRecordCaveat(v string, days int) string {
+	if v != rvgrade.Beats {
+		return RVRecordCaveat
+	}
+	return fmt.Sprintf("LIVE RECORD, PRE-REGISTERED TEST PASSED. Over %d distinct trading days the "+
+		"next-day forecast beat RiskMetrics EWMA(0.94) on QLIKE loss under the pre-registered test "+
+		"(corrected p-value below 0.05, sign in its favour) and the RV^CC control held. That is a test "+
+		"result over those days, not a guarantee of future accuracy; the record keeps accruing and the "+
+		"verdict is recomputed as it does. Backtest figures are reported separately and are never mixed "+
+		"with these.", days)
+}
 
 // volForecastRecord returns the live volatility forecast record for horizons
 // 1 and 5 sessions, graded by internal/rvgrade under the registered rule.
@@ -160,7 +178,7 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 
 	for _, hz := range pipeline.RVHorizons {
 		h := int(hz)
-		rec, err := d.St.RVLiveRecord(r.Context(), h)
+		rec, err := d.St.RVLiveRecord(r.Context(), h, start.ts)
 		if err != nil {
 			httpInternal(w, err)
 			return
@@ -233,7 +251,7 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 		Evidence:        "LIVE",
 		MinDistinctDays: RVMinDistinctDays,
 		Horizons:        results,
-		Caveat:          RVRecordCaveat,
+		Caveat:          rvRecordCaveat(study.Verdict, grades[rvgrade.HeadlineHorizon].Headline.Days),
 	}
 	writeJSON(w, resp)
 }

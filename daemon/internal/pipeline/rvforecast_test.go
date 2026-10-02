@@ -115,7 +115,7 @@ func TestRVForecastAndResolveRoundTrip(t *testing.T) {
 		t.Fatalf("early resolver: %v", err)
 	}
 	for _, h := range RVHorizons {
-		rec, err := st.RVLiveRecord(ctx, int(h))
+		rec, err := st.RVLiveRecord(ctx, int(h), 0)
 		if err != nil {
 			t.Fatalf("record: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestRVForecastAndResolveRoundTrip(t *testing.T) {
 	t.Logf("resolve: %s", detail)
 
 	for _, h := range RVHorizons {
-		rec, err := st.RVLiveRecord(ctx, int(h))
+		rec, err := st.RVLiveRecord(ctx, int(h), 0)
 		if err != nil {
 			t.Fatalf("record h=%d: %v", h, err)
 		}
@@ -222,7 +222,7 @@ func TestRVOutcomeWaitsForTheWindowToSettle(t *testing.T) {
 		if _, err := res.Run(ctx); err != nil && !errors.Is(err, workers.ErrDegraded) {
 			t.Fatalf("resolver: %v", err)
 		}
-		rec, err := st.RVLiveRecord(ctx, 1)
+		rec, err := st.RVLiveRecord(ctx, 1, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
