@@ -329,6 +329,7 @@ func TestJournalFeedsNoForecast(t *testing.T) {
 		"internal/api/journal.go":                 true, // the member's own routes
 		"internal/api/accounts.go":                true, // memberRoutes entry
 		"cmd/signaldeckd/run.go":                  true, // registers the resolver
+		"internal/copilot/catalog.go":             true, // ask the data: the asking member's OWN counts, served only to them
 	}
 	seen := 0
 	for _, dir := range []string{"../../internal", "../../cmd"} {

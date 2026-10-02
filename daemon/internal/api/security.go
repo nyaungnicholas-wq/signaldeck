@@ -496,6 +496,7 @@ func (d Deps) requiresAuth(path string) bool {
 		strings.HasPrefix(path, "/api/alerts"),
 		strings.HasPrefix(path, "/api/alert-prefs"),
 		strings.HasPrefix(path, "/api/journal"),
+		path == "/api/ask", // spends LLM budget and reads the caller's own journal
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",

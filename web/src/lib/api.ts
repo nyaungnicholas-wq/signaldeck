@@ -55,6 +55,7 @@ export const LICENCE_REFUSAL_TEXT =
   "here — regimes, forecasts, risk — is computed from them and is unaffected.";
 
 import type { CallDirection, Journal } from "@/lib/journal";
+import type { AskAnswer, AskStatus } from "@/lib/ask";
 
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
@@ -628,6 +629,9 @@ export const api = {
   journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
     post<Journal>("/api/journal", c),
   journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
+  // Ask the data (plan step 10): cited answers from SignalDeck's own tables.
+  askStatus: () => get<AskStatus>("/api/ask"),
+  ask: (question: string) => post<AskAnswer>("/api/ask", { question }),
   // Risk first (plan step 9). The record is validated by lib/riskHeadline, so
   // it stays `unknown` here; latest is derived fields only (member route).
   volForecastRecord: () => get<unknown>("/api/vol-forecast/record"),

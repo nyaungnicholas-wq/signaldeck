@@ -489,6 +489,10 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		// redeems is driven in alertprefs_test.go.
 		"/api/alerts/unsubscribe": {method: "GET", url: "/api/alerts/unsubscribe?token=probe", marker: `value="probe"`},
 		"/api/auth/me":            get("/api/auth/me", `"username":"mira"`),
+		// Ask the data (plan step 10): the status read; off for members by
+		// default, so the refusal is served. ask_test.go drives POST against this
+		// store with the flag on and an echoing fake model.
+		"/api/ask": get("/api/ask", `"available":false`),
 		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"N":%d`, n)),
 		"/api/canary":             get("/api/canary", "SNTL_CANARY_MODEL"),
 		"/api/companies":          get("/api/companies?q=SNTL", "Sentinel Corp"),

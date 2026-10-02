@@ -117,6 +117,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	d.registerAuth(mux)                           // register, login, logout, me
 	d.registerAlertPrefs(mux)                     // member daily-read opt-ins + one-click unsubscribe (alertprefs.go)
 	d.registerJournal(mux)                        // member call journal: the member's own calls, graded (journal.go)
+	d.registerAsk(mux)                            // ask the data: cited answers from the copilot catalog (ask.go)
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	// Body-cached (60s SWR): under worker load the uncached build queued behind
 	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404

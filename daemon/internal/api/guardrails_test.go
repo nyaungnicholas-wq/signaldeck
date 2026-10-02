@@ -167,6 +167,9 @@ var memberInputs = map[string]string{
 	// TradingView inbound alert body (shared-secret webhook; operator's own alerts, nothing served back).
 	"action": "TradingView alert action", "message": "TradingView alert text", "price": "TradingView alert price field",
 	"secret": "TradingView shared secret",
+	// Ask the data (plan step 10): the question goes to the model as the user
+	// turn; rows come only from the copilot catalog, never from this text.
+	"question": "ask the data: the member's question (500 chars)",
 }
 
 var personalInput = regexp.MustCompile(`(?i)capital|size|portfolio|position|risk|account|balance|equity|amount|qty|quantity|leverage`)

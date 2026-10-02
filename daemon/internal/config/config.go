@@ -169,6 +169,11 @@ type Config struct {
 	RateRPS        int    // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
 	RateBurst      int    // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
+	// MemberCopilot (SIGNALDECK_MEMBER_COPILOT, default false) opens "ask the
+	// data" (POST /api/ask) to member accounts. Off, members get 403 and only
+	// the operator can ask; every ask spends LLM budget.
+	MemberCopilot bool
+
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
 	// the one surface designed to be consumed by a third party's agent and a
@@ -300,6 +305,7 @@ func Load() Config {
 		TrustProxy:     boolEnv("SIGNALDECK_TRUST_PROXY", false),
 		RateRPS:        atoiOr("SIGNALDECK_RATE_RPS", os.Getenv("SIGNALDECK_RATE_RPS"), 0),
 		RateBurst:      atoiOr("SIGNALDECK_RATE_BURST", os.Getenv("SIGNALDECK_RATE_BURST"), 0),
+		MemberCopilot: boolEnv("SIGNALDECK_MEMBER_COPILOT", false), // ask the data, for members
 		// The MCP server never inherits an "open on loopback" default the way
 		// PublicReads does. Exposing an interface built for someone else's AI
 		// agent is a decision with compliance implications, so it is made once,
