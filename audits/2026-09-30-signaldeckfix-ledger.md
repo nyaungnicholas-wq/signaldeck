@@ -78,6 +78,7 @@ owner; NOT APPLICABLE = by design, with evidence.
 | SD-61 | ops: quick-tunnel guard | reported by a concurrent session's review: web-guard counted an UNREADABLE cloudflared as the quick tunnel; from its S4U/Limited token every SYSTEM process reads empty, so the named-tunnel service (once installed) would have masked a dead quick tunnel forever | a Running task is the tunnel (its action waits on cloudflared); otherwise only a cloudflared naming the quick tunnel counts. 2 cases, mutation-checked; live run 04:05:44 PT 'quicktunnel ok' | med | FIXED 8098341 |
 | SD-62 | sign-in vs scores compactor | after SD-51 shipped, 0 sign-in 500s (114 OK since 10-01 02:00) but two at 12.2 s and 12.7 s, right at the 12 s account-write budget; coincident holders: PruneScoresKeepDailyLast 1m17s (one DELETE over every scores row below the cutoff; 3.2M-row table) and StripScoreComponents 29 s (PK-seek UPDATEs; hold time likely the post-commit checkpoint) | the prune runs one UTC day per statement (the keep rule groups by ts/86400, so results are identical); TestScoresDailyPruneLetsAnAccountWriteIn, mutation-checked | high | FIXED (this commit) |
 | SD-63 | sign-in vs minute-bar retention | SD-51 remainder: PruneBars (Downsampler) was DELETE FROM bars WHERE tf=? AND ts<? per 50k archive batch; no ts-leading index, so each statement walked every bar of the timeframe inside the write lock (47.7 s live) | one DELETE per symbol (primary-key range), symbol list read on the pool; same deleted set, daily bars still refused. TestPruneBarsLetsAnAccountWriteIn, mutation-checked. Rollup left: it already computes on the pool and writes in small batches | high | FIXED (this commit) |
+| SD-64 | error accounting | a web release stopping the web tier cancelled three in-flight /api/track-record builds (2026-10-01 20:35:46); httpInternal logged each as ERROR and answered 500, so client hang-ups counted as server failures | context.Canceled answers 499 (the access log's 'client closed request') at Info; other errors stay opaque 500s. TestHTTPInternalCancelledIsNot500, mutation-checked | low | FIXED (this commit) |
 
 ### Deferred with reason (not fixed this run)
 - FIXED 10-01 (377ed9a): `ResolvedPredictionCount` now returns the grader's independent N.
@@ -89,8 +90,9 @@ owner; NOT APPLICABLE = by design, with evidence.
   Rollup (46 s holds), and single-statement holders InsertNews/UpsertVolForecast/InsertMacro (likely
   auto-checkpoint inflation, unmeasured); `wal_autocheckpoint=0` on the account writer is an
   unmeasured lead. The long-hold log counts a post-commit auto-checkpoint as hold time.
-- OPEN (SD-48 remainder): the cause of the 153-223 s 1w track-record builds needs a CPU profile on the
-  live host.
+- RESOLVED (SD-48 remainder, 10-02): after 599de96 (SQL collapse) and step3-4's persisted warm caches,
+  45 /api/track-record requests since 2026-10-01 20:30 served in at most 4.5 s (was 153-223 s). Not
+  profiled; the daemon has no pprof endpoint and adding one was not in scope.
 - Main writer DSN without `_txlock=immediate` (read-then-write tx vs the new aw writer could
   SQLITE_BUSY_SNAPSHOT): 0 occurrences in logs; changes lock timing of every main-writer tx. Low.
 - Sign-up timing distinguishes new vs taken email (sync insert vs async mail); verify link signs
