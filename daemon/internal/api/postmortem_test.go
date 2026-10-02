@@ -16,6 +16,7 @@ import (
 
 // The /api/postmortems handler returns clustered failure modes + a recent feed.
 func TestPostmortemsEndpoint(t *testing.T) {
+	sd30Off(t) // the record as stored: the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "pm_api.db"))
 	if err != nil {

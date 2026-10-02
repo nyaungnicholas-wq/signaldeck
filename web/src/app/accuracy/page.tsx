@@ -99,6 +99,10 @@ type Registry = {
 // figures to match a later grade — that would erase the record being disclosed.
 const FLAGSHIP_RETIREMENT = {
   date: "2026-07-24",
+  // SD-30: the current directional figures on this page are withheld, so the
+  // dated ones beside them have to say what they are.
+  history:
+    "These figures are the dated retirement record, measured on the pre-SD-30 directional label (mostly realised at issue) and kept as history, not as a current measurement.",
   rows: [
     { name: "directional-ensemble (1d)", acc: "48.1%", baseline: "54.6%", n: "13,058", skill: "−6.5pp" },
     { name: "directional-ensemble (1w)", acc: "46.2%", baseline: "54.4%", n: "9,164", skill: "−8.2pp" },
@@ -595,7 +599,8 @@ export default async function AccuracyPage() {
             retired and stopped emitting. Inverting or relabeling it is not a rescue: the competing
             model is the constant majority guess, whose rate is above 50%, so flipping the sign
             relabels the call without creating an edge. The directional rows below are its
-            post-retirement shadow record, restarted at the survivorship epoch.
+            post-retirement shadow record, restarted at the survivorship epoch.{" "}
+            <strong>{FLAGSHIP_RETIREMENT.history}</strong>
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[0.78rem]">

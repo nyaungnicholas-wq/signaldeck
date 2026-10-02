@@ -569,7 +569,9 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/self-audit":         get("/api/self-audit", "SNTL_AUDIT_DETAIL"),
 		"/api/short-interest":     get("/api/short-interest?symbol=SNTL&market=stocks", "2026-09-15"),
 		"/api/shorts":             get("/api/shorts", "SNTL"),
-		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", "SNTL_PERSONALITY"),
+		// The seeded sample size, not the personality: a member gets a fixed line in
+		// place of a personality that quotes a hit rate (SD-30 / n=1 rows).
+		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", `"nSamples":60`),
 		"/api/track-record":       get("/api/track-record", fmt.Sprintf(`"cluster":{"n":%d`, n)),
 		"/api/unwatch":            {method: "POST", url: "/api/unwatch", body: watchBody("SNTW"), marker: "SNTW"},
 		"/api/version":            get("/api/version", `"version":"test"`),
@@ -668,6 +670,7 @@ var anonProbeOverride = map[string]memberProbe{
 var anonProbeFloor = map[string]int{"public-surface": 28, "tunnel": 11}
 
 func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
+	sd30Off(t) // scan the FULL payloads: an SD-30-withheld body is a subset, and an emptied route would leave the positive control blind
 	// Members reach the same union under both published postures; the gate
 	// differs (allowlist vs PublicReads) and both must hold. Each posture also
 	// probes what a caller with no session reaches there.
