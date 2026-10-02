@@ -148,6 +148,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	// visitor — and the /volatility page's 15s server-side fetch — must never
 	// be the one to build it. WarmCaches keeps it hot.
 	mux.HandleFunc("GET /api/vol-forecast/record", d.serveVolRecord)
+	mux.HandleFunc("GET /api/vol-forecast/latest", d.volForecastLatest) // member: current HAR forecasts, derived fields only (plan step 9)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
 	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed

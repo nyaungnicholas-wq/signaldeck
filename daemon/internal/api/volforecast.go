@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -156,4 +157,44 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 		Caveat:          RVRecordCaveat,
 	}
 	writeJSON(w, resp)
+}
+
+// volForecastLatest is GET /api/vol-forecast/latest, the member read of the
+// current HAR forecasts (plan step 9: shown on /today only once the live
+// record's verdict passes). DERIVED FIELDS ONLY: symbol, horizon, the call
+// bar's date and the forecast as annualised volatility in percent. The nulls,
+// coefficients and realised outcomes stay off this route; the record that
+// grades the forecast is /api/vol-forecast/record. It takes no input, so every
+// member reads the same bytes.
+func (d Deps) volForecastLatest(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.St.LatestRVForecasts(r.Context())
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	type fc struct {
+		Symbol  string  `json:"symbol"`
+		Horizon int     `json:"horizon"`
+		AsOf    int64   `json:"asOf"`
+		VolPct  float64 `json:"volPct"`
+	}
+	out := make([]fc, 0, len(rows))
+	for _, f := range rows {
+		out = append(out, fc{Symbol: f.Symbol, Horizon: f.Horizon, AsOf: f.Ts, VolPct: annualVolPct(f.RVHat)})
+	}
+	writeJSON(w, map[string]any{
+		"forecasts": out,
+		"what": "Forecast realized volatility, annualised, in percent: horizon 1 is the next session, " +
+			"horizon 5 the mean over the next five. A risk number, not a price direction.",
+		"caveat": "Live graded record at /api/vol-forecast/record; past accuracy does not guarantee future results.",
+	})
+}
+
+// annualVolPct turns a mean daily variance forecast into annualised volatility
+// in percent, to one decimal: sqrt(252 * rv) * 100.
+func annualVolPct(rv float64) float64 {
+	if rv <= 0 || math.IsNaN(rv) || math.IsInf(rv, 0) {
+		return 0
+	}
+	return math.Round(math.Sqrt(252*rv)*1000) / 10
 }

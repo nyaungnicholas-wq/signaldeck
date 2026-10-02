@@ -537,6 +537,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/version":            get("/api/version", `"version":"test"`),
 		"/api/vol-forecast/record": get("/api/vol-forecast/record", // cached
 			fmt.Sprintf(`"horizon":%d,"n":%d,`, pipeline.RVHorizons[0], perVariant)),
+		// Current HAR forecasts: the seeded SNTL call, as annualised vol (sqrt(252*0.2)).
+		"/api/vol-forecast/latest": get("/api/vol-forecast/latest", `"symbol":"SNTL","horizon":1`),
 		"/api/vol-regime": get("/api/vol-regime", "SNTL"),
 		"/api/watch":      {method: "POST", url: "/api/watch", body: watchBody("SNTL"), marker: "SNTL"},
 		"/api/watchlist":  get("/api/watchlist", "SNTL"),

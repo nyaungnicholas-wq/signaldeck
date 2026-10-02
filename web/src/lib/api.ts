@@ -628,6 +628,10 @@ export const api = {
   journalCall: (c: { symbol: string; market: Market; call: CallDirection; horizon: number; note: string }) =>
     post<Journal>("/api/journal", c),
   journalWithdraw: (id: number) => post<Journal>("/api/journal/withdraw", { id }),
+  // Risk first (plan step 9). The record is validated by lib/riskHeadline, so
+  // it stays `unknown` here; latest is derived fields only (member route).
+  volForecastRecord: () => get<unknown>("/api/vol-forecast/record"),
+  volForecastLatest: () => get<VolForecastLatest>("/api/vol-forecast/latest"),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
 
@@ -724,6 +728,13 @@ export interface Me {
 
 /** A MEMBER's watchlist row: identity and data freshness only. The daemon
  *  strips closes, sparks, day change and scores for members (vendor-licensed). */
+/** GET /api/vol-forecast/latest: current HAR forecasts, annualised vol in percent. */
+export interface VolForecastLatest {
+  forecasts: { symbol: string; horizon: number; asOf: number; volPct: number }[];
+  what: string;
+  caveat: string;
+}
+
 export interface MemberWatchRow extends SymbolInfo {
   latestBarTs: number;
 }

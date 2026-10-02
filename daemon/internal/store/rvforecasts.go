@@ -171,3 +171,39 @@ func (s *Store) CountResolvedRV(ctx context.Context) (int, error) {
 		`SELECT COUNT(*) FROM rv_forecasts WHERE actual IS NOT NULL`).Scan(&n)
 	return n, err
 }
+// LatestRV is one current forecast as a member may read it: the symbol, the
+// horizon, the call bar and the forecast level. No null, coefficient or
+// outcome travels with it.
+type LatestRV struct {
+	Symbol  string
+	Horizon int
+	Ts      int64
+	RVHat   float64
+}
+
+// LatestRVForecasts returns, per horizon, every stock forecast frozen on that
+// horizon's most recent call bar. A symbol the runner skipped on that bar
+// (thin, stale) has no current forecast and is absent rather than shown an
+// older one as if it were today's.
+func (s *Store) LatestRVForecasts(ctx context.Context) ([]LatestRV, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sy.symbol, f.horizon, f.ts, f.rv_hat
+		  FROM rv_forecasts f
+		  JOIN symbols sy ON sy.id = f.symbol_id
+		 WHERE sy.market = 'stocks'
+		   AND f.ts = (SELECT MAX(ts) FROM rv_forecasts m WHERE m.horizon = f.horizon)
+		 ORDER BY sy.symbol, f.horizon`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []LatestRV
+	for rows.Next() {
+		var r LatestRV
+		if err := rows.Scan(&r.Symbol, &r.Horizon, &r.Ts, &r.RVHat); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

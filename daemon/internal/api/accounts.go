@@ -80,6 +80,9 @@ var memberRoutes = map[string]bool{
 	// The member's own call journal (plan step 8): their calls and their
 	// grade, never a price or return, never an input to SignalDeck's forecasts.
 	"/api/journal": true, "/api/journal/withdraw": true,
+	// The current HAR volatility forecasts (plan step 9): symbol, horizon,
+	// date and annualised vol only; no null, coefficient or outcome.
+	"/api/vol-forecast/latest": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published
