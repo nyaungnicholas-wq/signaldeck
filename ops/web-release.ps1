@@ -240,7 +240,8 @@ try {
         exit 0
     }
 
-    # 6 - PROMOTE. Stop, move aside, move in, start. Never delete.
+    # 6 - PROMOTE. Stop, move aside, move in, start. Nothing is deleted here; step 9
+    # prunes only older builds, after this one is up and recorded.
     #
     # Take the maintenance lock first. ops/web-guard.ps1 runs every five minutes
     # and, without this, can arrive between the stop and the start, find the port
