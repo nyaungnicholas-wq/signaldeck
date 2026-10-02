@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -133,9 +135,15 @@ func TestTruncateRetriesWinAgainstOverlappingReaders(t *testing.T) {
 	if contains(msg, "WAL NOT truncated") {
 		t.Fatalf("no TRUNCATE retry won against overlapping short readers once the pin was gone: %q", msg)
 	}
-	// The next retry after the release must win: one gap plus one wait.
-	if took > 20*time.Second {
-		t.Fatalf("the pass truncated %v after the pin went; the retries did not outwait the overlapping readers: %q", took, msg)
+	// The next retry after the release must win: one gap plus one wait. Count
+	// attempts, not wall time: under -race on a loaded host a correct pass took
+	// 24s (3 attempts) while the 100ms-retry code it guards against needed 29.
+	m := regexp.MustCompile(`\((\d+) attempts\)`).FindStringSubmatch(msg)
+	if m == nil {
+		t.Fatalf("no attempt count in the pass detail: %q", msg)
+	}
+	if n, _ := strconv.Atoi(m[1]); n > 10 {
+		t.Fatalf("the pass needed %d TRUNCATE attempts (%v after the pin went); the retries did not outwait the overlapping readers: %q", n, took, msg)
 	}
 	t.Logf("truncated %v after the pin went; pass: %s", took, msg)
 }
