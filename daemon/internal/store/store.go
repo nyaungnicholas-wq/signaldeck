@@ -1176,11 +1176,42 @@ func (s *Store) PruneBars(ctx context.Context, tf md.Timeframe, cutoff int64) (i
 	if tf == md.TF1d {
 		return 0, fmt.Errorf("store: daily bars are never pruned (permanence guarantee)")
 	}
-	res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
+	// One DELETE per symbol (a primary-key range seek), not one over the whole
+	// timeframe: `tf=? AND ts<?` has no ts-leading index, so the single statement
+	// walked every bar of tf inside the write lock on each archive batch (47.7 s
+	// live, 2026-10-01). The symbol list is read on the pool, outside the lock;
+	// the deleted set is the same.
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT symbol_id FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() //nolint:errcheck
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close() //nolint:errcheck
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, id := range ids {
+		res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE symbol_id=? AND tf=? AND ts<?`, id, string(tf), cutoff)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // ── crypto 1s snapshots ─────────────────────────────────────────────────
