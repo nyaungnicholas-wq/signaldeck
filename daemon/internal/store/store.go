@@ -156,7 +156,13 @@ func Open(path string) (*Store, error) {
 	// The main writer goes through the priority gate so account writes on aw
 	// can win the SQLite lock at w's next transaction boundary.
 	gate := &priorityGate{}
-	w := openGated(db.Driver(), dsn, gate)
+	// _txlock=immediate on the main writer ONLY: its transactions take the write
+	// lock at BEGIN. Deferred, one that reads first (AppendLedger reads the chain
+	// head, then inserts) failed outright with SQLITE_BUSY_SNAPSHOT (517) when the
+	// account writer committed in between; busy_timeout never retries that.
+	// Every main-writer transaction writes; ReadOnly ones stay deferred (driver),
+	// and the read pools (Store.dsn) never begin one.
+	w := openGated(db.Driver(), dsn+"&_txlock=immediate", gate)
 	// SQLite allows exactly one writer — serialize writes on one connection.
 	w.SetMaxOpenConns(1)
 	if _, err := w.Exec(schemaSQL); err != nil {
