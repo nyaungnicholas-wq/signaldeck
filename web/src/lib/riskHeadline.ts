@@ -36,6 +36,15 @@ export interface RiskHeadline {
 
 export const PASS_VERDICT = "BEATS THE NULLS";
 export const FAIL_VERDICTS = ["NO SKILL DEMONSTRATED", "ESTIMATOR ARTIFACT"];
+
+/**
+ * The colour a verdict badge may wear. Only the registered pass is "ok":
+ * clearing the evidence floor is not a result, and NO SKILL, ARTIFACT,
+ * ACCRUING and SECONDARY all sit past the floor (H-8, 2026-10-02).
+ */
+export function verdictTone(verdict: string): "ok" | "warn" {
+  return verdict === PASS_VERDICT ? "ok" : "warn";
+}
 const HEADLINE_HORIZON = 1;
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -98,7 +107,7 @@ export function riskHeadline(record: unknown): RiskHeadline {
       state: "fail",
       lead: false,
       text:
-        `The live test of SignalDeck’s volatility forecast did not beat its pre-registered baselines ` +
+        `The live test of SignalDeck’s next-day volatility forecast did not beat its pre-registered baseline, RiskMetrics EWMA ` +
         `(verdict: ${verdict.toLowerCase()}, after ${days} trading days). It is not promoted to this page’s headline.`,
     };
   }
@@ -112,10 +121,12 @@ export function riskHeadline(record: unknown): RiskHeadline {
           : `${h.distinctDays} of ${minDays} trading days (${horizonName(h.horizon)})`,
       )
       .join("; ");
+    // No adjective the verdict has not earned: nothing is "most predictable"
+    // before the registered test has passed (H-11).
     const lead =
       verdict === "ACCRUING"
-        ? "SignalDeck’s most predictable forecast, volatility, has reached its live evidence floor and awaits its pre-registered grade: "
-        : "SignalDeck’s most predictable forecast, volatility, is being graded live: ";
+        ? "SignalDeck’s volatility forecast has reached its live evidence floor and awaits its pre-registered grade: "
+        : "SignalDeck’s volatility forecast is being graded live against a pre-registered test: ";
     return {
       ...base,
       state: verdict === "ACCRUING" ? "accruing" : "insufficient",

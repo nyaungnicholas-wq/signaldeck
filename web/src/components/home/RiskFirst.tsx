@@ -2,8 +2,9 @@
 
 // RISK FIRST (plan step 9). The member's /today headline is decided by the
 // live graded verdict of the HAR volatility forecast and nothing else
-// (lib/riskHeadline). PASS: this block leads the page with the graded numbers
-// and today's forecast for the member's watched symbols. INSUFFICIENT /
+// (lib/riskHeadline). PASS: this block leads the page with the graded next-day
+// result and today's forecast for the member's watched symbols; only the
+// next-day forecast is graded, so the next-week column says it is not. INSUFFICIENT /
 // ACCRUING: a compact progress strip. FAIL: an honest strip, no promotion.
 
 import { useEffect, useState } from "react";
@@ -76,7 +77,7 @@ export default function RiskFirst({ watchSymbols }: { watchSymbols: string[] }) 
             <tr style={{ color: "var(--faint)" }}>
               <th className="pr-4 text-left font-normal">Your symbols</th>
               <th className="pr-4 text-right font-normal">Next day</th>
-              <th className="pr-4 text-right font-normal">Next week</th>
+              <th className="pr-4 text-right font-normal">Next week (not graded)</th>
               <th className="text-left font-normal">As of</th>
             </tr>
           </thead>
@@ -102,7 +103,8 @@ export default function RiskFirst({ watchSymbols }: { watchSymbols: string[] }) 
         </p>
       )}
       <p className="m-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-        Annualised realized volatility, forecast. A risk number, not a price direction.{" "}
+        Annualised realized volatility, forecast. A risk number, not a price direction. Only the
+        next-day forecast is graded; the next-week figure is shown ungraded.{" "}
         <Link href="/volatility" className="underline">
           The live record
         </Link>

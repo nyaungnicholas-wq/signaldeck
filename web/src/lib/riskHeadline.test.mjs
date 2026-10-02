@@ -13,7 +13,9 @@ test("INSUFFICIENT: a progress strip with the API's own per-horizon counts, no p
   const r = riskHeadline(rec({ horizon: 1, distinctDays: 18, verdict: "INSUFFICIENT", vsEwma: null }));
   assert.equal(r.state, "insufficient");
   assert.equal(r.lead, false);
-  assert.match(r.text, /being graded live: 18 of 60 trading days \(next day\); 14 of 60 trading days \(next week\)/);
+  assert.match(r.text, /being graded live against a pre-registered test: 18 of 60 trading days \(next day\); 14 of 60 trading days \(next week\)/);
+  // H-11: no claim the verdict has not earned.
+  assert.doesNotMatch(r.text, /most predictable/);
   assert.match(r.text, /becomes this page’s headline if it passes; if it fails, this says so/);
   // Not hard-coded: other counts come straight through.
   assert.match(riskHeadline(rec({ horizon: 1, distinctDays: 33, verdict: "INSUFFICIENT" })).text, /33 of 60/);
@@ -52,6 +54,7 @@ test("the decision ignores the numbers: winning numbers without the pass verdict
 test("past the floor the true day count shows, not a clamped 60", () => {
   const r = riskHeadline(rec({ horizon: 1, distinctDays: 64, verdict: "ACCRUING" }));
   assert.match(r.text, /64 trading days \(floor 60\), awaiting its grade \(next day\)/);
+  assert.doesNotMatch(r.text, /most predictable/);
   assert.doesNotMatch(r.text, /60 of 60/);
   assert.match(r.text, /14 of 60 trading days \(next week\)/);
 });
@@ -68,7 +71,7 @@ test("FAIL: both registered failure verdicts say so plainly, with no promotion",
     const r = riskHeadline(rec({ horizon: 1, distinctDays: 60, verdict: v }));
     assert.equal(r.state, "fail", v);
     assert.equal(r.lead, false);
-    assert.match(r.text, /did not beat its pre-registered baselines/);
+    assert.match(r.text, /did not beat its pre-registered baseline, RiskMetrics EWMA/);
     assert.match(r.text, new RegExp(v.toLowerCase()));
   }
 });
@@ -91,4 +94,23 @@ test("missing or malformed payloads fall back to 'not available' with no claim",
     assert.match(r.text, /not available/);
     assert.doesNotMatch(r.text, /passed|beat/);
   }
+});
+
+test("H-8: a verdict badge is green only for the registered pass, and the page uses that rule", async () => {
+  const { verdictTone } = await import("./riskHeadline.ts");
+  assert.equal(verdictTone("BEATS THE NULLS"), "ok");
+  for (const v of ["NO SKILL DEMONSTRATED", "ESTIMATOR ARTIFACT", "ACCRUING", "SECONDARY", "INSUFFICIENT", "beats the nulls", ""]) {
+    assert.equal(verdictTone(v), "warn", v);
+  }
+  const { readFileSync } = await import("node:fs");
+  const page = readFileSync(new URL("../app/volatility/page.tsx", import.meta.url), "utf8");
+  assert.ok(page.includes('verdictTone(h.verdict) === "ok"'), "the volatility badge must colour by verdictTone");
+  assert.ok(!page.includes('insufficient ? "var(--warn)" : "var(--ok)"'), "sufficiency alone must not turn the badge green");
+});
+
+test("RV-COPY: the pass block marks the next-week forecast as not graded", async () => {
+  const { readFileSync } = await import("node:fs");
+  const c = readFileSync(new URL("../components/home/RiskFirst.tsx", import.meta.url), "utf8");
+  assert.ok(c.includes("Next week (not graded)"));
+  assert.ok(c.includes("the next-week figure is shown ungraded"));
 });
