@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import TodaysRead from "@/components/home/TodaysRead";
 import VolRegimeLead from "@/components/home/VolRegimeLead";
 import ProofStrip from "@/components/home/ProofStrip";
+import { WHAT_SIGNALDECK_IS } from "@/lib/hypothetical";
 
 const MORE = [
   { href: "/market/regimes", label: "All regime reads" },
@@ -48,9 +49,12 @@ export default function TodayPage() {
           SignalDeck&rsquo;s validated reads, each with the accuracy it has actually measured, and the
           live record that grades every call. What it cannot predict, it says so.
         </p>
+        <p className="m-0 mt-1 max-w-[75ch] text-[0.8rem]" style={{ color: "var(--faint)" }}>
+          {WHAT_SIGNALDECK_IS}
+        </p>
       </header>
       {watch !== undefined && <TodaysRead watchSymbols={watch} />}
-      <VolRegimeLead />
+      <VolRegimeLead memberView />
       <ProofStrip />
       <nav aria-label="More from SignalDeck" className="panel flex flex-wrap gap-2 px-4 py-3 text-[0.85rem]">
         {MORE.map((m) => (

@@ -18,6 +18,7 @@ import {
   type StructRegimeForecast,
   type VolRegimeForecast,
 } from "@/lib/api";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 type Chip = { label: string; regime: string; accuracy: number };
 
@@ -271,6 +272,7 @@ export default function MemberWatchlist() {
         </Link>
         . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.
       </p>
+      <HypotheticalNote short />
     </section>
   );
 }

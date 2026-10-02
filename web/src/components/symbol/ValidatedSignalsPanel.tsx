@@ -35,6 +35,7 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HelpTip from "@/components/HelpTip";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 /** Reading order: the validated edge first, the un-tradeable trends last. */
 const KIND_ORDER = [
@@ -233,6 +234,7 @@ export default function ValidatedSignalsPanel({
           measured walk-forward · per-band accuracy
         </span>
       </div>
+      {memberView && <HypotheticalNote short className="px-4 pt-2" />}
 
       {err !== null && rows.length === 0 && (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>

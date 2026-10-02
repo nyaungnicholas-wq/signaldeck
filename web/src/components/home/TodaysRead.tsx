@@ -37,6 +37,7 @@ import type {
   StructRegimeForecast,
 } from "@/lib/api";
 import { structuralRegimes } from "@/lib/api";
+import HypotheticalNote from "@/components/HypotheticalNote";
 
 function symbolHref(symbol: string, market?: Market): string {
   const m: Market = market ?? (symbol.includes("/") ? "crypto" : "stocks");
@@ -203,6 +204,7 @@ export default function TodaysRead({
             {best.persistenceOnly ? "persistence statistic" : "measured-skill forecast"} about
             market <em>structure</em>, not a price target.
           </p>
+          <HypotheticalNote short />
 
           {/* the accuracy-vs-return disclosure, verbatim when the daemon ships it */}
           {best.fc.tradeability ? (
