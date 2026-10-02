@@ -75,6 +75,14 @@ class TestVerdict(unittest.TestCase):
                 lines = [ln for ln in out.splitlines() if ln.strip()]
                 self.assertTrue(lines[-1].startswith("VERIFY RESULT: INCOMPLETE"))
 
+    def test_history_without_git_is_a_skip(self):
+        # A ZIP download has no .git: the append-only checks did not run, so a
+        # --site run must not end PASS on them.
+        with tempfile.TemporaryDirectory() as repo:
+            rep = vpr.Report(quiet=True)
+            vpr.check_history(repo, [], rep)
+            self.assertEqual((rep.n["SKIP"], rep.n["PASS"]), (1, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

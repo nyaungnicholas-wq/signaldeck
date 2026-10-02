@@ -272,7 +272,7 @@ def check_ots(stmts, rep):
 
 def check_history(repo, stmts, rep):
     if shutil.which("git") is None or not os.path.isdir(os.path.join(repo, ".git")):
-        rep("WARN", "history: git or REPO/.git missing; append-only checks skipped")
+        rep("SKIP", "history: git or REPO/.git missing; append-only checks skipped")
         return
     for path in ("anchors.log", "prereg.log"):
         _, out = run(["git", "-C", repo, "log", "--reverse", "--format=%H", "--", path])
