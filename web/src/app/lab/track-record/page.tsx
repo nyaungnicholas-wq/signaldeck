@@ -36,6 +36,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
 import HelpTip from "@/components/HelpTip";
+import { ledgerHeadline } from "@/lib/ledgerHeadline";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -107,6 +108,8 @@ export default function TrackRecordPage() {
   }, [horizon, retryTick]);
 
   const current = data && data.horizon === horizon ? data : null;
+  // Same verdict as the /proof headline: `intact` alone reads a regenerated chain green.
+  const ledgerHead = current?.ledger ? ledgerHeadline(current.ledger) : null;
   const loading = !current && !err;
   const gated = current?.gated ?? true;
 
@@ -599,12 +602,12 @@ export default function TrackRecordPage() {
                       <span
                         className="chip"
                         style={
-                          current.ledger.intact
+                          ledgerHead?.tone === "ok"
                             ? { color: "var(--ok)", borderColor: "var(--ok)" }
                             : { color: "var(--bad)", borderColor: "var(--bad)" }
                         }
                       >
-                        {current.ledger.intact ? "chain intact" : "chain BROKEN"}
+                        {ledgerHead?.tone === "ok" ? "chain intact" : ledgerHead?.text}
                       </span>
                       <span className="tnum" style={{ color: "var(--dim)" }}>
                         {current.ledger.count.toLocaleString("en-US")} entries

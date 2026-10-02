@@ -12,6 +12,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
@@ -344,8 +345,22 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 
 	// Self-verifying links: ledger integrity (Stage 3, incremental checkpoint
 	// path — cold-load precompute wave) + paper equity (Stage 4).
+	//
+	// The ledger block carries what /proof's headline reads (web ledgerHeadline):
+	// a consistent chain whose signed anchors no longer reproduce is NOT intact
+	// evidence, and a chip that saw `intact` alone read green over a regenerated
+	// chain. Anchors are checked against the stored heads, as the default
+	// /api/ledger/verify does; nothing is signed here. No anchor verdict, no
+	// block: the chip is not shown rather than shown green.
 	if v, _, verr := d.St.VerifyLedgerCached(ctx); verr == nil {
-		resp["ledger"] = map[string]any{"intact": v.Intact, "count": v.Count, "head": v.HeadHash}
+		if av, aerr := d.St.VerifyLedgerAnchors(ctx, 0, false, ledgeranchor.TrustedKeys()); aerr == nil {
+			led := map[string]any{"intact": v.Intact, "count": v.Count, "head": v.HeadHash,
+				"tamperEvidence": map[string]any{"failingAnchors": av.FailingAnchors}}
+			if v.BrokenAtSeq != nil {
+				led["brokenAtSeq"] = *v.BrokenAtSeq
+			}
+			resp["ledger"] = led
+		}
 	}
 	resp["paper"] = d.paperSummaryForTrackRecord(ctx)
 

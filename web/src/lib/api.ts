@@ -1808,6 +1808,9 @@ export interface TrackLedger {
   intact: boolean;
   count: number;
   head: string;
+  brokenAtSeq?: number;
+  /** Signed anchors that no longer reproduce; read through ledgerHeadline, as /proof does. */
+  tamperEvidence?: { failingAnchors?: number };
 }
 
 /** The /api/track-record payload. Skill numbers are null when `gated`. */

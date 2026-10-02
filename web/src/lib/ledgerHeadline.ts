@@ -6,13 +6,16 @@
 // that history was rewritten after signing -- read green at the headline.
 // `intact` only says the stored rows are internally consistent; a regenerated
 // chain is consistent too, and only the failing anchor tells them apart.
+//
+// Every ledger chip reads through here: /proof, the /today ProofStrip and
+// /lab/track-record (the last two from /api/track-record's ledger block).
 
 export function ledgerHeadline(lv: {
   intact: boolean;
   brokenAtSeq?: number;
   tamperEvidence?: { failingAnchors?: number };
 }): { tone: "ok" | "bad"; text: string } {
-  if (!lv.intact) return { tone: "bad", text: `BROKEN at #${lv.brokenAtSeq}` };
+  if (!lv.intact) return { tone: "bad", text: lv.brokenAtSeq == null ? "BROKEN" : `BROKEN at #${lv.brokenAtSeq}` };
   const failing = lv.tamperEvidence?.failingAnchors ?? 0;
   if (failing > 0) {
     const one = failing === 1;
