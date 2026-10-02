@@ -7,9 +7,12 @@
 // changes. Grouped by the four categories; SIMPLE view-mode shows plain names,
 // PRO appends each indicator's parameters. Popover positioning / dismissal
 // mirrors HelpTip (fixed placement from the button rect, Escape + outside-click
-// close), so it can't be clipped by the chart panel's overflow.
+// close), so it can't be clipped by the chart panel's overflow. Portalled to
+// <body> for the same reason as HelpTip: .panel's backdrop-filter makes the
+// panel the containing block for fixed descendants.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useViewMode } from "@/components/Plain";
 import {
   GROUP_LABEL,
@@ -29,7 +32,7 @@ export default function IndicatorMenu({
 }) {
   const mode = useViewMode();
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -50,11 +53,17 @@ export default function IndicatorMenu({
     if (!btn || !pop) return;
     const r = btn.getBoundingClientRect();
     const pw = pop.offsetWidth;
-    const ph = pop.offsetHeight;
+    // Natural height (scrollHeight), not the height a previous maxHeight capped.
+    const ph = Math.min(pop.scrollHeight, window.innerHeight * 0.7);
     const left = Math.min(Math.max(8, r.left), window.innerWidth - pw - 8);
-    let top = r.bottom + 6;
-    if (top + ph > window.innerHeight - 8 && r.top - ph - 6 >= 8) top = r.top - ph - 6;
-    setPos({ top, left });
+    // Open below unless it only fits above; if it fits neither, take the roomier
+    // side and cap the height to it (the list scrolls) so it never runs off-screen.
+    const below = window.innerHeight - r.bottom - 6 - 8;
+    const above = r.top - 6 - 8;
+    const down = ph <= below || below >= above;
+    const maxHeight = down ? below : above;
+    const top = down ? r.bottom + 6 : r.top - 6 - Math.min(ph, maxHeight);
+    setPos({ top, left, maxHeight });
   }, []);
 
   useLayoutEffect(() => {
@@ -75,7 +84,8 @@ export default function IndicatorMenu({
       if (e.key === "Escape") close(true);
     };
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && !wrapRef.current?.contains(e.target)) close(false);
+      const t = e.target;
+      if (t instanceof Node && !wrapRef.current?.contains(t) && !popRef.current?.contains(t)) close(false);
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointerDown);
@@ -123,72 +133,75 @@ export default function IndicatorMenu({
           <path d="M2.5 4.5L6 8l3.5-3.5" />
         </svg>
       </button>
-      {open && (
-        <div
-          id={popId}
-          ref={popRef}
-          role="dialog"
-          aria-label="chart indicators"
-          className="pop-in fixed z-[1000] max-h-[70vh] w-[min(300px,calc(100vw-16px))] overflow-y-auto rounded-lg border p-2 text-left text-[0.8125rem] font-normal normal-case tracking-normal"
-          style={{
-            top: pos?.top ?? 0,
-            left: pos?.left ?? 0,
-            visibility: pos ? "visible" : "hidden",
-            background: "var(--panel3)",
-            borderColor: "var(--border-strong)",
-            color: "var(--text)",
-            boxShadow: "var(--shadow-2)",
-          }}
-        >
-          <div className="mb-1 flex items-center justify-between px-1">
-            <span className="text-[0.6875rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
-              {count > 0 ? `${count} on` : "none on"}
-            </span>
-            {count > 0 && (
-              <button
-                type="button"
-                onClick={() => onChange([])}
-                className="cursor-pointer text-[0.75rem] underline transition-colors hover:text-[var(--text)]"
-                style={{ color: "var(--dim)" }}
-              >
-                clear all
-              </button>
-            )}
-          </div>
-          {GROUP_ORDER.map((group) => (
-            <div key={group} className="mb-1.5">
-              <div
-                className="px-1 pb-1 pt-1.5 text-[0.6875rem] font-semibold uppercase tracking-wider"
-                style={{ color: "var(--faint)" }}
-              >
-                {GROUP_LABEL[group]}
-              </div>
-              {INDICATOR_META.filter((m) => m.group === group).map((m) => {
-                const on = enabled.has(m.id);
-                return (
-                  <label
-                    key={m.id}
-                    className="flex min-h-[34px] cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--panel2)]"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={() => toggle(m.id)}
-                      className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--accent)]"
-                    />
-                    <span style={{ color: on ? "var(--text)" : "var(--dim)" }}>{m.name}</span>
-                    {mode === "pro" && (
-                      <span className="tnum ml-auto text-[0.6875rem]" style={{ color: "var(--faint)" }}>
-                        {m.params}
-                      </span>
-                    )}
-                  </label>
-                );
-              })}
+      {open &&
+        createPortal(
+          <div
+            id={popId}
+            ref={popRef}
+            role="dialog"
+            aria-label="chart indicators"
+            className="pop-in fixed z-[1000] max-h-[70vh] w-[min(300px,calc(100vw-16px))] overflow-y-auto rounded-lg border p-2 text-left text-[0.8125rem] font-normal normal-case tracking-normal"
+            style={{
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+            maxHeight: pos?.maxHeight,
+              visibility: pos ? "visible" : "hidden",
+              background: "var(--panel3)",
+              borderColor: "var(--border-strong)",
+              color: "var(--text)",
+              boxShadow: "var(--shadow-2)",
+            }}
+          >
+            <div className="mb-1 flex items-center justify-between px-1">
+              <span className="text-[0.6875rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
+                {count > 0 ? `${count} on` : "none on"}
+              </span>
+              {count > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onChange([])}
+                  className="cursor-pointer text-[0.75rem] underline transition-colors hover:text-[var(--text)]"
+                  style={{ color: "var(--dim)" }}
+                >
+                  clear all
+                </button>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+            {GROUP_ORDER.map((group) => (
+              <div key={group} className="mb-1.5">
+                <div
+                  className="px-1 pb-1 pt-1.5 text-[0.6875rem] font-semibold uppercase tracking-wider"
+                  style={{ color: "var(--faint)" }}
+                >
+                  {GROUP_LABEL[group]}
+                </div>
+                {INDICATOR_META.filter((m) => m.group === group).map((m) => {
+                  const on = enabled.has(m.id);
+                  return (
+                    <label
+                      key={m.id}
+                      className="flex min-h-[34px] cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--panel2)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => toggle(m.id)}
+                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--accent)]"
+                      />
+                      <span style={{ color: on ? "var(--text)" : "var(--dim)" }}>{m.name}</span>
+                      {mode === "pro" && (
+                        <span className="tnum ml-auto text-[0.6875rem]" style={{ color: "var(--faint)" }}>
+                          {m.params}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }
