@@ -18,7 +18,7 @@ python verify.py . --site https://<current SignalDeck address>
 
 For a quick check of only the newest interval, add `--statements 2`. That does not re-check older forecasts, and the checker says so.
 
-The last line says `VERIFY RESULT: PASS` or `VERIFY RESULT: FAIL`, and the lines above it say which check produced which verdict.
+The last line says `VERIFY RESULT: PASS` (exit 0), `VERIFY RESULT: FAIL` (exit 1) or `VERIFY RESULT: INCOMPLETE` (exit 3), and the lines above it say which check produced which verdict. INCOMPLETE means nothing failed but a check was skipped: without `--site` the forecasts themselves are not recomputed, so the short version above ends INCOMPLETE, never PASS.
 
 ## Trust roots
 

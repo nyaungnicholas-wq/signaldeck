@@ -5,9 +5,11 @@
     python verify.py --selftest
 
 REPO is a clone of github.com/nyaungnicholas-wq/signaldeck-anchors. Every line
-printed starts PASS, FAIL, WARN, SKIP or INFO; the last line is the verdict and
-the exit status is 0 only when nothing FAILed. See VERIFY.md for what each check
-proves and, as importantly, what it does not.
+printed starts PASS, FAIL, WARN, SKIP or INFO; the last line is the verdict:
+PASS (exit 0) when every check ran and none FAILed, FAIL (exit 1), or
+INCOMPLETE (exit 3) when none FAILed but a check was SKIPped -- without --site
+the forecasts are never recomputed, and that is not a PASS. See VERIFY.md for
+what each check proves and, as importantly, what it does not.
 """
 import argparse
 import base64
@@ -416,6 +418,12 @@ def main(argv):
     if rep.n["FAIL"]:
         print("VERIFY RESULT: FAIL (%d fail, %d pass, %d warn)" % (rep.n["FAIL"], rep.n["PASS"], rep.n["WARN"]))
         return 1
+    # A skipped check proved nothing, so it cannot contribute to a PASS: without
+    # --site this used to print PASS having never recomputed a single forecast.
+    if rep.n["SKIP"] or not rep.n["PASS"]:
+        print("VERIFY RESULT: INCOMPLETE (%d pass, %d warn, %d skipped) -- nothing failed, but the checks marked "
+              "SKIP above did not run, so this is not a PASS" % (rep.n["PASS"], rep.n["WARN"], rep.n["SKIP"]))
+        return 3
     print("VERIFY RESULT: PASS (%d pass, %d warn)" % (rep.n["PASS"], rep.n["WARN"]))
     return 0
 
