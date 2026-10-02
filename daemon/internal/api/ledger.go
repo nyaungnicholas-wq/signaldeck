@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -257,8 +258,16 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 			"Entries appended after that anchor, and any history predating the first anchor, carry no anteriority proof even against that adversary. " +
 			"Against the OPERATOR, who does hold the key, nothing here is evidence: he can re-sign a fabricated chain and every check on this page passes. " +
 			"Only an anchor digest matched against a commitment held by a third party defeats that, and this endpoint verifies no such receipt — see externalWitness."
+	} else if av.ProvenThroughSeq != nil {
+		claim += " A newer anchor still reproduces, but an older signed anchor does not, so NOTHING in this ledger has anteriority evidence — only edit-detection."
 	} else {
 		claim += " No anchor currently reproduces, so NOTHING in this ledger has anteriority evidence — only edit-detection."
+	}
+	// provenAnterior* read as proven whenever non-null (api.ts: null means
+	// "nothing is proven"), so they carry the same gate as `proven`.
+	var provenSeq, provenCount, provenTs *int64
+	if proven {
+		provenSeq, provenCount, provenTs = av.ProvenThroughSeq, av.ProvenThroughCount, av.ProvenThroughTs
 	}
 	if av.Mode == "stored" {
 		claim += " This summary compared anchors against the STORED head hashes; ?full=1 re-derives the chain from payloads, which is the check an auditor should run."
@@ -287,9 +296,9 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 		// prose a client can drop.
 		"localAnchorsReproduce":           proven,
 		"localAnchorReproducesThroughSeq": av.ProvenThroughSeq,
-		"provenAnteriorThroughSeq":        av.ProvenThroughSeq,
-		"provenAnteriorThroughCount":      av.ProvenThroughCount,
-		"provenAnteriorAsOf":              av.ProvenThroughTs,
+		"provenAnteriorThroughSeq":        provenSeq,
+		"provenAnteriorThroughCount":      provenCount,
+		"provenAnteriorAsOf":              provenTs,
 		"anteriorityScope": "against an adversary WITHOUT the signing key; the operator holds it, " +
 			"so this is not evidence against him",
 
@@ -363,16 +372,22 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	anchoring := d.maybeAnchor(r, v)
-	// Summary path: check the newest anchor only. A reproducing anchor fixes
-	// the entire prefix that produced it, so the newest one carries the whole
-	// claim. When the newest anchor fails but an older one would still
-	// reproduce, this reports LESS than is proven — the safe direction, and
-	// /api/ledger/anchors walks the rest.
 	// Every anchor, not just the newest. A newer anchor over a fabricated chain
 	// reproduces fine; the honest OLDER anchor is the thing that reports the
 	// history is gone, and checking only the newest would never surface it.
+	// It runs BEFORE anchoring: a failing anchor vetoes signing a new one.
 	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full)
+	var anchoring map[string]any
+	if err == nil && av.FailingAnchors > 0 {
+		anchoring = map[string]any{"wrote": false, "reason": fmt.Sprintf(
+			"%d previously-signed anchor(s) no longer reproduce (oldest at ledger seq %d) — refusing to sign a new anchor over a contradicted chain",
+			av.FailingAnchors, *av.FirstFailingSeq)}
+	} else if err == nil {
+		anchoring = d.maybeAnchor(r, v)
+		if wrote, _ := anchoring["wrote"].(bool); wrote {
+			av, err = d.St.VerifyLedgerAnchors(ctx, 0, full) // count the anchor just written
+		}
+	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
