@@ -10,6 +10,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -39,9 +40,7 @@ func (s *Store) ForecastDayStats(ctx context.Context, horizon string, since time
 		  SELECT symbol_id, date(ts,'unixepoch') AS d, prob,
 		         ROW_NUMBER() OVER (PARTITION BY symbol_id, date(ts,'unixepoch')
 		                            ORDER BY ts DESC) rn
-		  FROM prediction_outcomes
-		  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
-		    AND prob IS NOT NULL AND ts >= ?
+		  FROM `+gatedOutcomes+`
 		)
 		SELECT d, COUNT(*), COUNT(DISTINCT ROUND(prob, 3))
 		FROM dedup WHERE rn = 1 GROUP BY d ORDER BY d`,
@@ -59,6 +58,44 @@ func (s *Store) ForecastDayStats(ctx context.Context, horizon string, since time
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// gatedOutcomes is the row set the collapse gate measures, for one horizon
+// (?) from one instant (?). ForecastDayStats reads it and
+// ResolvedOutcomeFingerprint identifies it, through this one string, so the two
+// cannot drift: a verdict cached on a fingerprint of DIFFERENT rows would be
+// stale by construction.
+const gatedOutcomes = `prediction_outcomes
+		  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
+		    AND prob IS NOT NULL AND ts >= ?`
+
+// ResolvedOutcomeFingerprint identifies the gatedOutcomes rows for one horizon,
+// so a verdict computed from them (api/collapsecache.go) can be reused until
+// they change. It walks the partial index with one PK probe per row (the index
+// is not covering on this WITHOUT ROWID table) and sorts nothing: ~1/3 of
+// ForecastDayStats, 32 ms vs 100 ms over the 35k-row 1d window on the
+// 2026-10-01 snapshot. It still grows with the window, as the gate does.
+//
+// Membership is the whole input. No daemon path updates prob, symbol_id,
+// horizon or ts of an existing row (prob is written once by INSERT OR IGNORE;
+// the other three are the primary key), so the set changes only by a row
+// entering (a resolution) or leaving (up or resolved_at set back to NULL; no
+// code path does that today, and the pending 1d quarantine script stamps
+// basis_epoch, which the gate does not read). Either moves COUNT unless both
+// happen between two reads, and the sums tell such a same-count swap apart.
+// ponytail: sums, not a hash; an exactly balanced swap (equal count, symbol and
+// ts sums) between two reads would collide, as would an out-of-band rewrite of
+// prob. A trigger-kept generation row is the exact, O(1) upgrade.
+func (s *Store) ResolvedOutcomeFingerprint(ctx context.Context, horizon string, since time.Time) (string, error) {
+	var n, sumSym, sumTs int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(symbol_id), 0), COALESCE(SUM(ts), 0)
+		FROM `+gatedOutcomes,
+		horizon, since.Unix()).Scan(&n, &sumSym, &sumTs)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d/%d/%d", n, sumSym, sumTs), nil
 }
 
 // ForecastBucket is one confidence band's claim measured against its outcome.

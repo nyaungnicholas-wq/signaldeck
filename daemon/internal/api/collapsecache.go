@@ -2,57 +2,80 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
 
-// CollapseRefusalCache memoizes a REFUSED collapse verdict, never a pass.
+// CollapseVerdictCache memoizes the collapse verdict, pass OR refusal, keyed on
+// the identity of the data the gate reads.
 //
-// collapsedGradingWindow window-sorts every resolved forecast since the grading
-// epoch (~130k rows per weekly horizon, ~1.4s measured 2026-09-30) and the
-// homepage calls it on every render. Caching only the refusal keeps the gate's
-// fail-closed direction: a stale refusal can only over-refuse, which the gate
-// already accepts (it reads a superset of the graded days on purpose), while a
-// pass is recomputed every call so a newly collapsed day can never publish late.
-// The window starts at a constant epoch, so a refusal clears only by
-// re-registration — a code change and restart, which drops this cache anyway.
+// It used to cache only a refusal and recompute every pass "so a newly
+// collapsed day can never publish late". That kept the gate exact but put its
+// whole cost on every /api/accuracy and homepage track-record call: measured on
+// the 2026-10-01 snapshot the gate is ~100 ms of a ~106 ms handler, and under
+// host CPU starvation (2026-10-02 01:00 and after the 03:30 deploy) the same
+// work ran past the web's 6 s fetch timeout, so visitors were told the grader
+// was out.
+//
+// The gate's entire input is the set of gated horizons (gatedHorizons) and, per
+// horizon, the resolved rows ForecastDayStats reads. The key is exactly that:
+// each horizon with store.ResolvedOutcomeFingerprint over the same rows. A new
+// resolution (or a label leaving the set) changes the key, so the gate re-runs
+// and can refuse on the very next read; nothing ages out on a clock, so there is
+// no TTL. The fingerprint is read BEFORE the gate: if rows land in between, the
+// verdict is stored under the older key and the next read recomputes.
+//
+// FAIL CLOSED. An unreadable fingerprint cannot be matched to a cached pass, and
+// a pass is the one verdict that publishes, so it is never served on one. A
+// cached refusal still stands (it can only over-refuse); otherwise the error
+// goes back to the caller, and both callers refuse on it. A gate error is
+// returned, never cached.
 //
 // nil (tests, the publication gate tool) means no caching.
-// ponytail: one entry keyed on the registry's horizons; per-key map if callers diverge.
-type CollapseRefusalCache struct {
-	TTL time.Duration
-
-	mu     sync.Mutex
-	key    string
-	reason string
-	at     time.Time
+// ponytail: one entry; a per-key map if callers ever pass different registries.
+type CollapseVerdictCache struct {
+	mu        sync.Mutex
+	key       string
+	reason    string
+	collapsed bool
 }
 
 func (d Deps) collapsedGradingWindowCached(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
 	c := d.CollapseCache
-	if c == nil {
+	hs := gatedHorizons(reg)
+	if c == nil || len(hs) == 0 {
 		return d.collapsedGradingWindow(ctx, reg, now)
 	}
-	var hs []string
-	for _, r := range reg.Rows {
-		hs = append(hs, r.Predictor)
+	parts := make([]string, 0, len(hs))
+	for _, h := range hs {
+		fp, err := d.St.ResolvedOutcomeFingerprint(ctx, h, gateSince())
+		if err != nil {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.key != "" && c.collapsed {
+				return c.reason, true, nil
+			}
+			return "", false, fmt.Errorf("collapse gate: rows unidentifiable: %w", err)
+		}
+		parts = append(parts, h+"="+fp)
 	}
-	key := reg.GradedAt + "|" + strings.Join(hs, ",")
+	key := strings.Join(parts, ";")
 	c.mu.Lock()
-	if c.key == key && time.Since(c.at) < c.TTL {
-		reason := c.reason
+	if c.key == key {
+		reason, collapsed := c.reason, c.collapsed
 		c.mu.Unlock()
-		return reason, true, nil
+		return reason, collapsed, nil
 	}
 	c.mu.Unlock()
 	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
-	c.mu.Lock()
-	if err == nil && collapsed {
-		c.key, c.reason, c.at = key, reason, time.Now()
-	} else {
-		c.key = "" // a pass or an error must not leave an old refusal behind
+	if err != nil {
+		// Not cached: the entry left in place is keyed to its own rows.
+		return reason, collapsed, err
 	}
+	c.mu.Lock()
+	c.key, c.reason, c.collapsed = key, reason, collapsed
 	c.mu.Unlock()
-	return reason, collapsed, err
+	return reason, collapsed, nil
 }

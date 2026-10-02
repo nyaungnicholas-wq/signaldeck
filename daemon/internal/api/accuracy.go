@@ -525,33 +525,10 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 // evidence of a collapse" was never the same thing as "evidence there was
 // none", and the caller used to treat it as though it were.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
-	// Per-horizon windows. This used to take ONE global max distinct_days and
-	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
-	// collapse confined to the 1w cross-section could not refuse anything, and
-	// a 1d collapse refused rows it had not measured. Each horizon present in
-	// the registry is now checked against its OWN day stats and its own depth.
-	depth := map[string]int{}
-	for _, r := range reg.Rows {
-		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
-			continue
-		}
-		_, horizon, _ := splitPredictor(r.Predictor)
-		if horizon == "" {
-			continue
-		}
-		if *r.DistinctDays > depth[horizon] {
-			depth[horizon] = *r.DistinctDays
-		}
-	}
-	if len(depth) == 0 {
+	horizons := gatedHorizons(reg)
+	if len(horizons) == 0 {
 		return "", false, nil
 	}
-	// Sorted so the refusal text is stable across polls.
-	horizons := make([]string, 0, len(depth))
-	for h := range depth {
-		horizons = append(horizons, h)
-	}
-	sort.Strings(horizons)
 
 	var bad []string
 	total := 0
@@ -569,7 +546,7 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 	// comment named. Reading from the epoch is a superset of the graded days
 	// (the grader also drops thin, unsettled and stale-feed days), so it can
 	// only over-refuse, never under-refuse.
-	since := time.Unix(store.GradingEpoch, 0).UTC()
+	since := gateSince()
 	for _, h := range horizons {
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {
@@ -588,6 +565,42 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 		return "", false, nil
 	}
 	return buildCollapseReason(bad, total), true, nil
+}
+
+// gateSince is where the collapse gate's window opens: the survivorship epoch.
+// The verdict cache fingerprints from the same instant, so the two cannot drift.
+func gateSince() time.Time { return time.Unix(store.GradingEpoch, 0).UTC() }
+
+// gatedHorizons is the sorted set of horizons the collapse gate checks: every
+// registry horizon with a positive distinct_days. These, plus the resolved rows
+// it reads per horizon, are the gate's ENTIRE input; the verdict cache keys on
+// exactly that.
+func gatedHorizons(reg *registryFile) []string {
+	// Per-horizon windows. This used to take ONE global max distinct_days and
+	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
+	// collapse confined to the 1w cross-section could not refuse anything, and
+	// a 1d collapse refused rows it had not measured. Each horizon present in
+	// the registry is now checked against its OWN day stats and its own depth.
+	depth := map[string]int{}
+	for _, r := range reg.Rows {
+		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
+			continue
+		}
+		_, horizon, _ := splitPredictor(r.Predictor)
+		if horizon == "" {
+			continue
+		}
+		if *r.DistinctDays > depth[horizon] {
+			depth[horizon] = *r.DistinctDays
+		}
+	}
+	// Sorted so the refusal text is stable across polls.
+	horizons := make([]string, 0, len(depth))
+	for h := range depth {
+		horizons = append(horizons, h)
+	}
+	sort.Strings(horizons)
+	return horizons
 }
 
 // buildCollapseReason is split out so the wording is assertable without a
