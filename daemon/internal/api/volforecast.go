@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -41,7 +42,47 @@ const volRecordPersistFormat = 1
 // serveVolRecord is GET /api/vol-forecast/record through the shared cache; the
 // route and WarmCaches both use this entry and file.
 func (d Deps) serveVolRecord(w http.ResponseWriter, r *http.Request) {
-	sharedVolRecordSWR.serveAt(d.cacheFile(volRecordCacheName, volRecordPersistFormat), d.St.CacheKey()+"|record", w, r, d.volForecastRecord)
+	sharedVolRecordSWR.serveAt(d.cacheFile(volRecordCacheName, volRecordPersistFormat), d.St.CacheKey()+"|record", w, r, volRecordSource(d))
+}
+
+// volRecordSource renders the record. A variable only so a test can inject a
+// verdict: the live record emits no pass verdict until the grader writes one.
+var volRecordSource = func(d Deps) http.HandlerFunc { return d.volForecastRecord }
+
+// volPassVerdict is the pre-registered pass (internal/volprereg DecisionRule).
+const volPassVerdict = "BEATS THE NULLS"
+
+// sharedVolLatestSWR fronts GET /api/vol-forecast/latest: same cadence as the
+// record it is gated on.
+var sharedVolLatestSWR = newSWRBodyCache(10 * time.Minute)
+
+func (d Deps) serveVolLatest(w http.ResponseWriter, r *http.Request) {
+	sharedVolLatestSWR.serve(d.St.CacheKey()+"|latest", w, r, d.volForecastLatest)
+}
+
+// headlineVerdict is the record's horizon-1 verdict, read through the record's
+// own cache rather than recomputed ("" when the record cannot be read).
+func (d Deps) headlineVerdict(r *http.Request) string {
+	rec := &bodyRecorder{ResponseWriter: &discardResponseWriter{header: http.Header{}}}
+	sharedVolRecordSWR.serveAt(d.cacheFile(volRecordCacheName, volRecordPersistFormat), d.St.CacheKey()+"|record", rec, r, volRecordSource(d))
+	if rec.status != 0 && rec.status != http.StatusOK {
+		return ""
+	}
+	var body struct {
+		Horizons []struct {
+			Horizon int    `json:"horizon"`
+			Verdict string `json:"verdict"`
+		} `json:"horizons"`
+	}
+	if json.Unmarshal(rec.buf, &body) != nil {
+		return ""
+	}
+	for _, h := range body.Horizons {
+		if h.Horizon == 1 {
+			return h.Verdict
+		}
+	}
+	return ""
 }
 
 // volForecastRecord renders the record (see its comment above). The body's
@@ -166,7 +207,24 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 // coefficients and realised outcomes stay off this route; the record that
 // grades the forecast is /api/vol-forecast/record. It takes no input, so every
 // member reads the same bytes.
+//
+// GATED ON THE SERVER (plan step 9): per-symbol forecasts are served only while
+// the record's horizon-1 verdict is exactly the registered pass; otherwise the
+// answer is {"available": false, "reason": ...} with no forecast in it, so no
+// client can show an unvalidated number by skipping the web's gate.
 func (d Deps) volForecastLatest(w http.ResponseWriter, r *http.Request) {
+	if v := d.headlineVerdict(r); v != volPassVerdict {
+		if v == "" {
+			v = "unavailable"
+		}
+		writeJSON(w, map[string]any{
+			"available": false,
+			"verdict":   v,
+			"reason": "Per-symbol volatility forecasts are published only once the live record's " +
+				"pre-registered verdict for the next-day forecast is " + volPassVerdict + "; it is " + v + ".",
+		})
+		return
+	}
 	rows, err := d.St.LatestRVForecasts(r.Context())
 	if err != nil {
 		httpInternal(w, err)
@@ -183,6 +241,7 @@ func (d Deps) volForecastLatest(w http.ResponseWriter, r *http.Request) {
 		out = append(out, fc{Symbol: f.Symbol, Horizon: f.Horizon, AsOf: f.Ts, VolPct: annualVolPct(f.RVHat)})
 	}
 	writeJSON(w, map[string]any{
+		"available": true,
 		"forecasts": out,
 		"what": "Forecast realized volatility, annualised, in percent: horizon 1 is the next session, " +
 			"horizon 5 the mean over the next five. A risk number, not a price direction.",

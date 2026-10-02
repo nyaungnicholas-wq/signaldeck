@@ -50,6 +50,7 @@ test("the footer says where answers come from and that they are not advice", () 
   assert.match(page, /api\.askStatus\(\)/);
   assert.match(page, /api\.ask\(/);
   assert.match(page, /status\.available/, "the form waits for the daemon's verdict");
+  assert.match(page, /q\.truncated &&[\s\S]*truncated: more rows matched than shown/, "a truncated query says so");
 });
 
 test("operators get ASK in the nav; members only while the daemon offers it", () => {

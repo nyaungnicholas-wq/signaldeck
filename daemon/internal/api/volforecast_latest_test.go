@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +18,23 @@ import (
 // TestVolForecastLatestServesOnlyTodaysDerivedForecasts: the member route
 // returns the newest call bar per horizon only, stocks only, and exactly the
 // derived fields (no null, coefficient or outcome).
+// recordVerdict injects a record whose horizon-1 verdict is v, through the
+// record's own source, for the life of the test.
+func recordVerdict(t *testing.T, v string) {
+	t.Helper()
+	old := volRecordSource
+	volRecordSource = func(Deps) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, map[string]any{"horizons": []map[string]any{
+				{"horizon": 1, "verdict": v}, {"horizon": 5, "verdict": volPassVerdict}}})
+		}
+	}
+	t.Cleanup(func() { volRecordSource = old })
+}
+
 func TestVolForecastLatestServesOnlyTodaysDerivedForecasts(t *testing.T) {
 	ctx := context.Background()
+	recordVerdict(t, volPassVerdict)
 	_, st, d := newTestServer(t, nil)
 	sym := func(s string, m md.Market) int64 {
 		v, err := st.UpsertSymbol(ctx, s, m, "")
@@ -73,5 +90,37 @@ func TestVolForecastLatestServesOnlyTodaysDerivedForecasts(t *testing.T) {
 	want := []row{{"AAA", 1, float64(cur), 31.7}, {"AAA", 5, float64(cur), 15.9}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestVolForecastLatestIsGatedOnTheVerdict: until the record's horizon-1
+// verdict is the registered pass, the route serves no forecast at all, even
+// with forecasts in the store and a passing horizon 5.
+func TestVolForecastLatestIsGatedOnTheVerdict(t *testing.T) {
+	ctx := context.Background()
+	for _, v := range []string{"INSUFFICIENT", "ACCRUING", "NO SKILL DEMONSTRATED", "ESTIMATOR ARTIFACT", "beats the nulls"} {
+		recordVerdict(t, v)
+		_, st, d := newTestServer(t, nil)
+		s, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.UpsertRVForecast(ctx, store.RVForecast{SymbolID: s.ID, Ts: 1_790_086_400, Horizon: 1, RVHat: 0.0004,
+			NullRW: 0.1, NullEWMA: 0.1, NTrain: 600, Revision: "t"}, time.Unix(1_790_086_400, 0)); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		d.serveVolLatest(rec, httptest.NewRequest("GET", "/api/vol-forecast/latest", nil))
+		body := rec.Body.String()
+		if rec.Code != 200 || !strings.Contains(body, `"available":false`) || strings.Contains(body, `"forecasts":`) ||
+			strings.Contains(body, "AAA") {
+			t.Errorf("verdict %q: %d %s, want available:false and no forecast", v, rec.Code, body)
+		}
+		// The route is cached (store-keyed SWR): a second read is a hit.
+		rec = httptest.NewRecorder()
+		d.serveVolLatest(rec, httptest.NewRequest("GET", "/api/vol-forecast/latest", nil))
+		if rec.Header().Get("X-Cache") != "hit" {
+			t.Errorf("second read of /api/vol-forecast/latest was not a cache hit: %q", rec.Header().Get("X-Cache"))
+		}
 	}
 }

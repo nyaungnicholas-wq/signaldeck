@@ -21,6 +21,15 @@ func (s *Store) OpenQueryOnly() (*sql.DB, error) {
 	return db, nil
 }
 
+// AskCount is uid's "ask the data" count for the UTC day, without counting.
+func (s *Store) AskCount(ctx context.Context, uid int64, day string) (int, error) {
+	v, err := s.GetMeta(ctx, "copilot_ask:"+day+":"+strconv.FormatInt(uid, 10))
+	if err != nil || v == "" {
+		return 0, err
+	}
+	return strconv.Atoi(v)
+}
+
 // IncrAskCount counts one "ask the data" question for uid on the UTC day
 // (YYYY-MM-DD) and returns the day's total, persisted in meta so a restart
 // cannot reset a member's daily cap. It runs on the account writer: a person

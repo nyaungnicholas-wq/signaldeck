@@ -734,9 +734,14 @@ export interface Me {
  *  strips closes, sparks, day change and scores for members (vendor-licensed). */
 /** GET /api/vol-forecast/latest: current HAR forecasts, annualised vol in percent. */
 export interface VolForecastLatest {
-  forecasts: { symbol: string; horizon: number; asOf: number; volPct: number }[];
-  what: string;
-  caveat: string;
+  // The daemon serves forecasts only while the record's next-day verdict is
+  // BEATS THE NULLS; otherwise available is false and only reason is set.
+  available: boolean;
+  reason?: string;
+  verdict?: string;
+  forecasts?: { symbol: string; horizon: number; asOf: number; volPct: number }[];
+  what?: string;
+  caveat?: string;
 }
 
 export interface MemberWatchRow extends SymbolInfo {

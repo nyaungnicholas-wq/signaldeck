@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,7 +32,18 @@ import (
 const (
 	askCapMember   = 20
 	askCapOperator = 200
+	// askMemberPool caps member asks per UTC day across ALL members, persisted
+	// under uid 0 (never a user id), so members cannot spend the LLM budget
+	// the operator's features run on.
+	askMemberPool    = 300
+	askMemberPoolUID = 0
+	// askMemberHeadroom: members are refused once the LLM layer's own daily
+	// counter passes this share of its cap, leaving the rest to the operator.
+	askMemberHeadroom = 0.70
 )
+
+// askInFlight holds the users with an ask running: one at a time per user.
+var askInFlight sync.Map
 
 const askMemberOff = "Ask the data is not available to member accounts yet"
 
@@ -41,19 +53,35 @@ type askCatalogEntry struct {
 	Params []copilot.Param `json:"params"`
 }
 
-// askAccess is who may ask: the tier, or a refusal status and message.
+// askAccess is who may ask: the tier, or a refusal status and message. The
+// operator tier needs the ACTUAL admin (or the API token, which resolves to
+// the admin), on any deployment: before publish "not a member" covered every
+// signed-in account, and an account that is not the admin gets the member
+// tier here, so only when the member flag is on.
 func (d Deps) askAccess(r *http.Request) (copilot.Tier, int, string) {
+	uid := userID(r)
+	admin := uid != 0 && d.isAdminUID(r.Context(), uid)
 	switch {
-	case userID(r) == 0:
+	case uid == 0:
 		return "", http.StatusUnauthorized, "sign in to ask the data"
-	case d.isMember(r) && !d.Cfg.MemberCopilot:
+	case !admin && !d.Cfg.MemberCopilot:
 		return "", http.StatusForbidden, askMemberOff
 	case d.LLM == nil || !d.LLM.Enabled():
 		return "", http.StatusServiceUnavailable, "Ask the data needs the AI layer, which is not configured on this deployment"
-	case d.isMember(r):
+	case !admin:
 		return copilot.TierMember, 0, ""
 	}
 	return copilot.TierOperator, 0, ""
+}
+
+// memberHeadroomGone is true once the LLM layer's counter for TODAY is past
+// askMemberHeadroom of its cap. Until the first LLM call of a process the
+// counter reads empty (it loads the persisted count on that call); the
+// persisted askMemberPool budget is what bounds members in that window.
+func (d Deps) memberHeadroomGone() bool {
+	s := d.LLM.Stats()
+	return s.DailyCap > 0 && s.Day == time.Now().UTC().Format("2006-01-02") &&
+		float64(s.Calls) >= askMemberHeadroom*float64(s.DailyCap)
 }
 
 func (d Deps) askStatus(w http.ResponseWriter, r *http.Request) {
@@ -91,21 +119,37 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "ask a question of 1 to 500 characters")
 		return
 	}
-	db, err := d.St.OpenQueryOnly()
-	if err != nil {
-		httpInternal(w, err)
+	uid, ctx, day := userID(r), r.Context(), askDay()
+	if _, busy := askInFlight.LoadOrStore(uid, struct{}{}); busy {
+		httpErr(w, http.StatusTooManyRequests, "one question at a time: wait for your last answer")
 		return
 	}
-	defer db.Close() //nolint:errcheck
-	// The daily cap counts every ask that reaches the model, including a plan
+	defer askInFlight.Delete(uid)
+	member := tier == copilot.TierMember
+	if member {
+		if d.memberHeadroomGone() {
+			httpErr(w, http.StatusTooManyRequests, "Ask the data is busy today; try again after UTC midnight")
+			return
+		}
+		used, err := d.St.AskCount(ctx, askMemberPoolUID, day)
+		if err != nil {
+			httpInternal(w, err)
+			return
+		}
+		if used >= askMemberPool {
+			httpErr(w, http.StatusTooManyRequests, "today's member questions are used up; they reset at UTC midnight")
+			return
+		}
+	}
+	// The daily caps count every ask that reaches the model, including a plan
 	// the catalog then refuses (it cost an LLM call). Everything above (401,
-	// 403, 503, a 400 question, a store error) refused before any LLM call and
-	// is not counted.
+	// 403, 503, a 400 question, one already in flight, no headroom, the member
+	// pool spent) refused before any LLM call and is not counted.
 	limit := askCapOperator
-	if tier == copilot.TierMember {
+	if member {
 		limit = askCapMember
 	}
-	n, err := d.St.IncrAskCount(r.Context(), userID(r), askDay())
+	n, err := d.St.IncrAskCount(ctx, uid, day)
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -114,7 +158,20 @@ func (d Deps) ask(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusTooManyRequests, "you have used today's questions; the limit resets at UTC midnight")
 		return
 	}
-	res, err := copilot.Asker{LLM: d.LLM, DB: db, Tier: tier, UID: userID(r)}.Ask(r.Context(), q)
+	if member {
+		if _, err := d.St.IncrAskCount(ctx, askMemberPoolUID, day); err != nil {
+			httpInternal(w, err)
+			return
+		}
+	}
+	// Opened only now: every refusal above costs no connection.
+	db, err := d.St.OpenQueryOnly()
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	defer db.Close() //nolint:errcheck
+	res, err := copilot.Asker{LLM: d.LLM, DB: db, Tier: tier, UID: uid}.Ask(ctx, q)
 	switch {
 	case err == nil:
 		writeJSON(w, res)

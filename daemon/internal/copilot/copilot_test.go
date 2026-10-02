@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -149,7 +150,7 @@ func TestCatalogRunsOnTheSchema(t *testing.T) {
 			if !reflect.DeepEqual(cols, q.Columns) {
 				t.Errorf("%s returns %v, declares %v", q.Name, cols, q.Columns)
 			}
-			if _, err := Run(ctx, db, q, params, 1); err != nil {
+			if _, _, err := Run(ctx, db, q, params, 1); err != nil {
 				t.Errorf("%s via Run: %v", q.Name, err)
 			}
 		}
@@ -259,6 +260,10 @@ func TestCheckCitations(t *testing.T) {
 		"facts as a cannot-answer": "AAPL is calm [q1:r1]. The rows do not cover MSFT, but MSFT is in a downtrend.",
 		"long cannot-answer":       "AAPL is calm [q1:r1]. The rows do not say so but every other stock here is in an uptrend now.",
 	}
+	// An id glued into a word is not a citation (the web's \b...\b agrees).
+	if _, ok := CheckCitations("AAPL is calm xq1:r1.", rows); ok {
+		t.Error("an id inside a word counted as a citation")
+	}
 	if _, ok := CheckCitations("AAPL is in a calm regime.", rows); ok {
 		t.Error("a single uncited non-numeric sentence was accepted")
 	}
@@ -286,7 +291,7 @@ func TestReadOnlyEnforced(t *testing.T) {
 		if _, err := db.ExecContext(ctx, w); err == nil || !strings.Contains(strings.ToLower(err.Error()), "readonly") {
 			t.Errorf("%s on the query-only pool: %v, want a readonly refusal", w, err)
 		}
-		if _, err := runSQL(ctx, db, w, 1); err == nil {
+		if _, _, err := runSQL(ctx, db, w, 1); err == nil {
 			t.Errorf("runSQL ran a write: %s", w)
 		}
 	}
@@ -294,7 +299,7 @@ func TestReadOnlyEnforced(t *testing.T) {
 		t.Fatal("a write landed through the query-only pool")
 	}
 	// The pool still reads, and the normal store still writes.
-	if _, err := runSQL(ctx, db, `SELECT COUNT(*) AS n FROM meta`, 1); err != nil {
+	if _, _, err := runSQL(ctx, db, `SELECT COUNT(*) AS n FROM meta`, 1); err != nil {
 		t.Fatalf("query-only pool cannot read: %v", err)
 	}
 	if err := st.SetMeta(ctx, "copilot_probe", "1"); err != nil {
@@ -309,7 +314,7 @@ func TestQueryTimeout(t *testing.T) {
 	QueryTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { QueryTimeout = old })
 	start := time.Now()
-	_, err := runSQL(context.Background(), db,
+	_, _, err := runSQL(context.Background(), db,
 		`WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT MAX(x) FROM c`, 1)
 	if err == nil {
 		t.Fatal("an endless query returned")
@@ -438,11 +443,11 @@ func TestMemberCatalogIsImpersonal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a, err := Run(ctx, db, q, p, ann)
+		a, _, err := Run(ctx, db, q, p, ann)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := Run(ctx, db, q, p, bob)
+		b, _, err := Run(ctx, db, q, p, bob)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +461,7 @@ func TestMemberCatalogIsImpersonal(t *testing.T) {
 		if reflect.DeepEqual(a, b) || len(a) != 1 || a[0]["calls"] != int64(1) || b[0]["calls"] != int64(2) {
 			t.Errorf("%s must read only the caller's own rows: ann %v, bob %v", q.Name, a, b)
 		}
-		if _, err := Run(ctx, db, q, p, 0); err == nil {
+		if _, _, err := Run(ctx, db, q, p, 0); err == nil {
 			t.Errorf("%s ran with no caller", q.Name)
 		}
 	}
@@ -475,7 +480,7 @@ func TestTrackRecordFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, p, err := Validate(TierMember, "directional_track_record", map[string]any{"days": 30.0})
+	q, p, err := Validate(TierMember, "directional_track_record", map[string]any{"days": "30"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,12 +494,94 @@ func TestTrackRecordFloor(t *testing.T) {
 		if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, ts, 0.01); err != nil {
 			t.Fatal(err)
 		}
-		rows, err := Run(ctx, db, q, p, 0)
+		rows, _, err := Run(ctx, db, q, p, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if want := map[bool]int{true: 1, false: 0}[i >= 10]; len(rows) != want {
 			t.Fatalf("%d resolved: %d rows, want %d: %v", i, len(rows), want, rows)
+		}
+	}
+}
+
+// TestAdviceIsRejected: an answer in the language of a recommendation falls
+// back to the rows, however well cited.
+func TestAdviceIsRejected(t *testing.T) {
+	for _, s := range []string{"Buy AAPL now [q1:r1].", "You should sell MSFT [q1:r1].", "I recommend it [q1:r1].",
+		"Shorting it fits [q1:r1].", "Go long here [q1:r1].", "Allocate 5% [q1:r1].", "Mind your position size [q1:r1].",
+		"Set a stop loss [q1:r1].", "Take profit at the high [q1:r1].", "selling looks wise [q1:r1]."} {
+		if !HasAdvice(s) {
+			t.Errorf("advice not caught: %s", s)
+		}
+	}
+	for _, s := range []string{"AAPL is in an uptrend [q1:r1].", "The buyback filing is public [q1:r1].",
+		"Shortlisted kinds [q1:r1].", "The rows do not answer that."} {
+		if HasAdvice(s) {
+			t.Errorf("not advice, but caught: %s", s)
+		}
+	}
+	st, db := openStore(t)
+	ann, _ := seedTwoMembers(t, st)
+	f := &fakeLLM{plan: `{"queries":[{"query":"regime_forecasts_for_symbol","params":{"symbol":"AAA"}}]}`,
+		answer: func([]Row) string { return "Buy AAA now [q1:r1]." }}
+	for _, tier := range []Tier{TierMember, TierOperator} {
+		res, err := Asker{LLM: f, DB: db, Tier: tier, UID: ann}.Ask(context.Background(), "should I buy AAA?")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Fallback || strings.Contains(res.Answer, "Buy") || len(res.Citations) != 1 {
+			t.Errorf("%s: advice answer must fall back to the rows: %+v", tier, res)
+		}
+	}
+}
+
+// TestTruncatedResultsAreMarked: a query with more rows than its cap is marked
+// truncated, and the answer turn is told not to state totals from it.
+func TestTruncatedResultsAreMarked(t *testing.T) {
+	st, db := openStore(t)
+	ctx := context.Background()
+	q, _ := Find("strongest_regime_calls")
+	for i := 0; i <= q.MaxRows; i++ { // one past the cap
+		s, err := st.UpsertSymbol(ctx, fmt.Sprintf("T%02d", i), md.Stocks, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.UpsertRegimeForecast(ctx, s.ID, time.Now().Unix(), structregime.Forecast{
+			Kind: structregime.KindTrend21, HorizonDays: 21, Regime: "uptrend", Conviction: 0.5, HistoricalAccuracy: 0.6}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, p, _ := Validate(TierMember, q.Name, map[string]any{"kind": "trend21"})
+	rows, truncated, err := Run(ctx, db, q, p, 0)
+	if err != nil || !truncated || len(rows) != q.MaxRows {
+		t.Fatalf("%d rows truncated=%v err=%v, want %d and truncated", len(rows), truncated, err, q.MaxRows)
+	}
+	f := &fakeLLM{plan: `{"queries":[{"query":"strongest_regime_calls","params":{"kind":"trend21"}}]}`,
+		answer: func([]Row) string { return "T00 is in an uptrend [q1:r1]." }}
+	res, err := Asker{LLM: f, DB: db, Tier: TierMember}.Ask(ctx, "which stocks are in an uptrend?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Queries[0].Truncated || !strings.Contains(f.sys[1], "results truncated at 20 rows; do not state totals from them") {
+		t.Errorf("truncation not marked or not told to the model: %+v", res.Queries)
+	}
+	// One under the cap is not truncated.
+	q1, _ := Find("vol_regime_for_symbol")
+	_, p1, _ := Validate(TierMember, q1.Name, map[string]any{"symbol": "T00"})
+	if _, tr, _ := Run(ctx, db, q1, p1, 0); tr {
+		t.Error("an empty result marked truncated")
+	}
+}
+
+func TestTrackRecordDaysIsAMenu(t *testing.T) {
+	for _, bad := range []any{90.0, "60", "7", "", "90 OR 1=1"} {
+		if _, _, err := Validate(TierMember, "directional_track_record", map[string]any{"days": bad}); err == nil {
+			t.Errorf("days %v accepted", bad)
+		}
+	}
+	for _, ok := range []string{"30", "90", "365"} {
+		if _, _, err := Validate(TierMember, "directional_track_record", map[string]any{"days": ok}); err != nil {
+			t.Errorf("days %s refused: %v", ok, err)
 		}
 	}
 }

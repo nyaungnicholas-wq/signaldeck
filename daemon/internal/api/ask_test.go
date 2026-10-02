@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -337,5 +339,147 @@ func TestAskCapCountsOnlyAsksThatReachTheModel(t *testing.T) {
 	}
 	if v := used(st, "owner"); v != "2" {
 		t.Errorf("operator count %q after one answered ask and one refused plan, want 2", v)
+	}
+}
+
+// statsLLM is echoLLM with a settable daily usage and an optional gate that
+// holds the planner turn until released.
+type statsLLM struct {
+	echoLLM
+	stats   llm.Stats
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *statsLLM) Stats() llm.Stats { return s.stats }
+func (s *statsLLM) Complete(ctx context.Context, sys string, m []llm.Message, n int) (string, error) {
+	if s.release != nil && strings.HasPrefix(sys, "You route questions") {
+		s.entered <- struct{}{}
+		<-s.release
+	}
+	return s.echoLLM.Complete(ctx, sys, m, n)
+}
+
+// askDirect drives the handler as uid on a PRIVATE (unpublished) deployment.
+func askDirect(t *testing.T, d Deps, uid int64, q string) (int, string) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"question": q})
+	rec := httptest.NewRecorder()
+	d.ask(rec, withUser(httptest.NewRequest("POST", "/api/ask", bytes.NewReader(b)), uid))
+	return rec.Code, rec.Body.String()
+}
+
+func privateAskServer(t *testing.T, fake llm.Client) (Deps, int64, int64) {
+	t.Helper()
+	_, st, d := newTestServer(t, nil)
+	d.LLM = fake
+	owner, err := st.CreateUser(context.Background(), "owner", "x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := st.CreateUser(context.Background(), "guest", "x", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d, owner, guest
+}
+
+// TestAskOperatorTierNeedsTheAdmin: before publish every signed-in account was
+// "the operator"; the copilot's operator tier needs the actual admin, and any
+// other account is a member, so it asks only with the member flag on.
+func TestAskOperatorTierNeedsTheAdmin(t *testing.T) {
+	fake := &echoLLM{plan: planFor(`{"query":"worker_health","params":{}}`)}
+	d, owner, guest := privateAskServer(t, fake)
+	if d.published() {
+		t.Fatal("the fixture must be a private deployment")
+	}
+	if code, body := askDirect(t, d, guest, "worker health?"); code != 403 {
+		t.Errorf("non-admin on a private box, flag off: %d %s", code, body)
+	}
+	if code, body := askDirect(t, d, owner, "worker health?"); code != 200 {
+		t.Errorf("admin: %d %s", code, body)
+	}
+	d.Cfg.MemberCopilot = true
+	if code, body := askDirect(t, d, guest, "worker health?"); code != 422 {
+		t.Errorf("non-admin with the flag on asked an operator entry: %d %s", code, body)
+	}
+	rec := httptest.NewRecorder()
+	d.askStatus(rec, withUser(httptest.NewRequest("GET", "/api/ask", nil), guest))
+	if strings.Contains(rec.Body.String(), "worker_health") || !strings.Contains(rec.Body.String(), `"dailyLimit":20`) {
+		t.Errorf("non-admin status must be the member catalog: %s", rec.Body)
+	}
+}
+
+// TestAskMemberBudgets: one ask in flight per user; a global member pool per
+// day; and members are refused once the LLM layer passes 70% of its cap. The
+// operator is refused by none of these.
+func TestAskMemberBudgets(t *testing.T) {
+	ctx := context.Background()
+	today := time.Now().UTC().Format("2006-01-02")
+	fake := &statsLLM{echoLLM: echoLLM{plan: planFor(`{"query":"vol_forecast_record","params":{}}`)}}
+	d, owner, guest := privateAskServer(t, fake)
+	d.Cfg.MemberCopilot = true
+
+	// Headroom: at 70% of the LLM cap members stop, the operator does not.
+	fake.stats = llm.Stats{Day: today, DailyCap: 2000, Calls: 1400}
+	if code, body := askDirect(t, d, guest, "vol record?"); code != 429 || !strings.Contains(body, "busy today") {
+		t.Errorf("member at 70%% of the LLM cap: %d %s", code, body)
+	}
+	if code, _ := askDirect(t, d, owner, "vol record?"); code != 200 {
+		t.Errorf("operator at 70%% of the LLM cap: %d", code)
+	}
+	fake.stats.Calls = 1399
+	if code, body := askDirect(t, d, guest, "vol record?"); code != 200 {
+		t.Errorf("member under 70%%: %d %s", code, body)
+	}
+	fake.stats = llm.Stats{Day: "2000-01-01", DailyCap: 2000, Calls: 1999} // yesterday's counter is not today's
+	if code, body := askDirect(t, d, guest, "vol record?"); code != 200 {
+		t.Errorf("member with a stale counter: %d %s", code, body)
+	}
+	if n, _ := d.St.AskCount(ctx, askMemberPoolUID, today); n != 2 {
+		t.Errorf("member pool counted %d member asks, want 2 (the refusal is not one)", n)
+	}
+
+	// The pool: once spent, members stop and the operator does not.
+	if err := d.St.SetMeta(ctx, "copilot_ask:"+today+":0", fmt.Sprint(askMemberPool)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := d.St.AskCount(ctx, guest, today)
+	if code, body := askDirect(t, d, guest, "vol record?"); code != 429 || !strings.Contains(body, "member questions are used up") {
+		t.Errorf("member with the pool spent: %d %s", code, body)
+	}
+	if after, _ := d.St.AskCount(ctx, guest, today); after != before {
+		t.Errorf("a pool refusal counted against the member: %d -> %d", before, after)
+	}
+	if code, _ := askDirect(t, d, owner, "vol record?"); code != 200 {
+		t.Errorf("operator with the member pool spent: %d", code)
+	}
+	if err := d.St.SetMeta(ctx, "copilot_ask:"+today+":0", "0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// In flight: a second ask by the same user while one runs is refused;
+	// another user is not blocked.
+	fake.entered, fake.release = make(chan struct{}), make(chan struct{})
+	done := make(chan int)
+	go func() {
+		code, _ := askDirect(t, d, guest, "vol record?")
+		done <- code
+	}()
+	<-fake.entered
+	if code, body := askDirect(t, d, guest, "again?"); code != 429 || !strings.Contains(body, "one question at a time") {
+		t.Errorf("second ask in flight: %d %s", code, body)
+	}
+	go func() { <-fake.entered }() // the owner's ask passes the gate below
+	go func() { fake.release <- struct{}{}; fake.release <- struct{}{} }()
+	if code, _ := askDirect(t, d, owner, "vol record?"); code != 200 {
+		t.Errorf("another user blocked by an ask in flight: %d", code)
+	}
+	if code := <-done; code != 200 {
+		t.Errorf("the held ask: %d", code)
+	}
+	fake.entered, fake.release = nil, nil
+	if code, _ := askDirect(t, d, guest, "after?"); code != 200 {
+		t.Errorf("the in-flight slot was not released: %d", code)
 	}
 }

@@ -229,6 +229,11 @@ export default function AskData() {
                     <span style={{ color: "var(--faint)" }}>
                       {JSON.stringify(q.params)}
                     </span>
+                    {q.truncated && (
+                      <span className="chip ml-2 px-1.5 text-[0.7rem]" style={{ color: "var(--dim)" }}>
+                        truncated: more rows matched than shown
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>

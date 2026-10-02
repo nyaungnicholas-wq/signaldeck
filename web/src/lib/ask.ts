@@ -33,7 +33,8 @@ export interface AskCitation {
 export interface AskAnswer {
   answer: string;
   citations: AskCitation[];
-  queries: { name: string; params: Record<string, unknown> }[];
+  // truncated: more rows matched than the query's cap; the answer saw only the first ones.
+  queries: { name: string; params: Record<string, unknown>; truncated?: boolean }[];
   model: string;
   tookMs: number;
   fallback: boolean; // no cited answer: citations holds every row returned
