@@ -91,7 +91,16 @@ const cursorKey = "ai_analyst_cursor"
 // GET /api/ai/analyst, and the single store writer can be held for minutes:
 // an unbounded write there would hold a brief the model already produced past
 // the response deadline. Losing the write only repeats this window next run.
-const cursorWriteBudget = 3 * time.Second
+//
+// scheduledCursorWriteBudget is the hourly worker's (RunScheduled): nobody is
+// waiting on it, and at 3s the write lost to a busy writer on 9 runs in 24h
+// (2026-10-01/02), each within minutes of a daemon boot or a WAL checkpoint
+// pass, so those runs briefed the same symbols again. Vars only so tests can
+// shorten them.
+var (
+	cursorWriteBudget          = 3 * time.Second
+	scheduledCursorWriteBudget = 30 * time.Second
+)
 
 // digestBudget is the most digest that reaches the model whole: the llm client
 // trims the last message to MaxPromptChars minus the system Charter, and the
@@ -289,6 +298,16 @@ func writeDayChangeLine(ctx context.Context, b *strings.Builder, st *store.Store
 // system prompt and the digest as an untrusted-data user message, and parses the
 // reply forgivingly into the Brief.
 func Run(ctx context.Context, client llm.Client, st *store.Store) (Brief, error) {
+	return run(ctx, client, st, cursorWriteBudget)
+}
+
+// RunScheduled is Run for the hourly worker: the same brief, with the longer
+// scheduledCursorWriteBudget for the cursor write.
+func RunScheduled(ctx context.Context, client llm.Client, st *store.Store) (Brief, error) {
+	return run(ctx, client, st, scheduledCursorWriteBudget)
+}
+
+func run(ctx context.Context, client llm.Client, st *store.Store, cursorBudget time.Duration) (Brief, error) {
 	if client == nil || !client.Enabled() {
 		return Brief{Disabled: true, PerSymbol: map[string]string{}}, nil
 	}
@@ -311,7 +330,7 @@ func Run(ctx context.Context, client llm.Client, st *store.Store) (Brief, error)
 	}
 	// Advanced only once the model has answered: a failed call retries this
 	// window next run instead of skipping it.
-	wctx, cancel := context.WithTimeout(ctx, cursorWriteBudget)
+	wctx, cancel := context.WithTimeout(ctx, cursorBudget)
 	defer cancel()
 	if err := st.SetMeta(wctx, cursorKey, strconv.Itoa(next)); err != nil {
 		slog.Warn("analyst: coverage cursor not advanced; next run repeats this window", "err", err)
