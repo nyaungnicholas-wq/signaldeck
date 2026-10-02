@@ -19,6 +19,7 @@ import {
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
 import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
+import { classifyPublicationFetch } from "@/lib/publicationfetch";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 export const dynamic = "force-dynamic";
@@ -351,6 +352,9 @@ async function loadPublicationStatus(): Promise<{
   withheldHorizons?: string[];
 } | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
+  let res: Response | null = null;
+  let body: unknown = null;
+  let error: unknown;
   try {
     // FORWARD THE VIEWER'S SESSION COOKIE. This fetch is server-side, so it
     // carries no browser credential of its own — which was invisible while
@@ -367,47 +371,47 @@ async function loadPublicationStatus(): Promise<{
     // and deliberately avoids. Not signed in => 401 => the refusal path, which
     // is the honest answer.
     const cookie = (await cookies()).toString();
-    const res = await fetch(`${daemon}/api/accuracy`, {
+    res = await fetch(`${daemon}/api/accuracy`, {
       cache: "no-store",
       headers: cookie ? { cookie } : undefined,
       // Unbounded until 2026-10-01: a daemon slowed by a restart held this
-      // page open for as long as it took. A timeout lands in the catch below,
-      // which renders the outage path.
+      // page open for as long as it took. A timeout lands in the catch below.
       signal: AbortSignal.timeout(8_000),
     });
-    const body = await res.json();
-    if (!res.ok || body?.status !== "OK") {
+    body = await res.json().catch(() => null);
+  } catch (e) {
+    error = e;
+  }
+  const got = classifyPublicationFetch(res, body, error);
+  switch (got.kind) {
+    case "unavailable":
+      // Unreachable daemon is not "no news". It is an unknown, and an unknown
+      // about whether these numbers are current resolves to not publishing
+      // them. It is NOT a refusal either: the grader never spoke, and this
+      // used to render as REFUSED_STALE, telling visitors the figures had been
+      // withheld when the daemon was merely slow (2026-10-02).
+      return null;
+    case "private":
       // A 401 carries no `reason` field, so it used to fall through to the
-      // "the grading daemon is unreachable" default below — naming the wrong
-      // cause for a daemon that answered instantly. Observed live 2026-08-09:
-      // anonymous visitor, daemon healthy on :8322, page blamed an outage.
-      // "Not authorised" and "cannot be reached" are opposite problems and send
-      // a reader to opposite places; conflating them is the same defect this
-      // function's own comment describes, one status code over.
-      if (res.status === 401 || res.status === 403) {
-        // NOT a refusal. The grader may be perfectly healthy; this deployment
-        // keeps the record behind a session. Rendering that as REFUSED told a
-        // visitor the grader had withheld the figures — the opposite claim.
-        return {
-          status: "PRIVATE",
-          reason: "the accuracy record is private on this deployment — sign in to read it",
-          rows: [],
-        };
-      }
-      return { status: (body?.status ?? "REFUSED") as AccuracyStatus,
-               reason: body?.reason, gradedAt: body?.graded_at, refusedSince: body?.refused_since, rows: [] };
-    }
-    return {
-      status: "OK",
-      gradedAt: body.graded_at,
-      graderSha256: body.grader_sha256,
-      rows: (body.rows ?? []) as PublishedRow[],
-      withheldHorizons: (body.withheld_horizons ?? []) as string[],
-    };
-  } catch {
-    // Unreachable daemon is not "no news". It is an unknown, and an unknown
-    // about whether these numbers are current resolves to not publishing them.
-    return null;
+      // "the grading daemon is unreachable" default — naming the wrong cause
+      // for a daemon that answered instantly (observed live 2026-08-09). NOT a
+      // refusal either: this deployment keeps the record behind a session.
+      return {
+        status: "PRIVATE",
+        reason: "the accuracy record is private on this deployment — sign in to read it",
+        rows: [],
+      };
+    case "refused":
+      return { status: got.status as AccuracyStatus, reason: got.reason,
+               gradedAt: got.gradedAt, refusedSince: got.refusedSince, rows: [] };
+    case "ok":
+      return {
+        status: "OK",
+        gradedAt: got.body.graded_at as string | undefined,
+        graderSha256: got.body.grader_sha256 as string | undefined,
+        rows: (got.body.rows ?? []) as PublishedRow[],
+        withheldHorizons: (got.body.withheld_horizons ?? []) as string[],
+      };
   }
 }
 
@@ -426,37 +430,55 @@ type PublishedRow = {
 export default async function AccuracyPage() {
   const pub = await loadPublicationStatus();
 
-  // Fail closed. A refusal, or a daemon that cannot be reached, ends the page.
-  if (!pub || pub.status !== "OK") {
+  // Fail closed. A refusal, or a daemon that cannot be reached, ends the page —
+  // but they are different facts and are said differently.
+  if (!pub) {
     return (
       <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
         <header className="flex flex-col gap-2">
           <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
         </header>
         <RefusalNotice
-          status={pub?.status ?? "REFUSED_STALE"}
-          title={pub?.status === "PRIVATE" ? "Sign-in required" : "Publication refused"}
-          tone={pub?.status === "PRIVATE" ? "warn" : "bad"}
-          reason={
-            pub?.reason ??
-            "the grading daemon is unreachable, so it cannot be confirmed that these numbers are current"
-          }
-          gradedAt={pub?.gradedAt}
-          refusedSince={pub?.refusedSince}
+          status="UNREACHABLE"
+          title="Temporarily unavailable"
+          tone="warn"
+          reason="The accuracy service did not answer in time, so no figures are shown. This is a connection problem, not a refusal by the grader, and it says nothing about the record. Retry in a minute."
           testId="accuracy-status-banner"
         >
-          {pub?.status === "PRIVATE" ? (
+          <Link href="/accuracy" className="chip w-fit">
+            Retry
+          </Link>
+        </RefusalNotice>
+      </div>
+    );
+  }
+  if (pub.status !== "OK") {
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+        </header>
+        <RefusalNotice
+          status={pub.status}
+          title={pub.status === "PRIVATE" ? "Sign-in required" : "Publication refused"}
+          tone={pub.status === "PRIVATE" ? "warn" : "bad"}
+          reason={pub.reason}
+          gradedAt={pub.gradedAt}
+          refusedSince={pub.refusedSince}
+          testId="accuracy-status-banner"
+        >
+          {pub.status === "PRIVATE" ? (
             <Link href="/login" className="chip w-fit">
               Sign in
             </Link>
           ) : null}
         </RefusalNotice>
         <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          {pub?.status === "PRIVATE"
+          {pub.status === "PRIVATE"
             ? "Nothing statistical is being withheld: once signed in, the same daemon verdict renders here."
             : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. When the refusal names collapsed cross-sections, those are historical days inside a window anchored to the survivorship epoch — the window does not roll forward, so they cannot age out and further grading alone will not clear them."}
         </p>
-        {pub?.status !== "PRIVATE" ? (
+        {pub.status !== "PRIVATE" ? (
           <section className="panel px-5 py-4" aria-label="historical record">
             <div className="mono text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--dim)" }}>
               Historical record — unaffected by today&apos;s refusal
