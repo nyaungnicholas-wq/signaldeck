@@ -1014,6 +1014,21 @@ func (s *Store) UpsertBars(ctx context.Context, bars []md.Bar) error {
 	return nil
 }
 
+// barsUpsertChanged ends an INSERT INTO bars: a bar already stored with the same
+// values is left alone instead of rewritten. Both bulk writers mostly resend
+// what is there: universe-poller re-upserts ~826k bars on every boot (the WAL
+// went from 2,773 to 417,329 frames, 1.6 GB, in the first 6 minutes of
+// 2026-10-02 03:30), and the Downsampler re-rolls 72h of hours for every symbol
+// every 5 minutes (26,619 of 28,056 buckets unchanged on the 10-01 backup). As
+// INSERT OR REPLACE each of those rewrote its page into the WAL; the end state
+// is the same (bars has no triggers and nothing references it).
+const barsUpsertChanged = `ON CONFLICT(symbol_id, tf, ts) DO UPDATE SET
+		open=excluded.open, high=excluded.high, low=excluded.low,
+		close=excluded.close, volume=excluded.volume
+	WHERE bars.open IS NOT excluded.open OR bars.high IS NOT excluded.high
+	   OR bars.low IS NOT excluded.low OR bars.close IS NOT excluded.close
+	   OR bars.volume IS NOT excluded.volume`
+
 func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	if len(bars) == 0 {
 		return nil
@@ -1024,8 +1039,8 @@ func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
-		VALUES (?,?,?,?,?,?,?,?)`)
+		INSERT INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
+		VALUES (?,?,?,?,?,?,?,?) `+barsUpsertChanged)
 	if err != nil {
 		return err
 	}
@@ -1150,7 +1165,7 @@ func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timefra
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
+	return s.rollup(ctx, "INSERT", barsUpsertChanged, symbolID, src, dst, bucket, from, to)
 }
 
 // rollupSelect computes one symbol's coarse bars; rollupArgs binds it.
@@ -1181,11 +1196,12 @@ func rollupArgs(symbolID int64, src, dst md.Timeframe, bucket, from, to int64) [
 }
 
 // rollup computes the coarse bars on the read pool and writes them with verb
-// ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
-// per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
-func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
+// and tail ("INSERT" + barsUpsertChanged / "INSERT OR IGNORE"). As one
+// INSERT..SELECT, the per-bucket subqueries held the write lock 5-7s per call
+// (readThenWrite).
+func (s *Store) rollup(ctx context.Context, verb, tail string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
 	_, err := s.readThenWrite(ctx, rollupSelect, rollupArgs(symbolID, src, dst, bucket, from, to),
-		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
+		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, tail)
 	return err
 }
 
@@ -1195,7 +1211,7 @@ func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, ds
 // the source) is authoritative and must not be replaced by an aggregate of
 // possibly-partial finer bars.
 func (s *Store) RollupMissing(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	return s.rollup(ctx, "INSERT OR IGNORE", symbolID, src, dst, bucket, from, to)
+	return s.rollup(ctx, "INSERT OR IGNORE", "", symbolID, src, dst, bucket, from, to)
 }
 
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
