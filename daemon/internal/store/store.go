@@ -1139,23 +1139,38 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
 }
 
+// rollupSelect computes one symbol's coarse bars; rollupArgs binds it.
+//
+// The open/close probes pick the bucket by RANGE (ts from the bucket start, below
+// the next one), not by ts/bucket = b.ts/bucket. The division cannot seek, so
+// each probe walked every bar of the symbol's timeframe once per bucket: 60
+// days of minutes per hour bucket. Over the 72h window for all 2,950 symbols on
+// the 10-01 backup that was 18.3 s in the C CLI against 0.57 s by range, with
+// identical output (28,056 buckets); the Downsampler hit its 15m deadline on
+// every pass (rollup SHMD: context deadline exceeded, 2026-10-02 01:07).
+const rollupSelect = `
+		SELECT symbol_id, ?, (ts/?)*? AS bts,
+		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
+		     AND b2.ts >= b.ts/?*? AND b2.ts < b.ts/?*? + ? ORDER BY b2.ts LIMIT 1),
+		  MAX(high), MIN(low),
+		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
+		     AND b3.ts >= b.ts/?*? AND b3.ts < b.ts/?*? + ? ORDER BY b3.ts DESC LIMIT 1),
+		  SUM(volume)
+		FROM bars b
+		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
+		GROUP BY bts`
+
+// rollupArgs binds rollupSelect.
+func rollupArgs(symbolID int64, src, dst md.Timeframe, bucket, from, to int64) []any {
+	b := bucket
+	return []any{string(dst), b, b, b, b, b, b, b, b, b, b, b, b, symbolID, string(src), from, to}
+}
+
 // rollup computes the coarse bars on the read pool and writes them with verb
 // ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
 // per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
 func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.readThenWrite(ctx, `
-		SELECT symbol_id, ?, (ts/?)*? AS bts,
-		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
-		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
-		  MAX(high), MIN(low),
-		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
-		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
-		  SUM(volume)
-		FROM bars b
-		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
-		GROUP BY bts`,
-		[]any{string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-			symbolID, string(src), from, to},
+	_, err := s.readThenWrite(ctx, rollupSelect, rollupArgs(symbolID, src, dst, bucket, from, to),
 		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
 	return err
 }
