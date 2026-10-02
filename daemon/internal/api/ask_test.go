@@ -79,7 +79,7 @@ func ownerClient(t *testing.T, base string) *http.Client {
 // TestAskMemberOffByDefault: with SIGNALDECK_MEMBER_COPILOT unset a member is
 // refused before any LLM call, while the operator asks; anonymous gets 401.
 func TestAskMemberOffByDefault(t *testing.T) {
-	fake := &echoLLM{plan: planFor(`{"query":"vol_forecast_record","params":{}}`)}
+	fake := &echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })
 	srv, _, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
@@ -127,7 +127,7 @@ func TestAskNeedsTheLLM(t *testing.T) {
 // TestAskMemberTierAndCap: with the flag on a member asks through member
 // entries only, and is capped per day; a refused plan still counts.
 func TestAskMemberTierAndCap(t *testing.T) {
-	fake := &echoLLM{plan: planFor(`{"query":"vol_forecast_record","params":{}}`)}
+	fake := &echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })
 	srv, _, mb, _ := newProductionServer(t, func(c *config.Config) { c.MemberCopilot = true },
@@ -197,10 +197,7 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 	}
 
 	// Rows for the member entries the base seed leaves empty: a stock and a
-	// crypto regime flip (labels only), a pre-registration record, and enough
-	// resolved stock predictions to clear directional_track_record's floor of
-	// 10. The outcomes' forward returns are not sentinels: no member entry may
-	// print one, and the sentinel ones seeded above are what the scan hunts.
+	// crypto regime flip (labels only) and a pre-registration record.
 	now := time.Now().Unix()
 	for _, id := range []int64{fx.sntl.ID, fx.sntc.ID} {
 		for i, lbl := range []string{"calm", "uptrend"} {
@@ -212,16 +209,6 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 	if _, err := st.AppendPrereg(ctx, prereg.Record{Ts: now, Kind: "copilot_probe", SpecJSON: "{}",
 		SpecHash: "copilotprobe", Note: "sentinel probe"}); err != nil {
 		t.Fatal(err)
-	}
-	for i := 0; i < 12; i++ {
-		ts := now/86400*86400 - int64(10+i)*86400
-		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: fx.sntl.ID, Horizon: md.H1d, Ts: ts,
-			RawProb: 0.6, CalProb: 0.6, NUsed: 40, Components: "{}"}); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.ResolvePrediction(ctx, fx.sntl.ID, md.H1d, ts, 0.0105); err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	// Every member entry, every param filled toward the seeded SNTL rows.
@@ -242,7 +229,7 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"query": q.Name, "params": params})
 		calls = append(calls, string(b))
 	}
-	if len(calls) < 8 {
+	if len(calls) < 6 {
 		t.Fatalf("only %d member entries", len(calls))
 	}
 	rowsByQuery := map[string]int{}
@@ -416,7 +403,7 @@ func TestAskOperatorTierNeedsTheAdmin(t *testing.T) {
 func TestAskMemberBudgets(t *testing.T) {
 	ctx := context.Background()
 	today := time.Now().UTC().Format("2006-01-02")
-	fake := &statsLLM{echoLLM: echoLLM{plan: planFor(`{"query":"vol_forecast_record","params":{}}`)}}
+	fake := &statsLLM{echoLLM: echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}}
 	d, owner, guest := privateAskServer(t, fake)
 	d.Cfg.MemberCopilot = true
 

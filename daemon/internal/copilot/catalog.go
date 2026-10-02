@@ -163,7 +163,12 @@ GROUP BY o.kind ORDER BY o.kind`,
 		// days is a fixed menu, not a free integer: three windows cannot be
 		// differenced into a per-day series of realized outcomes.
 		Params: []Param{{Name: "days", Desc: "lookback window in days: 30, 90 (default) or 365", Kind: KindEnum,
-			Enum: []string{"30", "90", "365"}, Default: "90"}}, Tier: TierMember, MaxRows: 10,
+			Enum: []string{"30", "90", "365"}, Default: "90"}},
+		// Operator only, like regime_live_grades_by_kind: a raw hit rate with
+		// none of the publication gates (refused/collapsed rows, distinct days,
+		// grading epoch) must not reach members while /api/accuracy withholds
+		// the directional record.
+		Tier: TierOperator, MaxRows: 10,
 		Columns: []string{"horizon", "resolved", "directional_hits", "hit_rate", "base_rate_up", "first_ts", "last_ts"},
 		SQL: `SELECT o.horizon, COUNT(*) AS resolved,
        SUM(CASE WHEN (o.prob > 0.5) = (o.up = 1) THEN 1 ELSE 0 END) AS directional_hits,
@@ -171,6 +176,7 @@ GROUP BY o.kind ORDER BY o.kind`,
        ROUND(AVG(o.up), 4) AS base_rate_up, MIN(o.ts) AS first_ts, MAX(o.ts) AS last_ts
 FROM prediction_outcomes o JOIN symbols s ON s.id = o.symbol_id
 WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND s.market = 'stocks'
+  AND o.horizon IN ('1h', '1d', '1w')
   AND o.ts >= CAST(strftime('%s', 'now') AS INTEGER) - CAST(:days AS INTEGER) * 86400
 GROUP BY o.horizon HAVING COUNT(*) >= 10 ORDER BY o.horizon`, // datalicense.go: a narrowable realized-outcome aggregate is derived only over >= 10 rows
 	},
@@ -190,7 +196,9 @@ ORDER BY c.ts DESC, s.symbol`,
 		Desc: "The realised-volatility forecast record per horizon (days): calls frozen, calls resolved, calls " +
 			"that can never be graded (with a stated reason), and how many resolved calls landed closer to the " +
 			"realised volatility than the random-walk null and than the EWMA null. Counts only.",
-		Tier: TierMember, MaxRows: 10,
+		// Operator only: per-call win counts against the nulls are the skill
+		// comparison the published record withholds below its 60-day floor.
+		Tier: TierOperator, MaxRows: 10,
 		Columns: []string{"horizon", "calls", "resolved", "ungradable", "beat_random_walk", "beat_ewma"},
 		SQL: `SELECT f.horizon, COUNT(*) AS calls, SUM(f.actual IS NOT NULL) AS resolved,
        SUM(f.ungradable IS NOT NULL) AS ungradable,
