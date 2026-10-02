@@ -94,11 +94,10 @@ except Exception:
   # 1. Newest anchor digest. Append-only and idempotent: a line already in
   #    anchors.log is not re-appended, so runs between anchor cadences are free.
   #    The API is tried first, but it requires the daemon up and a credential;
-  #    the fallback reads ledger_anchors straight from SQLite and RECOMPUTES
-  #    the publish line per daemon/internal/ledgeranchor/ledgeranchor.go
-  #    (Message/Digest/PublishLine), same as the prereg block below does for
-  #    its chain. Recomputation is also a check: if the recomputed digest does
-  #    not equal the stored digest column the row is not published.
+  #    the fallback reads ledger_anchors straight from SQLite, verifies the
+  #    newest anchor the way the daemon does, and RECOMPUTES the publish line
+  #    per daemon/internal/ledgeranchor/ledgeranchor.go (Message/Digest/
+  #    PublishLine). Any failed check publishes nothing.
   touch "$REPO/anchors.log"
   # Python, not jq: jq is NOT installed under the Git Bash that runs this
   # repo's scheduled tasks, so every jq line in this file was a `command not
@@ -124,36 +123,12 @@ elif anchors:
   refused=""
   case "$line" in REFUSE\ *) refused=${line#REFUSE }; line="" ;; esac
   if [ -z "$line" ] && [ -z "$refused" ]; then
-    line=$("$(sd_py)" - "$SD/data/signaldeck.db" "$SD/daemon/internal/ledgeranchor/pinned_pubkeys.txt" <<'PY'
-import hashlib, sqlite3, sys
-con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
-row = con.execute("SELECT created_at, ledger_seq, ledger_count, head_hash, alg,"
-                  " pub_key, sig, digest FROM ledger_anchors"
-                  " ORDER BY seq DESC LIMIT 1").fetchone()
-if not row:
-    sys.exit(1)
-created_at, lseq, lcount, head, alg, pub, sig, stored = row
-if alg != "ed25519":
-    sys.exit(1)  # unknown scheme — do not guess at the payload
-# Same trust set the daemon embeds. The daemon also trusts its own current key,
-# which this fallback cannot read without the secret, so a key not yet pinned
-# waits for the API path rather than being published unverified.
-try:
-    pinned = {l.split("#")[0].strip().lower() for l in open(sys.argv[2], encoding="utf-8")}
-except OSError:
-    sys.exit(1)
-if pub.lower() not in pinned:
-    print(f"newest anchor (seq {lseq}) is signed by an unpinned key", file=sys.stderr)
-    sys.exit(1)
-msg =("signaldeck-ledger-anchor|v1|alg=ed25519"
-       f"|created_at={created_at}|ledger_seq={lseq}|ledger_count={lcount}|head={head}")
-digest = hashlib.sha256(
-    msg.encode() + b"\x1e" + sig.encode() + b"\x1e" + pub.encode()).hexdigest()
-if digest != stored:
-    sys.exit(1)  # stored digest does not reproduce — publish nothing
-print(f"SIGNALDECK-LEDGER-ANCHOR v1 seq={lseq} count={lcount} ts={created_at} digest={digest}")
-PY
-    ) || line=""
+    # tools/anchor_fallback.py applies the daemon's own anchor checks (pinned
+    # key, Ed25519 signature via openssl, head == entry_hash at its seq, row
+    # count) and prints nothing unless all pass: the API path publishes only an
+    # anchor the daemon verifies, and this path must not publish more.
+    line=$("$(sd_py)" "$SD/tools/anchor_fallback.py" "$SD/data/signaldeck.db" \
+      "$SD/daemon/internal/ledgeranchor/pinned_pubkeys.txt") || line=""
     [ -n "$line" ] && echo "note: API unavailable — anchor line recomputed from data/signaldeck.db"
   fi
   if [ -n "$refused" ]; then
