@@ -123,9 +123,13 @@ export default function TodaysRead({
 
   // One fetch of the validated regime forecasts. Failure is non-fatal: the card
   // falls back to an honest empty state rather than to the directional number.
+  // A member's read carries only the rows asked for (REGIMES-SIZE): the
+  // watchlist's rows, or with no watchlist the top of each kind, which holds
+  // the best read across the market. The operator always gets every row.
+  const symKey = (watchList ?? []).join(",");
   useEffect(() => {
     let alive = true;
-    structuralRegimes()
+    structuralRegimes(symKey ? { symbols: symKey.split(",") } : undefined)
       .then((r) => {
         if (alive) setByKind(r.forecasts as Record<string, Forecast[]>);
       })
@@ -135,7 +139,7 @@ export default function TodaysRead({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [symKey]);
 
   const watchSymbols = useMemo(
     () => new Set(watchList ?? (dash?.watchlist?.sparks ?? []).map((s) => s.symbol)),

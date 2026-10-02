@@ -55,7 +55,7 @@ func (d Deps) structuralRegimesCached(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.isMember(r) {
-		resp = withoutCryptoForecasts(resp)
+		resp = memberRegimesView(withoutCryptoForecasts(resp), r.URL.Query())
 	}
 	writeJSON(w, resp)
 }

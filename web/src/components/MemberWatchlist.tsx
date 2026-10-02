@@ -51,7 +51,7 @@ export default function MemberWatchlist() {
   useEffect(() => {
     let alive = true;
     const load = async () => {
-      const [w, r, v] = await Promise.allSettled([api.memberWatchlist(), structuralRegimes(), volRegime()]);
+      const [w, v] = await Promise.allSettled([api.memberWatchlist(), volRegime()]);
       if (!alive) return;
       if (w.status === "fulfilled") {
         setRows(w.value ?? []);
@@ -59,8 +59,17 @@ export default function MemberWatchlist() {
       } else {
         setLoadErr(errText(w.reason));
       }
-      if (r.status === "fulfilled") setRegimes(Object.values(r.value.forecasts ?? {}).flat());
       if (v.status === "fulfilled") setVols(v.value.forecasts ?? []);
+      // Only the watched symbols' regime rows (REGIMES-SIZE): the member read
+      // of /api/regimes is sliced, so it is asked for once the list is known.
+      const syms = w.status === "fulfilled" ? [...new Set((w.value ?? []).map((x) => x.symbol))] : [];
+      if (syms.length === 0) return;
+      try {
+        const r = await structuralRegimes({ symbols: syms });
+        if (alive) setRegimes(Object.values(r.forecasts ?? {}).flat());
+      } catch {
+        // As before: a failed regimes read leaves the chips as they were.
+      }
     };
     void load();
     return () => {

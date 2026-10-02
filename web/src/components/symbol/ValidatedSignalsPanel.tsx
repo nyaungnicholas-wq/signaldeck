@@ -147,7 +147,8 @@ export default function ValidatedSignalsPanel({
         memberView
           ? Promise.reject(new ApiError(403, "member view"))
           : signalReport(symbol, market, "overview"),
-        structuralRegimes(),
+        // A member's read carries only this symbol's rows (REGIMES-SIZE).
+        structuralRegimes({ symbols: [symbol] }),
         volRegime(),
       ]);
       if (!alive) return;
