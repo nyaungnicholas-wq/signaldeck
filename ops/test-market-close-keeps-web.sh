@@ -14,20 +14,27 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/ops" "$T/bin" "$T/logs" "$T/.venv/Scripts"
-cp "$SRC/market-close.sh" "$T/ops/"
+cp "$SRC/market-close.sh" "$SRC/market-close-restart.sh" "$T/ops/"
 export CALLS="$T/calls"
 : > "$CALLS"
 
 cat > "$T/ops/lib-portable.sh" <<'EOF'
 sd_svc_stop()   { echo "svc_stop $1" >> "$CALLS"; }
-sd_is_running() { return 1; }
+# Running once a restart was issued (the stop phase sees it down).
+sd_is_running() { grep -q 'schtasks //Run' "$CALLS"; }
 sd_kill_hard()  { echo "kill_hard $1" >> "$CALLS"; }
 sd_notify()     { :; }
 EOF
 echo 'sd_ft_stale_line() { :; }' > "$T/ops/lib-forward-test.sh"
-for s in signaldeck-ctl.sh signaldeck-backup-offline.sh; do
-  printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n' "$s" > "$T/ops/$s"
-done
+printf '#!/bin/bash\necho "signaldeck-ctl.sh $*" >> "$CALLS"\n' > "$T/ops/signaldeck-ctl.sh"
+# The backup stub runs the DB-phase hook the real script runs after its WAL
+# truncate, then stands in for the compression + offsite upload.
+cat > "$T/ops/signaldeck-backup-offline.sh" <<'STUB'
+#!/bin/bash
+echo "signaldeck-backup-offline.sh $*" >> "$CALLS"
+[ -n "${SIGNALDECK_BACKUP_DB_DONE_CMD:-}" ] && bash -c "$SIGNALDECK_BACKUP_DB_DONE_CMD"
+echo "backup upload phase" >> "$CALLS"
+STUB
 for s in schtasks powershell; do
   printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n' "$s" > "$T/bin/$s"
   chmod +x "$T/bin/$s"
@@ -59,6 +66,11 @@ r=$(line_of 'schtasks //Run //TN SignalDeck Daemon')
 check "the daemon is restarted after the backup" \
   "$([ -n "$r" ] && [ -n "$b" ] && [ "$r" -gt "$b" ] && echo 1 || echo 0)"
 check "market-close exits 0 when the backup and restart succeed (rc=$rc)" "$([ "$rc" = 0 ] && echo 1 || echo 0)"
+u=$(line_of 'backup upload phase')
+check "SD-57: the daemon is back before the backup's upload phase" \
+  "$([ -n "$r" ] && [ -n "$u" ] && [ "$r" -lt "$u" ] && echo 1 || echo 0)"
+check "SD-57: the daemon is started exactly once" \
+  "$([ "$(grep -c -F 'schtasks //Run //TN SignalDeck Daemon' "$CALLS")" = 1 ] && echo 1 || echo 0)"
 
 if [ "$fails" -gt 0 ]; then
   echo "--- calls"; cat "$CALLS"; echo "--- output"; cat "$T/out"

@@ -219,3 +219,47 @@ func TestScoresDailyPruneLetsAnAccountWriteIn(t *testing.T) {
 		t.Fatalf("after the prune: %d rows in %d (symbol, day) groups, want %d in %d", left, groups, syms*days, syms*days)
 	}
 }
+
+// The minute-bar prune (47.7 s in one statement on 2026-10-01) must let an
+// account write in between symbols, prune exactly the bars below the cutoff,
+// and never touch daily bars.
+func TestPruneBarsLetsAnAccountWriteIn(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	const syms, perSym, cutoff = 400, 50, 1000
+	bars := make([]md.Bar, 0, syms*perSym*2)
+	for s := int64(1); s <= syms; s++ {
+		for k := int64(0); k < perSym; k++ {
+			bars = append(bars,
+				md.Bar{SymbolID: s, TF: md.TF1m, Ts: k, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},          // old
+				md.Bar{SymbolID: s, TF: md.TF1m, Ts: cutoff + k, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}) // recent
+		}
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBars(ctx, []md.Bar{{SymbolID: 1, TF: md.TF1d, Ts: 0, Open: 1, High: 1, Low: 1, Close: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	countOld := fmt.Sprintf(`SELECT count(*) FROM bars WHERE tf='1m' AND ts < %d`, cutoff)
+	seen := midBulkWrite(t, st, syms*perSym, countOld, func() error {
+		n, err := st.PruneBars(ctx, md.TF1m, cutoff)
+		if err == nil && n != syms*perSym {
+			err = fmt.Errorf("pruned %d bars, want %d", n, syms*perSym)
+		}
+		return err
+	})
+	if seen == 0 {
+		t.Fatal("the account write found every old bar already pruned: it waited out the whole prune, one statement holding the write lock")
+	}
+	var old, recent, daily int64
+	if err := st.db.QueryRowContext(ctx, `SELECT
+		  (SELECT count(*) FROM bars WHERE tf='1m' AND ts < ?),
+		  (SELECT count(*) FROM bars WHERE tf='1m' AND ts >= ?),
+		  (SELECT count(*) FROM bars WHERE tf='1d')`, cutoff, cutoff).Scan(&old, &recent, &daily); err != nil {
+		t.Fatal(err)
+	}
+	if old != 0 || recent != syms*perSym || daily != 1 {
+		t.Fatalf("after the prune: old=%d recent=%d daily=%d, want 0/%d/1", old, recent, daily, syms*perSym)
+	}
+}
