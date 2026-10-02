@@ -280,18 +280,18 @@ func TestQuiesceDo_HoldsFleetStill(t *testing.T) {
 func TestStartOffsetDeterministicAndBounded(t *testing.T) {
 	// Deterministic: same name+interval ⇒ same offset, always.
 	for i := 0; i < 5; i++ {
-		if a, b := startOffset("composite-scorer", time.Hour), startOffset("composite-scorer", time.Hour); a != b {
+		if a, b := startOffset("composite-scorer", time.Hour, maxStartOffset), startOffset("composite-scorer", time.Hour, maxStartOffset); a != b {
 			t.Fatalf("offset not deterministic: %v vs %v", a, b)
 		}
 	}
 	// Bounded by the cap for long intervals.
-	if got := startOffset("gbm-trainer", time.Hour); got < 0 || got >= maxStartOffset {
+	if got := startOffset("gbm-trainer", time.Hour, maxStartOffset); got < 0 || got >= maxStartOffset {
 		t.Errorf("hourly offset %v outside [0, %v)", got, maxStartOffset)
 	}
 	// Bounded by the INTERVAL for short ones (a 5s worker must not wait 45s).
 	for i := 0; i < 50; i++ {
 		name := fmt.Sprintf("fast-worker-%d", i)
-		if got := startOffset(name, 5*time.Second); got >= 5*time.Second {
+		if got := startOffset(name, 5*time.Second, maxStartOffset); got >= 5*time.Second {
 			t.Fatalf("%s offset %v >= its 5s interval", name, got)
 		}
 	}
@@ -300,7 +300,7 @@ func TestStartOffsetDeterministicAndBounded(t *testing.T) {
 	hourly := []string{"gbm-trainer", "pressure-trainer", "research-ledger", "ranking-runner", "expectancy-runner", "scores-compactor", "derived-retention", "storage-governor", "ai-analyst"}
 	seen := map[time.Duration]bool{}
 	for _, n := range hourly {
-		seen[startOffset(n, time.Hour)] = true
+		seen[startOffset(n, time.Hour, maxStartOffset)] = true
 	}
 	if len(seen) < len(hourly)-1 { // allow at most one collision
 		t.Errorf("hourly fleet collapsed onto %d distinct slots (of %d workers) — still phase-locked", len(seen), len(hourly))
@@ -309,7 +309,7 @@ func TestStartOffsetDeterministicAndBounded(t *testing.T) {
 
 // Zero interval (long-running stream workers) must never be delayed.
 func TestStartOffsetZeroInterval(t *testing.T) {
-	if got := startOffset("crypto-live", 0); got != 0 {
+	if got := startOffset("crypto-live", 0, maxStartOffset); got != 0 {
 		t.Errorf("long-running worker offset = %v, want 0", got)
 	}
 }

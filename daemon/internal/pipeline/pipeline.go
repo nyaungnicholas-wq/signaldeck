@@ -158,6 +158,9 @@ func (w *ExpectancyRunner) Name() string { return "expectancy-runner" }
 // Interval implements workers.Worker.
 func (w *ExpectancyRunner) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *ExpectancyRunner) Heavy() bool { return true }
+
 // Run rebuilds expectancy for all symbols (history is kept even for
 // unsubscribed ones, so include inactive: their tables stay queryable).
 func (w *ExpectancyRunner) Run(ctx context.Context) (string, error) {

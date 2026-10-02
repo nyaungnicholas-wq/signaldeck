@@ -37,6 +37,9 @@ type ModelHealthWorker struct {
 func (w *ModelHealthWorker) Name() string            { return "model-health" }
 func (w *ModelHealthWorker) Interval() time.Duration { return 1 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *ModelHealthWorker) Heavy() bool { return true }
+
 // MetaKeyPrefix namespaces one stored verdict per model.
 const MetaKeyPrefix = "model_health:"
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/bits"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -352,7 +353,7 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 	// stay reproducible and the Agents page cadence is legible: a given worker
 	// always occupies the same slot in its interval, and distinct names get
 	// distinct slots.
-	if off := startOffset(w.Name(), iv); off > 0 {
+	if off := startOffset(w.Name(), iv, startSpan(w)); off > 0 {
 		select {
 		case <-ctx.Done():
 			return
@@ -451,11 +452,38 @@ func (r *Runner) lastRunAt(ctx context.Context, name string) time.Time {
 // under a minute.
 const maxStartOffset = 45 * time.Second
 
+// HeavyWorker marks a worker whose run is a model fit or a full-universe
+// rebuild: minutes of reads under load. Its FIRST run is de-phased across
+// heavyStartSpan instead of maxStartOffset. Its interval is untouched; only the
+// phase of its runs moves.
+//
+// WHY: 45 seconds put every heavy worker in the same boot minute. After the
+// 2026-10-02 03:30 deploy, gbm-trainer, per-symbol-learner, pressure-trainer,
+// adaptive-weights, model-health, expectancy-runner, metalabel and alpha
+// trainers all started together and ran 10-20 minutes each; their overlapping
+// reads kept the WAL from checkpointing while it grew to 2 GB. Light, critical
+// workers (resolvers, scorers, market data) do not implement this and still
+// start within maxStartOffset.
+type HeavyWorker interface {
+	Worker
+	Heavy() bool
+}
+
+// heavyStartSpan is the window a heavy worker's first run is spread across.
+const heavyStartSpan = 30 * time.Minute
+
+// startSpan is the window w's first run is de-phased across.
+func startSpan(w Worker) time.Duration {
+	if hw, ok := w.(HeavyWorker); ok && hw.Heavy() {
+		return heavyStartSpan
+	}
+	return maxStartOffset
+}
+
 // startOffset returns a worker's deterministic phase offset, bounded by both
-// maxStartOffset and the worker's own interval (a 5s worker must not wait 45s).
+// span and the worker's own interval (a 5s worker must not wait 45s).
 // Long-running workers (interval 0) never reach here.
-func startOffset(name string, interval time.Duration) time.Duration {
-	span := maxStartOffset
+func startOffset(name string, interval, span time.Duration) time.Duration {
 	if interval < span {
 		span = interval
 	}
@@ -464,6 +492,14 @@ func startOffset(name string, interval time.Duration) time.Duration {
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(name))
+	// A 32-bit hash taken as nanoseconds is under 4.3s, so `% span` never
+	// reaches past 4.3s: the light fleet's first runs land within ~4.3s of boot,
+	// not 45s. That is kept (they should start promptly). A heavy span is
+	// minutes, so the hash is scaled across it instead.
+	if span > maxStartOffset {
+		hi, _ := bits.Mul64(uint64(h.Sum32())<<32, uint64(span)) // hash/2^32 of span, no overflow
+		return time.Duration(hi)
+	}
 	return time.Duration(uint64(h.Sum32()) % uint64(span))
 }
 

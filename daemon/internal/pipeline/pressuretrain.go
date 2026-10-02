@@ -44,6 +44,9 @@ type PressureTrainer struct {
 func (w *PressureTrainer) Name() string            { return "pressure-trainer" }
 func (w *PressureTrainer) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *PressureTrainer) Heavy() bool { return true }
+
 func (w *PressureTrainer) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {

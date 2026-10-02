@@ -93,6 +93,9 @@ type AlphaXTrainer struct {
 func (w *AlphaXTrainer) Name() string            { return "alpha-trainer" }
 func (w *AlphaXTrainer) Interval() time.Duration { return 6 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *AlphaXTrainer) Heavy() bool { return true }
+
 func (w *AlphaXTrainer) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	var parts []string

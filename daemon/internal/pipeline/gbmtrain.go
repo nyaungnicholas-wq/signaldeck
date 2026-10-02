@@ -302,6 +302,9 @@ type GBMTrainer struct {
 func (w *GBMTrainer) Name() string            { return "gbm-trainer" }
 func (w *GBMTrainer) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *GBMTrainer) Heavy() bool { return true }
+
 func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
