@@ -61,3 +61,75 @@ for (const vp of VIEWPORTS) {
     });
   }
 }
+
+// IndicatorMenu (operator symbol page, inside the chart .panel) uses the same
+// fixed-from-button-rect placement, so it had the same bug. Members never see
+// the operator page; the test tells the client this session is not a member
+// (the daemon still decides what data it gets) so the real component renders.
+// Two scroll positions: button mid-screen (no room below -> opens above,
+// height capped) and button near the top (opens below).
+for (const vp of VIEWPORTS) {
+  test(`indicator menu inside the chart .panel opens on-screen @ ${vp.name}`, async ({ page: p, context }) => {
+    await p.setViewportSize({ width: vp.width, height: vp.height });
+    await loginAsSmokeUser(context);
+    await context.route(/\/api\/(auth\/)?me(\?|$)/, async (route) => {
+      const r = await route.fetch();
+      await route.fulfill({ response: r, json: { ...(await r.json()), member: false } });
+    });
+    await p.goto("/s/stocks/AAPL");
+    const btn = p.locator(".panel").getByRole("button", { name: /^Indicators/ });
+    await expect(btn).toBeVisible({ timeout: 60000 });
+    // the first-run tour is a modal overlay that mounts late; skip it if it shows
+    const tour = p.getByRole("dialog", { name: /welcome tour/ });
+    await tour.waitFor({ timeout: 5000 }).then(
+      () => tour.getByRole("button", { name: "Skip tour" }).click(),
+      () => {},
+    );
+    await expect(tour).toBeHidden();
+    // the operator page reflows while its ~27 panels load; measure a settled page
+    let last = NaN;
+    await expect
+      .poll(async () => {
+        const h = await p.evaluate(() => document.documentElement.scrollHeight + "/" + document.querySelector("main")?.getBoundingClientRect().height);
+        const same = h === String(last);
+        last = h as unknown as number;
+        return same;
+      }, { timeout: 60000, intervals: [1500] })
+      .toBe(true);
+    for (const at of ["center", "top"] as const) {
+      // instant scrolls: the site sets scroll-behavior:smooth
+      // "top" parks the button 120px down, clear of the sticky header (at y=0 the
+      // header covers it and the click re-scrolls the page)
+      await btn.evaluate((el, at) => {
+        if (at === "top") window.scrollBy({ top: el.getBoundingClientRect().top - 120, behavior: "instant" });
+        else el.scrollIntoView({ block: "center", behavior: "instant" });
+      }, at);
+      const bTop = await btn.evaluate((el) => el.getBoundingClientRect().top);
+      if (at === "top") expect(bTop, "could not scroll the button near the top").toBeLessThan(200);
+      await btn.click();
+      const pop = p.getByRole("dialog", { name: "chart indicators" });
+      await expect(pop).toHaveCSS("visibility", "visible");
+      // .pop-in starts at translateY(-4px); measure the resting position
+      await pop.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+      const g = await p.evaluate(() => {
+        const b = [...document.querySelectorAll(".panel button")].find((x) => /^Indicators/.test(x.textContent!.trim()))!.getBoundingClientRect();
+        const r = document.querySelector('[role="dialog"][aria-label="chart indicators"]')!.getBoundingClientRect();
+        return { bTop: b.top, bBottom: b.bottom, top: r.top, bottom: r.bottom, left: r.left, right: r.right, vw: innerWidth, vh: innerHeight };
+      });
+      const where = `${at}: ${JSON.stringify(g)}`;
+      expect(Math.abs(g.bTop - bTop), `page moved during the click (${where})`).toBeLessThan(2);
+      expect(g.top, `menu above viewport (${where})`).toBeGreaterThanOrEqual(8);
+      expect(g.bottom, `menu below viewport (${where})`).toBeLessThanOrEqual(g.vh - 8);
+      expect(g.left, `menu left of viewport (${where})`).toBeGreaterThanOrEqual(0);
+      expect(g.right, `menu right of viewport (${where})`).toBeLessThanOrEqual(g.vw);
+      const gap = Math.min(Math.abs(g.top - g.bBottom), Math.abs(g.bTop - g.bottom));
+      expect(gap, `menu not next to its button (${where})`).toBeLessThanOrEqual(16);
+      // a click inside the portalled menu must not count as an outside click
+      await pop.locator("input[type=checkbox]").first().click();
+      await expect(pop).toBeVisible();
+      await p.keyboard.press("Escape");
+      await expect(pop).toBeHidden();
+      console.log(`INDMENU OK ${vp.name} ${at} top=${Math.round(g.top)} bottom=${Math.round(g.bottom)}`);
+    }
+  });
+}
