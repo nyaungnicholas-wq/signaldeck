@@ -525,7 +525,10 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 // evidence of a collapse" was never the same thing as "evidence there was
 // none", and the caller used to treat it as though it were.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
-	horizons := gatedHorizons(reg)
+	horizons, err := gatedHorizons(reg)
+	if err != nil {
+		return "", false, err
+	}
 	if len(horizons) == 0 {
 		return "", false, nil
 	}
@@ -575,23 +578,39 @@ func gateSince() time.Time { return time.Unix(store.GradingEpoch, 0).UTC() }
 // registry horizon with a positive distinct_days. These, plus the resolved rows
 // it reads per horizon, are the gate's ENTIRE input; the verdict cache keys on
 // exactly that.
-func gatedHorizons(reg *registryFile) []string {
+//
+// A horizon that publishes figures (live_n > 0 or a live_acc) on rows that all
+// lack a positive distinct_days has no measured window, so it would otherwise
+// go ungated and pass: that is an error, and both callers withhold on it. Rows
+// that publish nothing need no gate.
+func gatedHorizons(reg *registryFile) ([]string, error) {
 	// Per-horizon windows. This used to take ONE global max distinct_days and
 	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
 	// collapse confined to the 1w cross-section could not refuse anything, and
 	// a 1d collapse refused rows it had not measured. Each horizon present in
 	// the registry is now checked against its OWN day stats and its own depth.
 	depth := map[string]int{}
+	unmeasured := map[string]string{} // horizon -> a row publishing figures with no window
 	for _, r := range reg.Rows {
-		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
-			continue
-		}
 		_, horizon, _ := splitPredictor(r.Predictor)
 		if horizon == "" {
 			continue
 		}
+		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
+			if r.LiveN > 0 || r.LiveAcc != nil {
+				unmeasured[horizon] = r.Predictor
+			}
+			continue
+		}
 		if *r.DistinctDays > depth[horizon] {
 			depth[horizon] = *r.DistinctDays
+		}
+	}
+	for h, row := range unmeasured {
+		if _, ok := depth[h]; !ok {
+			return nil, fmt.Errorf("registry row %q publishes figures at horizon %s but no row there "+
+				"carries a positive distinct_days, so its graded window is unmeasured and cannot be "+
+				"checked for a collapsed cross-section", row, h)
 		}
 	}
 	// Sorted so the refusal text is stable across polls.
@@ -600,7 +619,7 @@ func gatedHorizons(reg *registryFile) []string {
 		horizons = append(horizons, h)
 	}
 	sort.Strings(horizons)
-	return horizons
+	return horizons, nil
 }
 
 // buildCollapseReason is split out so the wording is assertable without a

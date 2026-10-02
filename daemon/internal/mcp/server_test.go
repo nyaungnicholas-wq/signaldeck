@@ -54,6 +54,7 @@ func TestWatermarkNoticeIsDisclosed(t *testing.T) {
 // The live directional record must be retrievable and must never be hidden —
 // including on a daemon whose grading worker has written nothing at all.
 func TestTheNegativeLiveRecordCannotBeHidden(t *testing.T) {
+	sd30Off(t) // with SD-30 on the accuracy is withheld, and acc <= 0.5 below would hold vacuously
 	for _, src := range []Source{
 		stubSource{}, // empty store
 		stubSource{health: map[string]string{"directional-ensemble-1d": ""}},

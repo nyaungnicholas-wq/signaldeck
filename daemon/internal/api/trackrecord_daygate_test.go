@@ -46,7 +46,7 @@ func TestTrackRecord_DayClusterGate(t *testing.T) {
 		}
 	}
 
-	d := Deps{St: st}
+	d := Deps{St: st, RegistryPath: healthyRegistry(t)}
 	rr := httptest.NewRecorder()
 	d.trackRecord(rr, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
 	var resp map[string]any

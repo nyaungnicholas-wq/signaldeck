@@ -44,7 +44,10 @@ type CollapseVerdictCache struct {
 
 func (d Deps) collapsedGradingWindowCached(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
 	c := d.CollapseCache
-	hs := gatedHorizons(reg)
+	hs, err := gatedHorizons(reg)
+	if err != nil {
+		return "", false, err
+	}
 	if c == nil || len(hs) == 0 {
 		return d.collapsedGradingWindow(ctx, reg, now)
 	}

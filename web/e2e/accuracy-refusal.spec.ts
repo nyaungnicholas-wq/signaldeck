@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
 import type { BrowserContext } from "@playwright/test";
 
-const REFUSED = new Set(["REFUSED", "REFUSED_STALE"]);
+// Every refusal daemon/internal/api/accuracy.go emits. REFUSED_UNAVAILABLE is
+// the collapse gate's check outage (since 2026-09-13), distinct from a finding.
+const REFUSED = new Set(["REFUSED", "REFUSED_STALE", "REFUSED_UNAVAILABLE"]);
 
 const SMOKE_USER = "e2e-smoke";
 const SMOKE_PASS = "E2eSmoke!2026";
@@ -70,7 +72,12 @@ test("/api/accuracy either publishes with a grade stamp or refuses with a reason
   } else {
     expect(res.status()).toBe(503);
     expect(REFUSED.has(body.status), `unexpected refusal status ${body.status}`).toBe(true);
-    expect(body.grader_fresh).toBe(false);
+    // grader_fresh is measured once, before any branch, so only REFUSED_STALE
+    // implies false. A REFUSED window (the grader's own refusal marker, a
+    // collapse, an unreadable ledger) can come from a healthy grader, and
+    // REFUSED_UNAVAILABLE is reachable only after the freshness checks pass.
+    if (body.status === "REFUSED_STALE") expect(body.grader_fresh).toBe(false);
+    if (body.status === "REFUSED_UNAVAILABLE") expect(body.grader_fresh).toBe(true);
     // A refusal a reader cannot act on is barely better than silence.
     expect(body.reason, "a refusal must carry its reason").toBeTruthy();
     // Fail-closed: a refusal must not smuggle numbers out alongside it.

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 )
 
 type tool struct {
@@ -343,6 +344,7 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 		if b, ok := v["emitting"].(bool); ok {
 			row["emitting"] = b
 		}
+		withholdDirectional(row, m.horizon)
 		directional = append(directional, row)
 	}
 	if len(directional) == 0 {
@@ -360,6 +362,7 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 			"source":                  "documented figure of record (the grading worker has not written a verdict on this daemon)",
 			"note":                    directionalNote,
 		})
+		withholdDirectional(directional[0].(map[string]any), "1d")
 	}
 
 	// The frozen date is a hash-chained COMMITMENT and is never edited. The
@@ -418,6 +421,20 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 			"already retired.",
 		"disclaimer": disclaimerText,
 	}, nil
+}
+
+// withholdDirectional applies SD-30 to one directional row: the figures are
+// graded on a label mostly realised at issue, and /api/accuracy,
+// /api/model-health and /api/track-record already withhold them, so this tool
+// must not be the door they leave by. The verdict, emitting state and
+// observation count are facts about the record and stay.
+func withholdDirectional(row map[string]any, horizon string) {
+	if why, ok := publication.DirectionalWithheld(horizon); ok {
+		delete(row, "liveAccuracy")
+		delete(row, "baselineAccuracy")
+		delete(row, "brierSkill")
+		row["figuresWithheld"] = why
+	}
 }
 
 func copyNum(src map[string]any, dst map[string]any, from, to string) {
