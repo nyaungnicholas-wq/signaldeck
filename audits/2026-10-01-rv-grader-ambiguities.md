@@ -79,9 +79,30 @@ p ≈ 0.0014, which straddle 0.05/26 = 0.00192. A1 and A2 matter exactly in that
   1,957 of 8,358 resolved h=1 outcomes (23.4%, on 8 of 18 call days) and 1,392 of 6,704
   h=5 outcomes (20.8%, on 5 of 14 call days) were resolved before 16:00 ET on the
   window's last session. That is mid-session, from a partial bar.
-  `ResolveRVForecast` never overwrites, so those outcomes are still frozen. Re-resolving
-  them from settled bars rewrites outcomes on a registered live record. That is the
-  owner's decision, and it must be done and logged before the 60-day grade.
+  **Repaired 2026-10-01 on the owner's instruction** with `daemon/cmd/rv-reresolve`.
+  Every row whose `resolved_ts` fell before `md.DailyBarSettled` for its window's last bar
+  was recomputed with the resolver's own estimator (`harrv.RVSeries` + `TargetAt`) from
+  settled bars. Forecasts and nulls were not touched. The run updated 13,485 rows in one
+  transaction, each guarded on its old values:
+  - h=1: 7,776 resolved early, 1,978 changed value.
+  - h=5: 5,709 resolved early, 1,397 changed value.
+  - 0 windows became unestimable.
+
+  Every changed row had been resolved between 09:36 and 12:24 ET. 88% moved up, as a
+  partial session's understated range predicts. Old values are in
+  `data/rv-reresolve-2026-10-01.csv` (gitignored, on the host), which makes the repair
+  reversible.
+
+  Checks:
+  - The tool's self-check: 1,567 of 1,577 rows resolved after settlement recompute
+    bit-identically. The other 10 had their bars revised later and were correctly left
+    alone.
+  - Independent Python Garman-Klass after the repair: 7 of 8,358 h=1 outcomes differ from
+    today's bars, the same revision cases.
+  - A re-run finds 0 early rows.
+
+  **The deployed daemon still runs the old resolver until 3fdddf7 is deployed. Re-run
+  `rv-reresolve -db … -apply -log …` once after deploying.** It is idempotent.
 
 ## Adjacent copy that a verdict will contradict (not changed here)
 
