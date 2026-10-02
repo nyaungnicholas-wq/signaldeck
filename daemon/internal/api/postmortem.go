@@ -7,6 +7,8 @@ import (
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // postmortems serves the Research Lab's failure-attribution surface: the
@@ -30,7 +32,7 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 		sinceTs = time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 	}
 
-	clusters, total, err := d.St.PostmortemClusters(r.Context(), sinceTs)
+	clusters, totalMisses, err := d.St.PostmortemClusters(r.Context(), sinceTs)
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -39,6 +41,28 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpInternal(w, err)
 		return
+	}
+
+	// SD-30: a postmortem is a resolved 1d/1w directional call judged WRONG
+	// against the label that is mostly realised at issue, and the worker walks
+	// only those horizons (pipeline predHorizons). The misses, their count and
+	// the cluster shares are that label's record, so they are withheld with the
+	// reason. Applied to what was read, not to the store queries.
+	var total any = totalMisses
+	withheld := ""
+	for _, h := range []md.Horizon{md.H1d, md.H1w} {
+		if why, ok := publication.DirectionalWithheld(string(h)); ok {
+			withheld = why
+		}
+	}
+	if withheld != "" {
+		kept := make([]store.RecentPostmortemRow, 0, len(recent))
+		for _, p := range recent {
+			if _, ok := publication.DirectionalWithheld(string(p.Horizon)); !ok {
+				kept = append(kept, p)
+			}
+		}
+		recent, clusters, total = kept, []store.PostmortemCluster{}, nil
 	}
 
 	var recentOut, clustersOut any = recent, clusters
@@ -69,13 +93,17 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 		clustersOut = pubC
 	}
 
-	writeJSON(w, map[string]any{
+	out := map[string]any{
 		"windowDays":   days,
 		"totalMisses":  total,
 		"clusters":     clustersOut, // biggest recurring failure mode first
 		"recent":       recentOut,
 		"taxonomyNote": "primary reason per resolved WRONG prediction; 'unexplained' means no recorded signal saw it coming (a missing-feature flag, not an error).",
-	})
+	}
+	if withheld != "" {
+		out["withheld"] = withheld
+	}
+	writeJSON(w, out)
 }
 
 // publicPostmortemRow is store.RecentPostmortemRow without fwdReturn: the

@@ -670,6 +670,7 @@ var anonProbeOverride = map[string]memberProbe{
 var anonProbeFloor = map[string]int{"public-surface": 28, "tunnel": 11}
 
 func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
+	sd30Off(t) // scan the FULL payloads: an SD-30-withheld body is a subset, and an emptied route would leave the positive control blind
 	// Members reach the same union under both published postures; the gate
 	// differs (allowlist vs PublicReads) and both must hold. Each posture also
 	// probes what a caller with no session reaches there.

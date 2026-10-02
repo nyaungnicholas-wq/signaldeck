@@ -8,11 +8,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/postmortem"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -553,5 +555,52 @@ func TestSD30_EvidenceSeedsSayTheyAreDatedHistory(t *testing.T) {
 		if !strings.HasPrefix(id, "directional-ensemble-") && strings.Contains(text, "SD-30") {
 			t.Fatalf("%s is not a directional claim: %s", id, text)
 		}
+	}
+}
+
+// Every postmortem is a 1d/1w directional call judged wrong on the SD-30 label.
+func TestSD30_PostmortemsWithheld(t *testing.T) {
+	ctx := context.Background()
+	_, st, d := newTestServer(t, nil)
+	sym, err := st.UpsertSymbol(ctx, "PMX", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ts := range []int64{1000, 2000} {
+		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
+			RawProb: 0.7, CalProb: 0.7, NUsed: 40, Components: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, ts, -0.02); err != nil {
+			t.Fatal(err)
+		}
+	}
+	misses, err := st.UnPostmortemedMisses(ctx, md.H1d, 10)
+	if err != nil || len(misses) != 2 {
+		t.Fatalf("seeded misses: %d %v", len(misses), err)
+	}
+	for _, m := range misses {
+		rep := postmortem.Classify(postmortem.Case{Prob: m.Prob, Up: m.Up, FwdReturn: m.FwdReturn, Disagreement: 0.5}, postmortem.DefaultThresholds())
+		if err := st.InsertPostmortem(ctx, m, rep, time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sd30On(t)
+	body := serveRecorded(t, d.postmortems, "/api/postmortems?days=0")
+	cl, _ := body["clusters"].([]any)
+	rc, _ := body["recent"].([]any)
+	if v, present := body["totalMisses"]; !present || v != nil || cl == nil || len(cl) != 0 || rc == nil || len(rc) != 0 ||
+		body["withheld"] != publication.SD30Reason {
+		t.Fatalf("withheld postmortems: totalMisses %v clusters %v recent %v withheld %v",
+			body["totalMisses"], body["clusters"], body["recent"], body["withheld"])
+	}
+
+	sd30Off(t)
+	body = serveRecorded(t, d.postmortems, "/api/postmortems?days=0")
+	cl, _ = body["clusters"].([]any)
+	rc, _ = body["recent"].([]any)
+	if jnum(body, "totalMisses") != 2 || len(cl) == 0 || len(rc) != 2 || body["withheld"] != nil {
+		t.Fatalf("flag off: %v", body)
 	}
 }
