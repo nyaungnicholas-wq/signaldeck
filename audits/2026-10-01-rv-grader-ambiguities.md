@@ -71,11 +71,17 @@ p ≈ 0.0014, which straddle 0.05/26 = 0.00192. A1 and A2 matter exactly in that
   model over its own valid rows instead. The two are identical on live data, because the
   store refuses non-positive forecasts and nulls. "30 symbols on a day" is counted as
   loss-defined forecasts in the cell, not as all resolved forecasts that day.
-- **Resolver forming-bar risk (pre-existing, `pipeline/rvforecast.go` RVOutcomeWorker).**
-  The resolver does not check `DailyBarSettled` on the last bar of the outcome window. A
-  pass during market hours could therefore freeze an h=1 RV^GK outcome from a partial
-  session, while `CCTarget` later reads the settled bar. Not changed here. It is a
-  resolver fix, not grading.
+- **Resolver forming-bar defect: FIXED for future rows, live rows NOT repaired.**
+  `RVOutcomeWorker` resolved outcomes without checking that the window's last bar had
+  settled. Since 2026-10-01 it waits for `md.DailyBarSettled` (22 h after the NY-midnight
+  stamp), the same bound the runner applies to call bars
+  (`TestRVOutcomeWaitsForTheWindowToSettle`). Measured read-only on the live table:
+  1,957 of 8,358 resolved h=1 outcomes (23.4%, on 8 of 18 call days) and 1,392 of 6,704
+  h=5 outcomes (20.8%, on 5 of 14 call days) were resolved before 16:00 ET on the
+  window's last session. That is mid-session, from a partial bar.
+  `ResolveRVForecast` never overwrites, so those outcomes are still frozen. Re-resolving
+  them from settled bars rewrites outcomes on a registered live record. That is the
+  owner's decision, and it must be done and logged before the 60-day grade.
 
 ## Adjacent copy that a verdict will contradict (not changed here)
 

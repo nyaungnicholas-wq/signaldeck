@@ -299,6 +299,15 @@ resolve:
 				}
 				continue
 			}
+			// The outcome window's LAST session must have settled. Bars carries
+			// the forming session during market hours, so without this a pass at
+			// midday froze an outcome from a partial bar -- the same defect the
+			// runner's call-bar guard closed (audit 2026-09-10 F1), on the
+			// outcome side. Waiting is free: it settles within the day.
+			if last := idx + f.Horizon; last < len(ts) && !md.DailyBarSettled(md.Stocks, ts[last], now.Unix()) {
+				waiting++
+				continue
+			}
 			actual, ok := harrv.TargetAt(rv, idx, harrv.Horizon(f.Horizon))
 			if !ok {
 				if now.Sub(time.Unix(f.Ts, 0)) > abandonAfter {
