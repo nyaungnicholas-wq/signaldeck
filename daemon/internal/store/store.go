@@ -1251,13 +1251,13 @@ func (s *Store) Snaps(ctx context.Context, symbolID int64, from, to int64, limit
 	return out, rows.Err()
 }
 
-// PruneSnaps enforces the snapshot ring retention.
+// PruneSnaps enforces the snapshot ring retention, in short batches so account
+// writes get in between (deleteInBatches): the Downsampler hands it up to a
+// 50k-row archive batch per call.
 func (s *Store) PruneSnaps(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM snapshots_1s WHERE ts<?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM snapshots_1s WHERE (symbol_id, ts) IN (
+		  SELECT symbol_id, ts FROM snapshots_1s WHERE ts < ? LIMIT ?)`, cutoff)
 }
 
 // ── scores & outcomes ───────────────────────────────────────────────────
