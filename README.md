@@ -46,8 +46,8 @@ are deliberately not restated here — see `proofs/P2_LIVE_RECORD_RECONCILIATION
 
 | Predictor | Verdict | Live acc | Skill vs baseline | Baseline (stricter null) | 95% CI (day-clustered) | Effective n |
 |---|---|---|---|---|---|---|
-| directional-ensemble (1d) | INSUFFICIENT DAYS (3/10 credible days of 5, 2 degenerate) — no interval, so no verdict | 50.5% | -8.8pp | 59.3% | withheld | 1,052 raw |
-| directional-ensemble (1d, high conviction) | INSUFFICIENT DAYS (3/10 credible days of 3) — no interval, so no verdict | 46.3% | -16.3pp | 62.6% | withheld | 95 raw |
+| directional-ensemble (1d) | withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 1,052 raw |
+| directional-ensemble (1d, high conviction) | withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 95 raw |
 
 **Structural claims (trend/vol/liquidity): 1/7 PENDING — backtested numbers, not live records yet.**
 

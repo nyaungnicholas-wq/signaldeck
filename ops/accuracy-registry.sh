@@ -673,6 +673,10 @@ import json, pathlib, re, sys
 sd = pathlib.Path(sys.argv[1])
 reg = json.load(open(sd / "data" / "accuracy_registry.json"))
 readme_path = sd / "README.md"
+# SD-30: the same switch /api/accuracy and partials/live_accuracy.md read.
+sys.path.insert(0, str(sd / "tools"))
+from live_accuracy import SD30_CELL, sd30_flag, sd30_reason
+sd30 = sd30_flag()
 
 def verdict_of(r):
     """The row's verdict, or WITHHELD when the grader dropped the field.
@@ -750,6 +754,11 @@ lines = [
 for r in directional:
     v = verdict_of(r)
     verdict_md = f"**{v}**" if v.startswith("FAILED") else v
+    why = sd30_reason(r, sd30)
+    if why:
+        lines.append(f"| {r['predictor']} | {why} | {SD30_CELL} | {SD30_CELL} "
+                     f"| {SD30_CELL} | {SD30_CELL} | {eff_n_cell(r)} |")
+        continue
     lines.append(
         f"| {r['predictor']} | {verdict_md} | {pct(r.get('live_acc'))} | {skill_cell(r)} "
         f"| {pct(baseline(r))} | {ci_cell(r)} | {eff_n_cell(r)} |"
