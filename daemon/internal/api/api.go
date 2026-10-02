@@ -490,7 +490,18 @@ func httpErr(w http.ResponseWriter, code int, msg string) {
 // leak came back last time. There is one 500 body and it says nothing. Use
 // httpErr directly for 4xx, where the text is the point — a client CAN act on
 // "need symbol= and market=crypto|stocks".
+//
+// A CANCELLED request is not a server failure: the client hung up (a web
+// release stopping the web tier cancelled three /api/track-record builds at
+// 2026-10-01 20:35:46, each logged ERROR and counted as a 500). It answers 499,
+// nginx's "client closed request", the same code the access log uses for an
+// undelivered response (security.go), and logs at Info.
 func httpInternal(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		slog.Info("request cancelled by the client", "err", err)
+		httpErr(w, 499, "request cancelled")
+		return
+	}
 	slog.Error("request failed", "err", err)
 	httpErr(w, http.StatusInternalServerError, "internal error")
 }

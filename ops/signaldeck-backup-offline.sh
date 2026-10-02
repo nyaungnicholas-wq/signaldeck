@@ -293,6 +293,18 @@ PY
   # The daemon is down, so this is the one uncontended moment the WAL (256MB at
   # last audit — live readers pin it all session) can actually truncate to zero.
   sd_sqlite "$DB" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>>"$LOG" || log "WARN: wal_checkpoint(TRUNCATE) failed"
+
+  # The live DB is not needed past this line: the copy is written, verified and
+  # recorded, and the WAL truncated. What follows (compressing and pruning old
+  # generations, the offsite upload) reads only backup files, and its few
+  # meta/dq_events writes go through sd_sqlite's 120 s busy timeout. So the
+  # caller may bring the daemon back now (SD-57: ~7.7 min of upload with the
+  # API down on 2026-09-30). A failing hook is only logged: the caller restarts
+  # after the backup instead.
+  if [ -n "${SIGNALDECK_BACKUP_DB_DONE_CMD:-}" ]; then
+    log "db phase done - running the caller's restart hook"
+    bash -c "$SIGNALDECK_BACKUP_DB_DONE_CMD" >>"$LOG" 2>&1 || log "WARN: restart hook failed; the caller restarts after the backup"
+  fi
 fi
 
 # Generation policy: the newest $KEEP_RAW stay plain .db (instant restore),

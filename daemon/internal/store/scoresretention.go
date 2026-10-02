@@ -14,6 +14,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 )
 
@@ -115,19 +116,41 @@ const stripKeyChunk = 500
 // runs after ArchiveScores succeeds), so the archive-before-destroy invariant
 // is enforced in SQL — a sustained archive failure or a window misconfig can
 // delay downsampling, but can never destroy an un-archived blob.
+//
+// ONE UTC DAY PER STATEMENT. As a single DELETE it walked every row below the
+// cutoff inside one write: 1m17s holding the write lock on 2026-10-01, with a
+// sign-in waiting 10.3 s behind it (12.7 s behind the strip pass). The keep rule
+// groups by ts/86400, so a day window [d, d+86400) never splits a group and the
+// result is identical; between days the priority gate lets account writes in.
 func (s *Store) PruneScoresKeepDailyLast(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `
-		DELETE FROM scores WHERE ts < ? AND components = '[]' AND EXISTS (
-			SELECT 1 FROM scores s2
-			WHERE s2.symbol_id = scores.symbol_id
-			  AND s2.horizon   = scores.horizon
-			  AND s2.ts/86400  = scores.ts/86400
-			  AND s2.ts        > scores.ts
-		)`, cutoff)
-	if err != nil {
+	var lo sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT MIN(ts) FROM scores WHERE ts < ? AND components = '[]'`, cutoff).Scan(&lo); err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	if !lo.Valid {
+		return 0, nil
+	}
+	var total int64
+	for day := lo.Int64 - lo.Int64%86400; day < cutoff; day += 86400 {
+		res, err := s.w.ExecContext(ctx, `
+			DELETE FROM scores WHERE ts >= ? AND ts < ? AND components = '[]' AND EXISTS (
+				SELECT 1 FROM scores s2
+				WHERE s2.symbol_id = scores.symbol_id
+				  AND s2.horizon   = scores.horizon
+				  AND s2.ts/86400  = scores.ts/86400
+				  AND s2.ts        > scores.ts
+			)`, day, min(day+86400, cutoff))
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // CompositeHeavyBelow / StripCompositePayload / PruneCompositeKeepDailyLast
