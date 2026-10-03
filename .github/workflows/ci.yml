@@ -115,7 +115,33 @@ jobs:
       # both packages were still making progress when the alarm fired — a
       # deadlock parks on one test for the full window. Raising the ceiling
       # does not hide a hang; it stops truncating a slow suite.
-      - run: go test -race -timeout 30m -coverprofile=coverage.out -covermode=atomic ./...
+      # -timeout 45m (2026-10-02): the 30m ceiling was reached the same way.
+      # internal/api ran 1176-1734s on passing runs and timed out at 1801s on
+      # the d2e9948 push while two PR runs of that SHA passed; internal/store
+      # runs 1160-1527s. Measured cause: a fresh store.Open (schema build in
+      # modernc's pure-Go SQLite, which -race instruments line by line) costs
+      # ~1.5-2s under -race against ~0.1s without, and every api test opens
+      # its own store, serially. Same argument as above: a hang still trips
+      # the alarm, now at 45m. The next step prints per-package durations and
+      # warns past 1800s (the old ceiling) so the creep shows up before it
+      # reaches this one.
+      - name: go test -race (with coverage)
+        run: |
+          set -o pipefail
+          go test -race -timeout 45m -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+      - name: Per-package test durations
+        if: always()
+        env:
+          LOG: ${{ runner.temp }}/go-test.log
+          WARN_SECS: "1800"
+        run: |
+          d="$RUNNER_TEMP/durations.tsv"
+          awk -F'\t' '($1 == "ok  " || $1 == "FAIL") && $3 ~ /^[0-9.]+s$/ { sub(/s$/, "", $3); sub(/^github\.com\/nyaungnicholas-wq\/signaldeck\//, "", $2); print $3 "\t" $2 }' "$LOG" | LC_ALL=C sort -t$'\t' -k1,1gr > "$d"
+          [ -s "$d" ] || { echo "no package timings found in $LOG"; exit 0; }
+          echo "Slowest test packages (go test -race):"
+          head -15 "$d" | awk -F'\t' '{ printf "%8.1fs  %s\n", $1, $2 }'
+          awk -F'\t' -v w="$WARN_SECS" '$1 + 0 > w + 0 { printf "::warning::%s took %.0fs under -race, over the %ss warn line (the -timeout is 45m)\n", $2, $1, w }' "$d"
+          { printf '### Slowest test packages\n\n| package | seconds |\n|---|---|\n'; head -15 "$d" | awk -F'\t' '{ printf "| %s | %.1f |\n", $2, $1 }'; } >> "$GITHUB_STEP_SUMMARY"
       - run: go tool cover -func=coverage.out | tail -1
       # Coverage gate — the step above only *printed* the total, so coverage
       # could silently decay. The floor is the measured total minus 2pp;
