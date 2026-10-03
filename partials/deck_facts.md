@@ -8,14 +8,14 @@ Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand
 | — observation days | 2,163 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,901 |
+| `symbols.delisted_at` stamps | 1,902 |
 | — delisted 2020-2022 | 620 |
 | — delisted 2023-2025 | 1,116 |
 | — recent window against earlier | **180.0%** of the 2020-2022 count |
-| Daily-bar calendar (from `SPY`) | 1,948 sessions |
-| Stock bar coverage | 91.89% — 2,723,876 of 2,964,361 symbol-days over 2,940 symbols |
-| — still-listed names only | 98.77% over 1,039 symbols |
-| — names carrying `delisted_at` only | 83.38% over 1,901 symbols |
+| Daily-bar calendar (from `SPY`) | 1,949 sessions |
+| Stock bar coverage | 91.89% — 2,725,282 of 2,965,773 symbol-days over 2,940 symbols |
+| — still-listed names only | 98.70% over 1,038 symbols |
+| — names carrying `delisted_at` only | 83.48% over 1,902 symbols |
 | — symbols that stop printing early with no `delisted_at` | 9 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
