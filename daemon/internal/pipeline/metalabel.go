@@ -81,6 +81,9 @@ func (w *MetaLabelRunner) Name() string { return "metalabel-runner" }
 // burn a write connection the fleet needs without changing the answer.
 func (w *MetaLabelRunner) Interval() time.Duration { return 12 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *MetaLabelRunner) Heavy() bool { return true }
+
 // publishedMetaLabel is one horizon's grade as stored and served.
 type publishedMetaLabel struct {
 	Horizon string `json:"horizon"`

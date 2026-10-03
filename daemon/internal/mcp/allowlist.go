@@ -69,7 +69,7 @@ var responseFields = map[string]map[string]bool{
 		"directional", "directional.model", "directional.horizon", "directional.liveAccuracy",
 		"directional.independentObservations", "directional.baselineAccuracy",
 		"directional.brierSkill", "directional.verdict", "directional.emitting",
-		"directional.source", "directional.note",
+		"directional.source", "directional.note", "directional.figuresWithheld",
 		"structural", "structural.status", "structural.firstGradableOn", "structural.note",
 		"discrimination", "discrimination.claim", "discrimination.lowBand",
 		"discrimination.veryHighBand", "discrimination.spreadPP", "discrimination.observations",

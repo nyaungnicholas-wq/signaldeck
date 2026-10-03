@@ -36,6 +36,9 @@ type SmartMoneyScorer struct {
 func (w *SmartMoneyScorer) Name() string            { return "smart-money-scorer" }
 func (w *SmartMoneyScorer) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *SmartMoneyScorer) Heavy() bool { return true }
+
 func (w *SmartMoneyScorer) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {

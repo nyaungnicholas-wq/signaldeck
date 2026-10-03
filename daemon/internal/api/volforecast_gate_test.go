@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -100,5 +101,22 @@ func TestVolForecastLatestGateIsPerRequest(t *testing.T) {
 	resetVolRecordCache(t, d2)
 	if rec := readLatest(d2); rec.Code != 200 || !strings.Contains(rec.Body.String(), "AAA") {
 		t.Fatalf("pass after warming: a refusal was cached: %s", show(rec))
+	}
+}
+
+// The record body changed shape (caveat text, start-rule pooled N), so a copy
+// persisted by the previous build must not be served after the deploy: the
+// format is part of the file name, and this pins that the bump happened.
+func TestVolRecordDiscardsThePreviousFormatsBody(t *testing.T) {
+	_, _, d := newTestServer(t, nil)
+	d.Cfg.DBPath = filepath.Join(t.TempDir(), "x.db")
+	resetVolRecordCache(t, d)
+	key := d.St.CacheKey() + "|record"
+	const deployedFormat = 2 // what the build before the batch-2 merge persisted
+	persistBody(d.cacheFile(volRecordCacheName, deployedFormat), key, time.Now(), []byte(`{"stale":"format-2"}`))
+	rec := httptest.NewRecorder()
+	d.serveVolRecord(rec, httptest.NewRequest(http.MethodGet, "/api/vol-forecast/record", nil))
+	if strings.Contains(rec.Body.String(), `"stale"`) {
+		t.Fatalf("a previous format's persisted body was served: %s", rec.Body.String())
 	}
 }

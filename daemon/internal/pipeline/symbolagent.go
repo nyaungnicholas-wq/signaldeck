@@ -40,6 +40,9 @@ type PerSymbolLearner struct {
 func (w *PerSymbolLearner) Name() string            { return "per-symbol-learner" }
 func (w *PerSymbolLearner) Interval() time.Duration { return time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *PerSymbolLearner) Heavy() bool { return true }
+
 func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {

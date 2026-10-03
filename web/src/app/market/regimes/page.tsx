@@ -16,6 +16,8 @@ import ErrorState from "@/components/ErrorState";
 import ExportMenu from "@/components/ExportMenu";
 import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import HelpTip from "@/components/HelpTip";
+import { regimeCaveats } from "@/lib/regimeCaveat";
 
 const KIND_ORDER = ["trend21", "liquidity21", "vol21"] as const;
 
@@ -194,19 +196,46 @@ function toMarkdown(
 function KindSection({
   kind,
   rows,
+  total,
   doc,
   ews,
   earningsNote,
 }: {
   kind: string;
   rows: StructRegimeForecast[];
+  total: number;
   doc?: { what: string; accuracyTiers: Record<string, string>; caveat: string };
   ews?: Record<string, EarningsWindowLabel>;
   earningsNote?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const list = showAll ? rows : rows.slice(0, SHOW_N);
+  const [extra, setExtra] = useState<StructRegimeForecast[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [moreErr, setMoreErr] = useState<string | null>(null);
+  // A member is sent the top rows of each kind and fetches the rest a page at
+  // a time (REGIMES-SIZE). The parent re-polls `rows` every 2 minutes, so a
+  // fetched row that has since moved into `rows` is dropped here: React keys
+  // are kind-symbol and a row must never render twice.
+  const held = new Set(rows.map((f) => f.symbol));
+  const all = [...rows, ...extra.filter((f) => !held.has(f.symbol))];
+  const list = showAll ? all : all.slice(0, SHOW_N);
+  // The server's caveat on the rows on show, verbatim, on the accuracy header.
+  const caveats = regimeCaveats(list);
+  const remaining = Math.max(0, total - all.length);
+
+  const loadMore = async () => {
+    setLoading(true);
+    setMoreErr(null);
+    try {
+      const page = await structuralRegimesWithEarnings({ kind, offset: all.length, limit: 100 });
+      setExtra((x) => [...x, ...(page.forecasts[kind] ?? [])]);
+    } catch (e) {
+      setMoreErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const topRegime = rows.length > 0
     ? rows.reduce((best, f) => f.conviction > best.conviction ? f : best, rows[0]).regime
@@ -274,7 +303,20 @@ function KindSection({
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">symbol</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">call</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">conviction</th>
-                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">accuracy</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">
+                    <span className="inline-flex items-center gap-1">
+                      accuracy
+                      {caveats.length > 0 ? (
+                        <HelpTip label="what these accuracies are">
+                          {caveats.map((c) => (
+                            <span key={c} className="mb-2 block last:mb-0">
+                              {c}
+                            </span>
+                          ))}
+                        </HelpTip>
+                      ) : null}
+                    </span>
+                  </th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">tier</th>
                   <th className="sticky top-0 z-10 bg-[--bg] py-2 font-normal">as of</th>
                 </tr>
@@ -297,14 +339,47 @@ function KindSection({
               </tbody>
             </table>
           </div>
-          {rows.length > SHOW_N ? (
-            <button
-              className="mt-3 text-[0.75rem] text-white/40 hover:text-white/80"
-              onClick={() => setShowAll((v) => !v)}
-            >
-              {showAll ? "show fewer" : `show all ${rows.length}`}
-            </button>
+          {total > SHOW_N ? (
+            <div className="flex flex-wrap gap-4">
+              {!showAll ? (
+                <button
+                  type="button"
+                  className="mt-3 text-[0.75rem] text-white/40 hover:text-white/80"
+                  onClick={() => {
+                    setShowAll(true);
+                    if (remaining > 0) void loadMore();
+                  }}
+                >
+                  show all {total}
+                </button>
+              ) : (
+                <>
+                  {remaining > 0 ? (
+                    <button
+                      type="button"
+                      className="mt-3 text-[0.75rem] text-white/40 hover:text-white/80"
+                      disabled={loading}
+                      onClick={loadMore}
+                    >
+                      {loading ? "loading…" : `show 100 more (${all.length} of ${total})`}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="mt-3 text-[0.75rem] text-white/40 hover:text-white/80"
+                    onClick={() => setShowAll(false)}
+                  >
+                    show fewer
+                  </button>
+                </>
+              )}
+            </div>
           ) : null}
+          {moreErr && (
+            <span className="mt-3 text-[0.75rem] text-amber-300/80">
+              could not load more: {moreErr}
+            </span>
+          )}
         </>
       )}
     </Reveal>
@@ -348,6 +423,10 @@ export default function RegimesPage() {
   const trendForecasts = data?.forecasts?.trend21 ?? [];
   const liqForecasts = data?.forecasts?.liquidity21 ?? [];
   const volForecasts = data?.forecasts?.vol21 ?? [];
+  // A member is sent the top rows of each kind and the totals in kindStats
+  // (REGIMES-SIZE); the operator's full payload has no kindStats and every row.
+  const stats = data?.kindStats;
+  const countOf = (kind: string, rows: StructRegimeForecast[]) => stats?.[kind]?.count ?? rows.length;
 
   const currentStates = {
     trend: trendForecasts.length > 0
@@ -374,6 +453,19 @@ export default function RegimesPage() {
   const avgAccuracy = (
     forecasts: StructRegimeForecast[],
   ): { pct: number | null; n: number } => {
+    if (stats) {
+      // The member read: the same mean, from the daemon's per-kind totals.
+      let n = 0;
+      let sum = 0;
+      for (const k of KIND_ORDER) {
+        const st = stats[k];
+        if (st && st.measured > 0) {
+          n += st.measured;
+          sum += (st.meanHistoricalAccuracy ?? 0) * st.measured;
+        }
+      }
+      return n === 0 ? { pct: null, n: 0 } : { pct: (sum / n) * 100, n };
+    }
     const measured = forecasts.filter((f) => f.historicalAccuracy > 0);
     if (measured.length === 0) return { pct: null, n: 0 };
     // historicalAccuracy is a 0-1 fraction; the tile renders with a % suffix.
@@ -387,7 +479,7 @@ export default function RegimesPage() {
     <div className="page-enter space-y-4">
       <PageHero
         title="Market Regimes"
-        subtitle="The market's current structural state — trend, volatility and liquidity regimes, with the BACKTESTED accuracy of each state. These claims are not yet live records: no structural forecast has been graded."
+        subtitle="The market's current structural state — trend, volatility and liquidity regimes, with the BACKTESTED accuracy of each state. These accuracies are backtest claims, not the live record: how resolved calls actually scored is graded separately on the record."
         live
       />
 
@@ -403,7 +495,7 @@ export default function RegimesPage() {
                 i={0}
                 label="TREND REGIME"
                 value={currentStates.trend}
-                sub={`${trendForecasts.length} active forecasts`}
+                sub={`${countOf("trend21", trendForecasts)} active forecasts`}
                 glow="hud"
               />
             )}
@@ -412,7 +504,7 @@ export default function RegimesPage() {
                 i={1}
                 label="LIQUIDITY REGIME"
                 value={currentStates.liquidity}
-                sub={`${liqForecasts.length} active forecasts`}
+                sub={`${countOf("liquidity21", liqForecasts)} active forecasts`}
                 glow="hud"
               />
             )}
@@ -421,16 +513,16 @@ export default function RegimesPage() {
                 i={2}
                 label="VOLATILITY REGIME"
                 value={currentStates.volatility}
-                sub={`${volForecasts.length} active forecasts`}
+                sub={`${countOf("vol21", volForecasts)} active forecasts`}
                 glow="hud"
               />
             )}
             {/* "BACKTESTED", not "MEASURED": these are constants from
-                structregime.go's offline lookup table, and all 37,857
-                structural rows have resolved_at NULL — nothing here has ever
-                been graded. sub= says how many forecasts actually carried a
-                number, so an average over 3 of 40 cannot read as an average
-                over 40. */}
+                structregime.go's offline lookup table, never the live grade of
+                resolved calls (that is /api/track-record's; the accuracy
+                column's HelpTip carries the daemon's live count per kind).
+                sub= says how many forecasts actually carried a number, so an
+                average over 3 of 40 cannot read as an average over 40. */}
             {(() => {
               const acc = avgAccuracy(trendForecasts.concat(liqForecasts).concat(volForecasts));
               return (
@@ -466,6 +558,7 @@ export default function RegimesPage() {
                 key={k}
                 kind={k}
                 rows={data.forecasts[k] ?? []}
+                total={countOf(k, data.forecasts[k] ?? [])}
                 doc={data.kinds?.[k]}
                 ews={data.earningsWindows}
                 earningsNote={data.earningsNote}

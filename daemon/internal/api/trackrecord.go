@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -94,6 +95,9 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		h = md.H1d
 	}
 	resp, err := d.buildTrackRecord(r.Context(), h)
+	if u := (uncachedResult{}); errors.As(err, &u) {
+		resp, err = u.payload, nil
+	}
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -253,9 +257,10 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// That is the "refused on one document, published on six" divergence this
 	// repo has already been bitten by, one endpoint out.
 	//
-	// FAIL OPEN on a read error, exactly as the HTTP handler does and as the
-	// gate's own doc requires: refusing on a transient database error would wedge
-	// publication shut on something that is not evidence.
+	// FAIL CLOSED on a gate error, as /api/accuracy has since 2026-09-13
+	// (REFUSED_UNAVAILABLE): an unevaluated gate is not a passed gate. This used
+	// to fail open "exactly as the HTTP handler does" after the handler had
+	// stopped doing so, so the two surfaces split on every unreadable window.
 	// TWO conditions, not one. Verified live after the first attempt shipped with
 	// only the collapse gate and changed nothing: /api/accuracy refuses at
 	// reg.RefusedSince, which fires LONG BEFORE it reaches the collapse gate, and
@@ -271,6 +276,10 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// two conditions that waiting cannot clear.
 	gateReason := "sample"
 	var collapseReason string
+	// A refusal over a registry that did not parse may be a torn read of the
+	// grader's in-place rewrite: it is served, but not cached (see the gated
+	// return below), so the next request reads again.
+	var registryUnparsed bool
 	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
 		// The grader's own refusal. If it will not stand behind its numbers,
 		// neither may a surface computed over the same graded window.
@@ -281,13 +290,29 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 				" — figures over this graded window are withheld. The window is anchored to the " +
 				"survivorship epoch and does not roll forward, so this clears when the window is " +
 				"re-registered, not by waiting"
-		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr == nil && collapsed {
+		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr != nil {
+			gated = true
+			gateReason = "refused"
+			collapseReason = "the collapsed-cross-section gate could not be evaluated, so these figures " +
+				"are withheld WITHOUT having been judged — a check outage, not a finding about the " +
+				"models: " + cerr.Error()
+		} else if collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true
 			gateReason = "collapsed"
 			collapseReason = reason
 		}
+	} else {
+		// An unreadable registry is not a passed gate either: neither the grader's
+		// refusal marker nor the window can be checked. /api/accuracy refuses on
+		// the same read ("accuracy registry unavailable"); this used to skip every
+		// gate above and publish.
+		gated = true
+		gateReason = "refused"
+		collapseReason = "accuracy registry unavailable, so neither the grader's refusal nor the " +
+			"graded window can be checked and these figures are withheld: " + rerr.Error()
+		registryUnparsed = errors.Is(rerr, errRegistryUnparsed)
 	}
 	// SD-30: a label mostly realised at issue is not evidence however many days
 	// it spans. Outside the registry block on purpose: an unreadable registry
@@ -406,6 +431,9 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			for _, m := range resp["byMarket"].([]map[string]any) {
 				delete(m, "dirHitRate")
 			}
+		}
+		if registryUnparsed {
+			return nil, uncachedResult{resp}
 		}
 		return resp, nil
 	}
@@ -974,13 +1002,15 @@ const regimeMinResolutions = 30
 // Best-effort: on a store error it returns an "available:false" stub rather
 // than failing the whole track-record page.
 func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
-	rows, err := d.St.ResolvedRegimeOutcomes(ctx, 50000)
+	// Tallied in SQL, every graded call (the read used to stop at 50,000 rows,
+	// newest first, so past that every per-kind count undercounted). One
+	// independent observation per (symbol, kind, UTC-day): the dedup unique
+	// index guarantees this at write time and the query re-applies it, so a
+	// future schema change cannot silently pseudo-replicate.
+	days, err := d.St.ResolvedRegimeOutcomeDays(ctx, 0)
 	if err != nil {
 		return map[string]any{"available": false, "error": err.Error()}
 	}
-	// One independent observation per (symbol, kind, UTC-day). The dedup unique
-	// index already guarantees this at write time; the re-check here is
-	// defensive so a future schema change can't silently pseudo-replicate.
 	type agg struct {
 		n, correct int
 		sumClaimed float64
@@ -990,28 +1020,22 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 		// treatment rather than a Wilson interval at the raw call count.
 		obs []clusterstat.Obs
 	}
-	seen := map[[3]int64]bool{}
 	byKind := map[string]*agg{}
-	for _, r := range rows {
-		k := string(r.Kind)
-		dk := [3]int64{r.SymbolID, kindOrdinal(k), r.Day}
-		if seen[dk] {
-			continue
-		}
-		seen[dk] = true
-		a := byKind[k]
+	for _, t := range days {
+		a := byKind[t.Kind]
 		if a == nil {
 			a = &agg{}
-			byKind[k] = a
+			byKind[t.Kind] = a
 		}
-		a.n++
-		if r.Correct == 1 {
-			a.correct++
-		}
-		a.sumClaimed += r.HistoricalAccuracy
+		a.n += t.N
+		a.correct += t.Correct
+		a.sumClaimed += t.SumClaimed
+		// One observation per call, as before: the day's hits, then its misses.
 		// Dir is DirNone: "was this regime call right" is not a directional bet,
 		// so the market-breadth diagnostic must not be computed for it.
-		a.obs = append(a.obs, clusterstat.Obs{Day: r.Day, Hit: r.Correct == 1})
+		for i := 0; i < t.N; i++ {
+			a.obs = append(a.obs, clusterstat.Obs{Day: t.Day, Hit: i < t.Correct})
+		}
 	}
 	kinds := map[string]any{}
 	for k, a := range byKind {
@@ -1050,25 +1074,5 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 		// #20: regime claims were measured on (and are resolved against) the
 		// currently-tracked universe's bars.
 		"survivorship": survivorshipBlock(),
-	}
-}
-
-// kindOrdinal maps a regime kind to a stable small int for the dedup key.
-func kindOrdinal(k string) int64 {
-	switch k {
-	case "trend21":
-		return 1
-	case "trend63":
-		return 2
-	case "liquidity21":
-		return 3
-	case "vol21":
-		return 4
-	case "trend21-crypto":
-		return 5
-	case "liquidity21-crypto":
-		return 6
-	default:
-		return 99
 	}
 }

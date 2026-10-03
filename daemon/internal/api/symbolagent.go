@@ -109,8 +109,21 @@ func (d Deps) symbolAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// MEMBERS GET NO PER-SIGNAL HIT RATES. A row is emitted from n=1 with no
+	// base-rate comparison, every one is graded on the directional label under
+	// SD-30, and the panel already hides them (memberView). The personal
+	// personality quotes the lead signal's hit rate, so it goes too.
+	if d.isMember(r) {
+		resp.Skill = []symbolAgentSkill{}
+		if resp.Personal {
+			resp.Personality = memberPersonalLine
+		}
+	}
 	writeJSON(w, resp)
 }
+
+const memberPersonalLine = "This symbol has its own model. Its per-signal hit rates are not shown to members: " +
+	"they rest on small samples and on a directional label under review (SD-30)."
 
 // legOrder is the canonical component order for stable UI rows. Mirrors
 // ensemble.LegNames without importing it here (kept local to the handler).

@@ -68,7 +68,7 @@ const volRecordCacheName = "vol-record"
 // volRecordPersistFormat is the shape of the body volForecastRecord writes, as
 // persisted across restarts. BUMP IT whenever that shape changes, or the first
 // reads after the deploy serve the previous shape.
-const volRecordPersistFormat = 2
+const volRecordPersistFormat = 3 // 3: caveat text and the start-rule pooled N changed (batch-2 merge)
 
 // serveVolRecord is GET /api/vol-forecast/record through the shared cache; the
 // route and WarmCaches both use this entry and file.

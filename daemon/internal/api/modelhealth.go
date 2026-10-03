@@ -23,6 +23,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -85,6 +86,9 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 		if h, isDirectional := strings.CutPrefix(k, "directional-ensemble-"); isDirectional {
 			if shadow, ok := pipeline.DirectionalShadow(ctx, d.St, md.Horizon(h)); ok {
 				v = applyReadmission(v, shadow)
+			}
+			if why, ok := publication.DirectionalWithheld(h); ok {
+				v = withholdModelHealth(v, why)
 			}
 		}
 		models = append(models, v)
@@ -198,6 +202,39 @@ func guardDerivedVariant(v map[string]any) map[string]any {
 // clears the prequential null on >= canary.ReadmitMinDistinctDays distinct days.
 // The verdict block is published either way, designEffect and effectiveN
 // included, so the payload always shows how far the record sits from the bar.
+// withholdModelHealth (SD-30) nils every figure a directional row scores against
+// the label that is mostly realised at issue: its accuracy and baseline, the
+// benchmark's, the skill-vs-benchmark gap, the label-derived health components
+// (skill, calibration, drift) and the overall score they feed, and the shadow
+// record's readmission interval. The verdict, the emitting flag, the reasons and
+// the sample sizes stay. The worker's lifetime grade is untouched: this is what
+// is SERVED, not what is graded.
+func withholdModelHealth(v map[string]any, why string) map[string]any {
+	for _, k := range []string{"accuracy", "baseline", "skillVsBenchmark", "overall"} {
+		v[k] = nil
+	}
+	if b, ok := v["benchmark"].(map[string]any); ok {
+		b["accuracy"], b["ensembleAlignedAcc"] = nil, nil
+	}
+	if c, ok := v["components"].(map[string]any); ok {
+		c["skill"], c["calibration"], c["drift"] = nil, nil, nil
+	}
+	if ra, ok := v["readmission"]; ok && ra != nil {
+		var m map[string]any
+		if b, err := json.Marshal(ra); err == nil && json.Unmarshal(b, &m) == nil && m != nil {
+			m["lower"], m["upper"], m["null"], m["reason"] = nil, nil, nil, why
+			v["readmission"] = m
+		} else {
+			v["readmission"] = nil
+		}
+	}
+	if readmitted, _ := v["readmitted"].(bool); readmitted {
+		v["note"] = "re-admitted by the coded threshold; " + why
+	}
+	v["withheld"] = why
+	return v
+}
+
 func applyReadmission(v map[string]any, shadow canary.Record) map[string]any {
 	if verdict, _ := v["verdict"].(string); verdict != "retired" {
 		return v

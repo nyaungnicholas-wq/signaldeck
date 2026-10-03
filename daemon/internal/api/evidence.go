@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
 )
@@ -37,6 +38,9 @@ func (d Deps) evidenceList(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, "evidence: "+err.Error())
 		return
 	}
+	for i := range claims {
+		claims[i] = datedRetirement(claims[i])
+	}
 	writeJSON(w, map[string]any{
 		"claims":  claims,
 		"count":   len(claims),
@@ -57,5 +61,17 @@ func (d Deps) evidenceOne(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, "evidence: "+err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"claim": c, "note": evidenceNote})
+	writeJSON(w, map[string]any{"claim": datedRetirement(c), "note": evidenceNote})
+}
+
+// datedRetirement says, on the claim itself, what a seeded directional claim
+// is: the dated record the flagship was retired on, measured on the label SD-30
+// later found mostly realised at issue. The stored row is history and is never
+// rewritten (evidence.EnsureSeeds); this sentence is added when it is served.
+func datedRetirement(c evidence.Claim) evidence.Claim {
+	if c.Seeded && strings.HasPrefix(c.ID, "directional-ensemble-") {
+		c.Text += " This is the dated retirement record (" + c.Scope.DateFrom + " to " + c.Scope.DateTo +
+			"), measured on the pre-SD-30 directional label, which is mostly realised at issue; it is kept as history, not as a current figure."
+	}
+	return c
 }

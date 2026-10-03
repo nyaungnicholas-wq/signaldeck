@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
@@ -165,5 +166,46 @@ func TestSymbolAgentEndpoint_UnknownSymbol(t *testing.T) {
 	defer res.Body.Close() //nolint:errcheck
 	if res.StatusCode != 404 {
 		t.Fatalf("unknown symbol: status %d, want 404", res.StatusCode)
+	}
+}
+
+// A member gets no per-signal hit rate and no personality quoting one; the
+// operator and the public read keep the measured rows.
+func TestSymbolAgentEndpoint_MembersGetNoHitRates(t *testing.T) {
+	srv, st, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	sym, err := st.UpsertSymbol(t.Context(), "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSymbolModel(t.Context(), store.SymbolModelRow{
+		SymbolID: sym.ID, Horizon: string(md.H1d), Weights: `{"pressure":1}`,
+		Skill:       `{"pressure":{"hitRate":1,"ic":0.5,"n":1,"hasHR":true,"hasIC":true}}`,
+		Personality: "Pressure-led: Pressure hits 100% of its directional calls (1).",
+		NSamples:    40, Tier: symbolagent.TierPersonal, UpdatedTs: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	url := srv.URL + "/api/symbol-agent?symbol=AAPL&market=stocks&horizon=1d"
+	read := func(c *http.Client) symbolAgentResp {
+		t.Helper()
+		code, body := getAs(t, c, url)
+		if code != http.StatusOK {
+			t.Fatalf("status %d: %.300s", code, body)
+		}
+		var r symbolAgentResp
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	m := read(signupVerified(t, srv, mb, "mira", "mira@gmail.com"))
+	if m.Skill == nil || len(m.Skill) != 0 || strings.Contains(m.Personality, "%") {
+		t.Fatalf("member saw hit rates: skill %+v personality %q", m.Skill, m.Personality)
+	}
+	if !m.Personal || m.NSamples != 40 {
+		t.Fatalf("the tier and sample size stay for a member: %+v", m)
+	}
+	if o := read(ownerClient(t, srv.URL)); len(o.Skill) != 1 || o.Skill[0].HitRate != 1 || !strings.Contains(o.Personality, "100%") {
+		t.Fatalf("the operator keeps the measured rows: %+v", o)
 	}
 }

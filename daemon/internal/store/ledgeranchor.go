@@ -51,9 +51,8 @@ func (s *Store) prefixCountsFor(ctx context.Context, seqs []int64) (map[int64]in
 		if _, done := out[seq]; done {
 			continue
 		}
-		var n int64
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM prediction_ledger WHERE seq>? AND seq<=?`, prev, seq).Scan(&n); err != nil {
+		n, err := s.countLedger(ctx, prev, seq)
+		if err != nil {
 			return nil, err
 		}
 		running += n

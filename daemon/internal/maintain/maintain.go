@@ -455,6 +455,13 @@ func envIntOr(k string, def int) int {
 // taking the first bar at-or-after base+horizon.
 type OutcomeResolver struct {
 	St *store.Store
+	// page, writeCap and maxPages are 0 in production (outcomePage,
+	// outcomeWriteCap, outcomeMaxPages); tests shrink them.
+	page, writeCap, maxPages int
+	// resume is where each horizon's last pass stopped early, as (ts,
+	// symbol_id); the next pass continues after it and wraps to the head at the
+	// end of the queue. In memory only: a restart starts from the head.
+	resume map[md.Horizon][2]int64
 }
 
 // Name implements workers.Worker.
@@ -486,11 +493,52 @@ func horizonTF(h md.Horizon) md.Timeframe {
 	return md.TF1d
 }
 
+// outcomePage is one keyset read of a horizon's pending queue. outcomeWriteCap
+// bounds the rows ONE pass resolves or voids per horizon, so a pass writes at
+// most 12,000 rows (about 3x the pre-fix volume), outcomeWriteChunk rows per
+// transaction. Sizing, 2026-10-02: ~807k mature 1d and ~612k mature 1w rows
+// owed, ~36k new rows a day per horizon; 4,000 a pass on the 10-minute cadence
+// is ~500k a day per horizon, so the backlog drains in about two days.
+const (
+	outcomePage     = 4000
+	outcomeWriteCap = 4000
+	// outcomeMaxPages bounds the rows ONE pass reads per horizon (100k at the
+	// default page, ~2 s of reads): a pass that finds few writable rows would
+	// otherwise read the whole mature queue. The next pass resumes where this
+	// one stopped, so a long run of waiting rows still cannot wedge the queue.
+	outcomeMaxPages = 25
+)
+
 // Run resolves matured outcomes, per horizon so short windows never starve
 // behind the large immature 1w backlog.
+//
+// PAGED PAST WHAT IT SKIPS (2026-10-02). It read ONE oldest-first batch of 4000
+// per horizon. A row that waits forever (CRNX: its last 1d bar, 08-31, is the
+// forward bar, so it never settles) stays oldest and stays in that batch:
+// ~3,000 of every 4,000 1d and 1w rows were CRNX, each pass resolved ~1,000,
+// and the published 1d/1w record stood weeks behind (newest graded score 09-04
+// on 10-01; 807k mature 1d rows owed on 10-02). The prediction resolver had the
+// same wedge (SD-11). Each horizon now pages through its queue in (ts,
+// symbol_id) order until it has outcomeWriteCap writes, has read
+// outcomeMaxPages pages, or reaches the end; the next pass resumes where this
+// one stopped. A skipped row costs a read, never a slot, and every row is
+// reached within one sweep. Guards and labels are unchanged.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved, voided, waiting := 0, 0, 0
+	page, writeCap, maxPages := o.page, o.writeCap, o.maxPages
+	if page <= 0 {
+		page = outcomePage
+	}
+	if writeCap <= 0 {
+		writeCap = outcomeWriteCap
+	}
+	if maxPages <= 0 {
+		maxPages = outcomeMaxPages
+	}
+	if o.resume == nil {
+		o.resume = map[md.Horizon][2]int64{}
+	}
 	// Delisted names never print a forward bar: void their rows at once instead of
 	// parking them 30 days at the head of the oldest-first LIMIT-1500 queue, where
 	// they starved every live row behind them (measured 2026-09-09, see DelistedSymbolIDs).
@@ -509,116 +557,55 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
-		// 4000 per horizon per pass (was 1500): once the head-of-line rows were voided
-		// (2026-09-07 stale base, 2026-09-09 delisted) the window resolved ~1,300 rows
-		// per horizon per 10-minute pass against a 1.5M-row mature backlog, an 18 s
-		// run; 4000 clears it in days instead of weeks at ~50 s a pass.
-		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 4000)
-		if err != nil {
-			return "", err
+		head := [2]int64{-1, 0}
+		cur, ok := o.resume[h]
+		if !ok {
+			cur = head
 		}
-		for _, p := range pending {
-			base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+		for written, pages := 0, 0; ; pages++ {
+			if pages == maxPages {
+				slog.Info("outcome-resolver: page cap hit, next pass resumes here",
+					"horizon", string(h), "pages", pages, "written", written, "resume_ts", cur[0], "resume_symbol", cur[1])
+				break
+			}
+			pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), cur[0], cur[1], page)
 			if err != nil {
 				return "", err
 			}
-			if !okBase {
-				// No base bar: unusual (score implies data). Void if very old.
-				if now-p.Ts > 30*24*3600 {
-					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-						return "", err
-					}
+			var batch []store.OutcomeWrite
+			for _, p := range pending {
+				if written+len(batch) == writeCap {
+					break
+				}
+				w, ok, err := o.judge(ctx, h, tf, p, now, delisted, marketByID)
+				if err != nil {
+					return "", err
+				}
+				cur = [2]int64{p.Ts, p.SymbolID}
+				if !ok {
+					waiting++
+					continue
+				}
+				batch = append(batch, w)
+				if w.Void {
 					voided++
 				} else {
-					waiting++
+					resolved++
 				}
-				continue
 			}
-			// Anchor the window to the base bar, not to a UTC-midnight guess.
-			// Daily bars carry the same 6h DST stamp slack the prediction
-			// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
-			// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
-			// by 1h and grades an 8-session move as one week.
-			target := base.Ts + horizonSeconds(h)
-			if tf == md.TF1d {
-				target -= resolverDSTSlackSecs
-			}
-			if now < target {
-				waiting++
-				continue
-			}
-			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
-			if err != nil {
+			if err := o.St.ResolveOutcomes(ctx, h, batch); err != nil {
 				return "", err
 			}
-			if !okFwd && delisted[p.SymbolID] {
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-				continue
+			written += len(batch)
+			if written == writeCap {
+				break // the next pass resumes after the last row judged
 			}
-			// STALE BASE (audit 2026-09-07): the score was struck against a bar
-			// whose window closed more than 3 horizons before the score itself
-			// and nothing ever printed after it. That row can never resolve;
-			// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
-			// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
-			if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-				continue
-			}
-			switch {
-			case okFwd && base.Close > 0:
-				// A forward bar far past the target means a data/session hole;
-				// resolving would mislabel a multi-period move as one horizon.
-				// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
-				// carries): from the slackened target a pre-holiday Friday's next 1d
-				// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
-				// For stocks the NYSE calendar decides; crypto trades every day.
-				// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
-				// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
-				gap := fwd.Ts-target > 3*horizonSeconds(h)
-				if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
-					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
-				}
-				if gap {
-					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-						return "", err
-					}
-					voided++
-					continue
-				}
-				// SETTLED ONLY. The same guard the prediction resolver carries
-				// (pipeline/predict.go) and with the same measurement behind it:
-				// of 4,000 resolved 1d rows, 37.8% were frozen before their
-				// forward bar's 16:00 ET close, mislabelling about 3.7% of the
-				// record against a price that had not happened yet. This resolver
-				// runs through the session too, so a daily bar read mid-morning
-				// carries live prices. "A later bar exists" needs no knowledge of
-				// exchange hours, half-days, DST or crypto's 24h day.
-				if _, settled, serr := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); serr != nil {
-					return "", serr
-				} else if !settled {
-					waiting++
-					continue
-				}
-				ret := fwd.Close/base.Close - 1
-				if err := o.St.ResolveOutcome(ctx, p.SymbolID, h, p.Ts, ret); err != nil {
-					return "", err
-				}
-				resolved++
-			case now-p.Ts > 30*24*3600:
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
-					return "", err
-				}
-				voided++
-			default:
-				waiting++ // forward data not in yet; next pass
+			if len(pending) < page {
+				cur = head // end of the queue: the next pass starts at the head
+				break
 			}
 		}
+		o.resume[h] = cur
 	}
 	// The prediction resolver only visits rows that HAVE a forward bar, so forecasts on
 	// delisted names were never touched: 16,648 of them on 1,894 names kept those names
@@ -633,6 +620,81 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 		}
 	}
 	return fmt.Sprintf("resolved %d, voided %d, waiting %d, dead predictions voided %d", resolved, voided, waiting, dead), nil
+}
+
+// judge decides one pending row: a write (graded, or void) and true, or false
+// to leave it waiting for a later pass.
+func (o *OutcomeResolver) judge(ctx context.Context, h md.Horizon, tf md.Timeframe, p md.ScoreOutcome, now int64, delisted map[int64]bool, marketByID map[int64]md.Market) (store.OutcomeWrite, bool, error) {
+	void := store.OutcomeWrite{SymbolID: p.SymbolID, Ts: p.Ts, Void: true}
+	base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+	if err != nil {
+		return void, false, err
+	}
+	if !okBase {
+		// No base bar: unusual (score implies data). Void if very old.
+		return void, now-p.Ts > 30*24*3600, nil
+	}
+	// Anchor the window to the base bar, not to a UTC-midnight guess.
+	// Daily bars carry the same 6h DST stamp slack the prediction
+	// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
+	// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
+	// by 1h and grades an 8-session move as one week.
+	target := base.Ts + horizonSeconds(h)
+	if tf == md.TF1d {
+		target -= resolverDSTSlackSecs
+	}
+	if now < target {
+		return void, false, nil
+	}
+	fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
+	if err != nil {
+		return void, false, err
+	}
+	if !okFwd && delisted[p.SymbolID] {
+		return void, true, nil
+	}
+	// STALE BASE (audit 2026-09-07): the score was struck against a bar
+	// whose window closed more than 3 horizons before the score itself
+	// and nothing ever printed after it. That row can never resolve;
+	// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
+	// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
+	if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
+		return void, true, nil
+	}
+	switch {
+	case okFwd && base.Close > 0:
+		// A forward bar far past the target means a data/session hole;
+		// resolving would mislabel a multi-period move as one horizon.
+		// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
+		// carries): from the slackened target a pre-holiday Friday's next 1d
+		// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
+		// For stocks the NYSE calendar decides; crypto trades every day.
+		// DAILY BARS ONLY (H1-1H-GAP): on 1m bars no whole session closes
+		// overnight, so the exemption graded 17:39 -> 09:19 moves as "1h".
+		gap := fwd.Ts-target > 3*horizonSeconds(h)
+		if gap && tf == md.TF1d && marketByID[p.SymbolID] == md.Stocks {
+			gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+		}
+		if gap {
+			return void, true, nil
+		}
+		// SETTLED ONLY. The same guard the prediction resolver carries
+		// (pipeline/predict.go) and with the same measurement behind it:
+		// of 4,000 resolved 1d rows, 37.8% were frozen before their
+		// forward bar's 16:00 ET close, mislabelling about 3.7% of the
+		// record against a price that had not happened yet. This resolver
+		// runs through the session too, so a daily bar read mid-morning
+		// carries live prices. "A later bar exists" needs no knowledge of
+		// exchange hours, half-days, DST or crypto's 24h day.
+		if _, settled, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); err != nil || !settled {
+			return void, false, err
+		}
+		return store.OutcomeWrite{SymbolID: p.SymbolID, Ts: p.Ts, FwdReturn: fwd.Close/base.Close - 1}, true, nil
+	case now-p.Ts > 30*24*3600:
+		return void, true, nil
+	default:
+		return void, false, nil // forward data not in yet; next pass
+	}
 }
 
 // ── DQAuditor ───────────────────────────────────────────────────────────
@@ -831,11 +893,11 @@ type Quiescer interface {
 // every minute and its deadline is 15m).
 const quiesceWindow = 3 * time.Second
 
-// truncateRetryWait is how long each RETRY of a blocked TRUNCATE waits for
-// readers while it holds the write lock and the main-writer connection. Short
-// on purpose: a sign-in or a worker write waits at most this long behind one,
-// and there is a free second between attempts.
-const truncateRetryWait = 100 * time.Millisecond
+// truncateRetryGap is the free time between RETRIES of a blocked TRUNCATE.
+// Each retry still waits the full checkpoint busy timeout for readers (see the
+// retry loop), so the gap is what bounds how much of a pass the write lock and
+// the main-writer connection are held: one 5s wait in every 15s, not all of it.
+const truncateRetryGap = 10 * time.Second
 
 // walIneffectiveRuns is how many consecutive passes may reclaim ZERO frames
 // while the WAL is still growing before that becomes its own dq event. Distinct
@@ -859,9 +921,10 @@ func (g *StorageGovernor) Name() string { return "storage-governor" }
 // (default 10) instead, so a pass whose TRUNCATE lost tries again in ten minutes
 // rather than sitting out the hour with a large file on disk.
 //
-// KNOW WHAT THIS CANNOT DO. The runner computes a worker's next fire ONCE, when
-// the previous run ends, and then sleeps (maxScheduledGap is 24h, so nothing
-// re-reads this mid-sleep). A boot storm that arrives while the governor is
+// KNOW WHAT THIS CANNOT DO. The runner re-reads this when a run ends
+// (workers.retime) and then sleeps; nothing re-reads it mid-sleep. (Until
+// 2026-10-02 it was read only once, at boot, so the pressure branch never took
+// effect at all.) A boot storm that arrives while the governor is
 // asleep therefore does NOT pull the next pass forward — measured 2026-08-18, a
 // deploy took the WAL from 38 MB to 861 MB in four minutes and this method was
 // never consulted; the file was reclaimed by SQLite's own autocheckpoint
@@ -1104,17 +1167,19 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 		// rejects 0, and that rejection is CRITICAL, so writing the documented
 		// value turned fleet health red and ran the 300s default anyway.
 		//
-		// So the retries are SHORT AND SPACED: each waits at most
-		// truncateRetryWait for readers, then the connection and the write lock
-		// are free for a full second before the next. It was a 1s ticker around
-		// 5s attempts, so ticks queued and the attempts ran back to back: the
-		// single main-writer connection and the write lock were held for the
-		// whole budget (up to 5 minutes), and every worker write queued behind
-		// it. A retry only needs the reader-free INSTANT; it does not need to
-		// wait for one.
+		// So the retries are SPACED: each still waits the full busy timeout,
+		// then the connection and the write lock are free for truncateRetryGap.
+		// It was a 1s ticker around 5s attempts, so ticks queued and the
+		// attempts ran back to back, holding both for the whole budget (up to 5
+		// minutes). The wait itself must stay long: while TRUNCATE holds the
+		// write lock no frames are added, readers that start meanwhile read the
+		// database file, and only the readers already open must finish. A 100ms
+		// wait (2810f53) never outwaited them: against overlapping 200-800ms
+		// readers it won 0 of 12 attempts (2s: 11 of 12), and live on 2026-10-02
+		// 03:31 it lost 261 in a row.
 		retrySec := walTruncateRetrySec()
 		if retrySec > 0 {
-			gap := time.NewTimer(time.Second)
+			gap := time.NewTimer(truncateRetryGap)
 			defer gap.Stop()
 			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
 			defer deadline.Stop()
@@ -1128,14 +1193,14 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 				case <-gap.C:
 					attempts++
 					prior += trunc.Checkpointed
-					trunc, err = g.St.WALCheckpointTruncateWithin(ctx, truncateRetryWait)
+					trunc, err = g.St.WALCheckpointTruncate(ctx)
 					if err != nil {
 						break retryLoop
 					}
 					if !trunc.Busy {
 						break retryLoop
 					}
-					gap.Reset(time.Second) // the gap starts when the attempt has let go
+					gap.Reset(truncateRetryGap) // the gap starts when the attempt has let go
 				}
 			}
 		}

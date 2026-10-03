@@ -55,6 +55,9 @@ type AdaptiveWeightsWorker struct {
 func (w *AdaptiveWeightsWorker) Name() string            { return "adaptive-weights" }
 func (w *AdaptiveWeightsWorker) Interval() time.Duration { return 6 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *AdaptiveWeightsWorker) Heavy() bool { return true }
+
 func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// Pool labeled examples across the predicted horizons: weights are keyed
 	// by regime cell (the plan's unit of learning), and pooling reaches the

@@ -211,45 +211,95 @@ type LedgerVerification struct {
 // deleted (breaking the prev_hash linkage), or reordered. An empty ledger is
 // trivially intact.
 func (s *Store) VerifyLedger(ctx context.Context) (LedgerVerification, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
-		       feature_hash, model_version, prev_hash, entry_hash
-		FROM prediction_ledger ORDER BY seq ASC`)
-	if err != nil {
-		return LedgerVerification{}, err
-	}
-	defer rows.Close() //nolint:errcheck
+	return s.walkLedger(ctx, LedgerVerification{Intact: true}, 0, "")
+}
 
-	res := LedgerVerification{Intact: true}
-	running := "" // expected prev_hash of the next row (genesis links to "")
-	for rows.Next() {
-		var e LedgerEntry
-		var hz string
-		var symID sql.NullInt64
-		if err := rows.Scan(&e.Seq, &e.PredictedAt, &symID, &hz, &e.BarTs,
-			&e.RawProb, &e.CalProb, &e.FeatureHash, &e.ModelVersion,
-			&e.PrevHash, &e.EntryHash); err != nil {
-			return LedgerVerification{}, err
+// ledgerVerifyChunk is how many ledger rows one read statement covers when the
+// chain is walked or counted. A var only so tests can shrink it.
+//
+// WHY CHUNKS. The walk was ONE statement over the whole chain (626k rows), so it
+// held one read snapshot for as long as the walk took, and a snapshot that old
+// pins the WAL (nothing after it can be checkpointed). Under the boot load of
+// 2026-10-02 03:30 the cache-warmer's ledger-verify step ran to its 15-minute
+// run deadline while the WAL grew past 2 GB. Each chunk is its own short read;
+// the chain state (the running hash and the count) carries across chunks, so
+// the result is exactly the single-pass result. Rows appended between chunks
+// extend the walk, which a fresh call would include anyway.
+var ledgerVerifyChunk = 20000
+
+// ledgerChunkRead, when set by a test, sees each chunk statement: kind is
+// "walk" or "count", n is the rows (walk) or the seq span (count) it covered.
+var ledgerChunkRead func(kind string, n int64)
+
+// walkLedger extends res by re-hashing the rows after seq `after`, chained from
+// running (the prev_hash the next row must carry), one keyset chunk per read
+// statement. It stops at the first break exactly as the single pass did.
+func (s *Store) walkLedger(ctx context.Context, res LedgerVerification, after int64, running string) (LedgerVerification, error) {
+	for {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
+			       feature_hash, model_version, prev_hash, entry_hash
+			FROM prediction_ledger WHERE seq>? ORDER BY seq ASC LIMIT ?`, after, ledgerVerifyChunk)
+		if err != nil {
+			return res, err
 		}
-		e.SymbolID = symID.Int64
-		e.Horizon = md.Horizon(hz)
-
-		want := hashEntry(running, e)
-		if e.PrevHash != running || e.EntryHash != want {
-			seq := e.Seq
-			res.Intact = false
-			res.BrokenAtSeq = &seq
-			// Stop at the first break: everything after it is untrustworthy.
-			// Still report count of rows examined up to and including the break.
+		var n int64
+		broken := false
+		for rows.Next() {
+			var e LedgerEntry
+			var hz string
+			var symID sql.NullInt64
+			if err := rows.Scan(&e.Seq, &e.PredictedAt, &symID, &hz, &e.BarTs,
+				&e.RawProb, &e.CalProb, &e.FeatureHash, &e.ModelVersion,
+				&e.PrevHash, &e.EntryHash); err != nil {
+				rows.Close() //nolint:errcheck
+				return res, err
+			}
+			n++
+			e.SymbolID = symID.Int64
+			e.Horizon = md.Horizon(hz)
+			// Every row examined counts, the breaking one included; everything
+			// after a break is untrustworthy, so the walk stops there.
 			res.Count++
 			res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
-			return res, rows.Err()
+			if e.PrevHash != running || e.EntryHash != hashEntry(running, e) {
+				seq := e.Seq
+				res.Intact = false
+				res.BrokenAtSeq = &seq
+				broken = true
+				break
+			}
+			running, after = e.EntryHash, e.Seq
 		}
-		running = e.EntryHash
-		res.Count++
-		res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
+		err = rows.Err()
+		rows.Close() //nolint:errcheck
+		if ledgerChunkRead != nil {
+			ledgerChunkRead("walk", n)
+		}
+		if err != nil || broken || n < int64(ledgerVerifyChunk) {
+			return res, err
+		}
 	}
-	return res, rows.Err()
+}
+
+// countLedger counts the rows with lo < seq <= hi in seq spans of
+// ledgerVerifyChunk, one short read statement per span (see ledgerVerifyChunk).
+func (s *Store) countLedger(ctx context.Context, lo, hi int64) (int64, error) {
+	var total int64
+	for lo < hi {
+		top := min(lo+int64(ledgerVerifyChunk), hi)
+		var n int64
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM prediction_ledger WHERE seq>? AND seq<=?`, lo, top).Scan(&n); err != nil {
+			return total, err
+		}
+		if ledgerChunkRead != nil {
+			ledgerChunkRead("count", top-lo)
+		}
+		total += n
+		lo = top
+	}
+	return total, nil
 }
 
 // LedgerHead returns the newest ledger entry (highest seq). ok=false on an

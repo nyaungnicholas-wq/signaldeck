@@ -100,6 +100,21 @@ func TestWarmCaches_AFailedStepDoesNotEndThePass(t *testing.T) {
 	}
 }
 
+// H7 (2026-10-02): a pass whose run deadline expires must not come back nil.
+// The worker runner files a nil return "ok", so everything the pass never
+// reached went unreported. The deadline here has passed before the pass
+// starts, the limiting case of one that expires part-way.
+func TestWarmCaches_ADeadlineCutPassIsReported(t *testing.T) {
+	t.Setenv(ledgeranchor.EnvKeyPath, filepath.Join(t.TempDir(), "anchor.key"))
+	d, _ := newWave2Deps(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err := d.WarmCaches(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WarmCaches err = %v; a pass cut by its deadline must return ctx.Err()", err)
+	}
+}
+
 // P2: a fresh cache (a new process) pointed at a persisted body serves it at
 // once, as stale, and rebuilds behind it; a different key never reads it.
 func TestSWRCache_PersistedPayloadServesWithoutAnInlineBuild(t *testing.T) {

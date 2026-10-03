@@ -31,10 +31,13 @@ import (
 // fixed window "would either miss a collapse just outside it or refuse forever
 // because of a collapse the grader never touched".
 //
-// An unreadable window returns an error and reports collapsed=false. Callers
-// must FAIL OPEN on that error exactly as the HTTP handler does — refusing on a
-// failed read would wedge publication shut on a transient database error rather
-// than on evidence.
+// An unreadable window returns an error and reports collapsed=false. That is
+// "not judged", never "passed": callers must WITHHOLD on it and say the check
+// was unavailable rather than claim a collapse. /api/accuracy answers
+// REFUSED_UNAVAILABLE, /api/track-record gates with the same sentence, and
+// cmd/collapsecheck exits 2, which ops/accuracy-registry.sh publishes as CHECK
+// UNAVAILABLE. This comment used to say callers must FAIL OPEN; the handler
+// stopped doing that on 2026-09-13 and the comment outlived it.
 func CollapsedGradingWindow(
 	ctx context.Context,
 	st *store.Store,

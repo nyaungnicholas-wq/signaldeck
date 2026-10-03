@@ -7,9 +7,45 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// A refusal that answers only its moment (uncachedResult, e.g. a torn registry
+// read) leaves a young copy standing, so a torn read heals on the next read.
+// But one that keeps recurring must not keep the last published payload up for
+// good: past uncachedStandLimit the copy goes and the refusal itself is served.
+func TestSWRCache_RecurringUncachedDropsAnOldCopy(t *testing.T) {
+	c := newSWRCache(time.Hour) // never stale on its own: refreshes run only below
+	var refuse atomic.Bool
+	build := func(ctx context.Context) (map[string]any, error) {
+		if refuse.Load() {
+			return nil, uncachedResult{map[string]any{"v": "refused"}}
+		}
+		return map[string]any{"v": "published"}, nil
+	}
+	if got, err := c.get(context.Background(), "k", build); err != nil || got["v"] != "published" {
+		t.Fatalf("cold build: got=%v err=%v", got, err)
+	}
+	refuse.Store(true)
+	e := c.ent["k"]
+	if err := c.refresh(context.Background(), e, "", "k", build); err != nil {
+		t.Fatalf("young refresh: %v", err)
+	}
+	if got, _ := c.get(context.Background(), "k", build); got["v"] != "published" {
+		t.Fatalf("a young copy must stand through one refusal; got %v", got)
+	}
+	c.mu.Lock()
+	e.builtAt = time.Now().Add(-uncachedStandLimit)
+	c.mu.Unlock()
+	if err := c.refresh(context.Background(), e, "", "k", build); err != nil {
+		t.Fatalf("old refresh: %v", err)
+	}
+	if got, err := c.get(context.Background(), "k", build); err != nil || got["v"] != "refused" {
+		t.Fatalf("a copy past uncachedStandLimit was still served over a recurring refusal: got=%v err=%v", got, err)
+	}
+}
 
 // The SWR cache exists so a 22-second build can never sit between a user and
 // the track-record page more than once per process lifetime. These tests pin

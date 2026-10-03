@@ -1014,6 +1014,21 @@ func (s *Store) UpsertBars(ctx context.Context, bars []md.Bar) error {
 	return nil
 }
 
+// barsUpsertChanged ends an INSERT INTO bars: a bar already stored with the same
+// values is left alone instead of rewritten. Both bulk writers mostly resend
+// what is there: universe-poller re-upserts ~826k bars on every boot (the WAL
+// went from 2,773 to 417,329 frames, 1.6 GB, in the first 6 minutes of
+// 2026-10-02 03:30), and the Downsampler re-rolls 72h of hours for every symbol
+// every 5 minutes (26,619 of 28,056 buckets unchanged on the 10-01 backup). As
+// INSERT OR REPLACE each of those rewrote its page into the WAL; the end state
+// is the same (bars has no triggers and nothing references it).
+const barsUpsertChanged = `ON CONFLICT(symbol_id, tf, ts) DO UPDATE SET
+		open=excluded.open, high=excluded.high, low=excluded.low,
+		close=excluded.close, volume=excluded.volume
+	WHERE bars.open IS NOT excluded.open OR bars.high IS NOT excluded.high
+	   OR bars.low IS NOT excluded.low OR bars.close IS NOT excluded.close
+	   OR bars.volume IS NOT excluded.volume`
+
 func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	if len(bars) == 0 {
 		return nil
@@ -1024,8 +1039,8 @@ func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
-		VALUES (?,?,?,?,?,?,?,?)`)
+		INSERT INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
+		VALUES (?,?,?,?,?,?,?,?) `+barsUpsertChanged)
 	if err != nil {
 		return err
 	}
@@ -1150,7 +1165,7 @@ func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timefra
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
+	return s.rollup(ctx, "INSERT", barsUpsertChanged, symbolID, src, dst, bucket, from, to)
 }
 
 // rollupSelect computes one symbol's coarse bars; rollupArgs binds it.
@@ -1181,11 +1196,12 @@ func rollupArgs(symbolID int64, src, dst md.Timeframe, bucket, from, to int64) [
 }
 
 // rollup computes the coarse bars on the read pool and writes them with verb
-// ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
-// per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
-func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
+// and tail ("INSERT" + barsUpsertChanged / "INSERT OR IGNORE"). As one
+// INSERT..SELECT, the per-bucket subqueries held the write lock 5-7s per call
+// (readThenWrite).
+func (s *Store) rollup(ctx context.Context, verb, tail string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
 	_, err := s.readThenWrite(ctx, rollupSelect, rollupArgs(symbolID, src, dst, bucket, from, to),
-		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
+		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, tail)
 	return err
 }
 
@@ -1195,7 +1211,7 @@ func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, ds
 // the source) is authoritative and must not be replaced by an aggregate of
 // possibly-partial finer bars.
 func (s *Store) RollupMissing(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	return s.rollup(ctx, "INSERT OR IGNORE", symbolID, src, dst, bucket, from, to)
+	return s.rollup(ctx, "INSERT OR IGNORE", "", symbolID, src, dst, bucket, from, to)
 }
 
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
@@ -1368,11 +1384,16 @@ func (s *Store) ScoreHistory(ctx context.Context, symbolID int64, h md.Horizon, 
 // queue across all horizons) is essential: at steady state each symbol carries
 // ~10k immature 1w rows spanning a week, which would otherwise sit ahead of
 // every freshly-mature 1h/1d row in ts order and starve them indefinitely.
-func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff int64, limit int) ([]md.ScoreOutcome, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, horizon, ts, score FROM score_outcomes
-		WHERE resolved_at IS NULL AND horizon=? AND ts<=? ORDER BY ts LIMIT ?`,
-		string(h), cutoff, limit)
+//
+// Keyset-paged on (ts, symbol_id), strictly after (afterTs, afterSym); pass
+// (-1, 0) for the head. The resolver pages PAST rows it skips: read as one
+// oldest-first batch, rows that can never settle (a symbol whose last bar is
+// the forward bar) sat at the head of every pass and shrank the batch for
+// everything behind them (2026-10-02: ~3,000 CRNX rows of every 4,000).
+// Score is NOT returned (the resolver never reads it), so the page is a
+// covered seek on idx_outcomes_pending; see pendingOutcomesSQL.
+func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff, afterTs, afterSym int64, limit int) ([]md.ScoreOutcome, error) {
+	rows, err := s.db.QueryContext(ctx, pendingOutcomesSQL, string(h), cutoff, afterTs, afterSym, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1381,7 +1402,7 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 	for rows.Next() {
 		var o md.ScoreOutcome
 		var hz string
-		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score); err != nil {
+		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts); err != nil {
 			return nil, err
 		}
 		o.Horizon = md.Horizon(hz)
@@ -1389,6 +1410,14 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 	}
 	return out, rows.Err()
 }
+
+// pendingOutcomesSQL is one keyset page of a horizon's pending outcomes: a
+// covered seek on idx_outcomes_pending from (afterTs, afterSym), read in index
+// order, so no temp b-tree and no table lookup (TestPendingOutcomePageIsACoveredSeek).
+const pendingOutcomesSQL = `
+	SELECT symbol_id, horizon, ts FROM score_outcomes
+	WHERE resolved_at IS NULL AND horizon=? AND ts<=? AND (ts, symbol_id) > (?, ?)
+	ORDER BY ts, symbol_id LIMIT ?`
 
 // ResolveOutcome records the realized forward return for one score.
 //
@@ -1398,15 +1427,7 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 // were the last to carry the right key. Derivation identical to
 // BackfillScoreSettleTs, so the two agree by construction.
 func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
-	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
-		  settle_ts = (
-		    SELECT MAX(b.ts) FROM bars b
-		    WHERE b.symbol_id = score_outcomes.symbol_id
-		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
-		  )
-		WHERE symbol_id=? AND horizon=? AND ts=?`,
-		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
+	_, err := s.w.ExecContext(ctx, resolveOutcomeSQL, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err
 }
 
@@ -1414,10 +1435,66 @@ func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon
 // data ever arrived — delisted symbol, dead feed) so it stops clogging the
 // unresolved queue. fwd_return stays NULL; the honesty page excludes it.
 func (s *Store) ResolveOutcomeVoid(ctx context.Context, symbolID int64, h md.Horizon, ts int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`,
-		time.Now().Unix(), symbolID, string(h), ts)
+	_, err := s.w.ExecContext(ctx, voidOutcomeSQL, time.Now().Unix(), symbolID, string(h), ts)
 	return err
+}
+
+const (
+	resolveOutcomeSQL = `
+		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = score_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
+		  )
+		WHERE symbol_id=? AND horizon=? AND ts=?`
+	voidOutcomeSQL = `UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`
+	// outcomeWriteChunk rows per transaction: the readThenWrite batch size,
+	// a few-ms write-lock hold per chunk.
+	outcomeWriteChunk = 200
+)
+
+// OutcomeWrite is one ResolveOutcomes row: a graded forward return, or Void.
+type OutcomeWrite struct {
+	SymbolID  int64
+	Ts        int64
+	FwdReturn float64
+	Void      bool
+}
+
+// ResolveOutcomes applies ResolveOutcome / ResolveOutcomeVoid (the same SQL)
+// to many rows of one horizon, outcomeWriteChunk rows per transaction, so the
+// main writer is taken once per chunk instead of once per row (the resolver
+// wrote ~3,700 rows a pass one statement at a time, each queued behind the
+// whole fleet on the single writer connection). Chunks commit separately; a
+// failure part-way leaves the rest unresolved for the next pass.
+func (s *Store) ResolveOutcomes(ctx context.Context, h md.Horizon, ws []OutcomeWrite) error {
+	now := time.Now().Unix()
+	for start := 0; start < len(ws); start += outcomeWriteChunk {
+		if err := s.resolveOutcomeChunk(ctx, h, now, ws[start:min(start+outcomeWriteChunk, len(ws))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) resolveOutcomeChunk(ctx context.Context, h md.Horizon, now int64, ws []OutcomeWrite) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, w := range ws {
+		if w.Void {
+			_, err = tx.ExecContext(ctx, voidOutcomeSQL, now, w.SymbolID, string(h), w.Ts)
+		} else {
+			_, err = tx.ExecContext(ctx, resolveOutcomeSQL, w.FwdReturn, now, w.SymbolID, string(h), w.Ts)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ResolvedOutcomes returns resolved (score, fwd_return) pairs for the honesty
@@ -2083,13 +2160,6 @@ func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, 
 // says did not happen is precisely the honesty failure this codebase forbids.
 func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult, error) {
 	return s.walCheckpoint(ctx, "TRUNCATE", checkpointBusy)
-}
-
-// WALCheckpointTruncateWithin is WALCheckpointTruncate waiting at most wait for
-// readers, for callers that retry: each attempt holds the write lock (and the
-// single main-writer connection) only that long.
-func (s *Store) WALCheckpointTruncateWithin(ctx context.Context, wait time.Duration) (WALCheckpointResult, error) {
-	return s.walCheckpoint(ctx, "TRUNCATE", wait)
 }
 
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention

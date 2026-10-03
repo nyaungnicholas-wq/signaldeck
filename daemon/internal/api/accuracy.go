@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -490,14 +491,37 @@ func loadRegistry(override string) (*registryFile, error) {
 			lastErr = err
 			continue
 		}
-		var reg registryFile
-		if err := json.Unmarshal(b, &reg); err != nil {
-			return nil, err
+		for reads := 1; ; reads++ {
+			var reg registryFile
+			perr := json.Unmarshal(b, &reg)
+			if perr == nil {
+				return &reg, nil
+			}
+			if reads > registryParseRetries {
+				return nil, fmt.Errorf("%w (%d reads over ~1s): %w", errRegistryUnparsed, reads, perr)
+			}
+			registryRetryWait()
+			if b, err = os.ReadFile(p); err != nil {
+				return nil, err
+			}
 		}
-		return &reg, nil
 	}
 	return nil, lastErr
 }
+
+// A registry that does not parse may be one caught mid-rewrite: the grader
+// writes it in place (open "w" then json.dump, tools/accuracy_registry.py,
+// whose sha256 is pinned in the prereg chain, so it cannot be made atomic
+// there). A parse failure is re-read registryParseRetries times, one
+// registryRetryWait apart, before it is believed. registryRetryWait is a var so
+// a test can make the writer finish during the wait.
+const registryParseRetries = 3
+
+var registryRetryWait = func() { time.Sleep(330 * time.Millisecond) }
+
+// errRegistryUnparsed marks a registry that never parsed. It may still be a
+// torn read, so a refusal built on it is served but never cached.
+var errRegistryUnparsed = errors.New("accuracy registry did not parse")
 
 func writeAccuracyRefusal(w http.ResponseWriter, body accuracyResponse) {
 	writeJSONStatus(w, http.StatusServiceUnavailable, body)
@@ -525,33 +549,13 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 // evidence of a collapse" was never the same thing as "evidence there was
 // none", and the caller used to treat it as though it were.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
-	// Per-horizon windows. This used to take ONE global max distinct_days and
-	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
-	// collapse confined to the 1w cross-section could not refuse anything, and
-	// a 1d collapse refused rows it had not measured. Each horizon present in
-	// the registry is now checked against its OWN day stats and its own depth.
-	depth := map[string]int{}
-	for _, r := range reg.Rows {
-		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
-			continue
-		}
-		_, horizon, _ := splitPredictor(r.Predictor)
-		if horizon == "" {
-			continue
-		}
-		if *r.DistinctDays > depth[horizon] {
-			depth[horizon] = *r.DistinctDays
-		}
+	horizons, err := gatedHorizons(reg)
+	if err != nil {
+		return "", false, err
 	}
-	if len(depth) == 0 {
+	if len(horizons) == 0 {
 		return "", false, nil
 	}
-	// Sorted so the refusal text is stable across polls.
-	horizons := make([]string, 0, len(depth))
-	for h := range depth {
-		horizons = append(horizons, h)
-	}
-	sort.Strings(horizons)
 
 	var bad []string
 	total := 0
@@ -569,7 +573,7 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 	// comment named. Reading from the epoch is a superset of the graded days
 	// (the grader also drops thin, unsettled and stale-feed days), so it can
 	// only over-refuse, never under-refuse.
-	since := time.Unix(store.GradingEpoch, 0).UTC()
+	since := gateSince()
 	for _, h := range horizons {
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {
@@ -588,6 +592,58 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 		return "", false, nil
 	}
 	return buildCollapseReason(bad, total), true, nil
+}
+
+// gateSince is where the collapse gate's window opens: the survivorship epoch.
+// The verdict cache fingerprints from the same instant, so the two cannot drift.
+func gateSince() time.Time { return time.Unix(store.GradingEpoch, 0).UTC() }
+
+// gatedHorizons is the sorted set of horizons the collapse gate checks: every
+// registry horizon with a positive distinct_days. These, plus the resolved rows
+// it reads per horizon, are the gate's ENTIRE input; the verdict cache keys on
+// exactly that.
+//
+// A horizon that publishes figures (live_n > 0 or a live_acc) on rows that all
+// lack a positive distinct_days has no measured window, so it would otherwise
+// go ungated and pass: that is an error, and both callers withhold on it. Rows
+// that publish nothing need no gate.
+func gatedHorizons(reg *registryFile) ([]string, error) {
+	// Per-horizon windows. This used to take ONE global max distinct_days and
+	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
+	// collapse confined to the 1w cross-section could not refuse anything, and
+	// a 1d collapse refused rows it had not measured. Each horizon present in
+	// the registry is now checked against its OWN day stats and its own depth.
+	depth := map[string]int{}
+	unmeasured := map[string]string{} // horizon -> a row publishing figures with no window
+	for _, r := range reg.Rows {
+		_, horizon, _ := splitPredictor(r.Predictor)
+		if horizon == "" {
+			continue
+		}
+		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
+			if r.LiveN > 0 || r.LiveAcc != nil {
+				unmeasured[horizon] = r.Predictor
+			}
+			continue
+		}
+		if *r.DistinctDays > depth[horizon] {
+			depth[horizon] = *r.DistinctDays
+		}
+	}
+	for h, row := range unmeasured {
+		if _, ok := depth[h]; !ok {
+			return nil, fmt.Errorf("registry row %q publishes figures at horizon %s but no row there "+
+				"carries a positive distinct_days, so its graded window is unmeasured and cannot be "+
+				"checked for a collapsed cross-section", row, h)
+		}
+	}
+	// Sorted so the refusal text is stable across polls.
+	horizons := make([]string, 0, len(depth))
+	for h := range depth {
+		horizons = append(horizons, h)
+	}
+	sort.Strings(horizons)
+	return horizons, nil
 }
 
 // buildCollapseReason is split out so the wording is assertable without a

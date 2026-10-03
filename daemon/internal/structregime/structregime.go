@@ -330,18 +330,49 @@ const (
 	evidenceLive     = "live"
 )
 
-// evidenceCaveat is Forecast.EvidenceCaveat's fixed text. Deliberately names
+// evidenceCaveatBase opens every Forecast.EvidenceCaveat. Deliberately names
 // no Kind or accuracy tier of its own: trend63 and the crypto kinds build
 // their Forecast by copying PredictTrend/PredictLiquidity's output and only
 // overwriting Kind, HistoricalAccuracy and Tradeability (see trend63.go,
 // crypto.go), so a caveat that named "trend21" here would ship unchanged on a
 // trend63 or crypto row and be wrong.
-const evidenceCaveat = "BACKTEST CLAIM, not a live measurement: HistoricalAccuracy is a walk-" +
+const evidenceCaveatBase = "BACKTEST CLAIM, not a live measurement: HistoricalAccuracy is a walk-" +
 	"forward backtest lookup, frozen and hash-chained BEFORE any of this predictor's forecasts " +
 	"resolved — see GET /api/prereg (internal/prereg) for the exact claim this call will be " +
-	"checked against. First gradable " + firstGradableOn + " — before that date this number has " +
-	"zero live resolutions behind it, whatever it is labeled elsewhere. Once resolutions exist, " +
-	"GET /api/track-record carries the live-vs-claimed comparison."
+	"checked against (first gradable " + firstGradableOn + ")."
+
+// evidenceCaveat is the caveat when the live status is not known here: a
+// Forecast built by this package, which has no store. It points at the live
+// record instead of describing it. It used to end "First gradable 2026-08-07 —
+// before that date this number has zero live resolutions behind it", which
+// read as the current state long after the date passed and live grading had
+// begun (E-CAVEAT-DATE, 2026-10-02). EvidenceCaveatFor states the live status
+// wherever the count is known; the store hydrates every served row with it.
+const evidenceCaveat = evidenceCaveatBase + " Whether calls of this kind have resolved live " +
+	"since, and how they scored against this number, is on GET /api/track-record (the " +
+	"live-vs-claimed comparison); this number is not that live record."
+
+// EvidenceCaveatFor is the caveat with the CURRENT live status of a row's kind:
+// resolved is how many calls of that kind have been graded live, one per
+// symbol per UTC day (the independent set /api/track-record grades). It says
+// how many resolved and never how they scored: the backtest number stays a
+// backtest number, and the live result is the track record's to state.
+func EvidenceCaveatFor(resolved int) string {
+	switch {
+	case resolved <= 0:
+		return evidenceCaveatBase + " No call of this kind has resolved live yet, so this number " +
+			"has zero live resolutions behind it, whatever it is labeled elsewhere. Once " +
+			"resolutions exist, GET /api/track-record carries the live-vs-claimed comparison."
+	case resolved == 1:
+		return evidenceCaveatBase + " 1 call of this kind has resolved live; this number is not " +
+			"its result. How it scored against this number is on GET /api/track-record (the " +
+			"live-vs-claimed comparison)."
+	default:
+		return evidenceCaveatBase + fmt.Sprintf(" %d calls of this kind have resolved live (one "+
+			"per symbol per day); this number is not their result. How they scored against it "+
+			"is on GET /api/track-record (the live-vs-claimed comparison).", resolved)
+	}
+}
 
 // wildClose reports whether the trailing `lookback` closes contain a 1-day
 // move beyond maxSaneReturn.
@@ -829,10 +860,10 @@ func AccuracyForTest(k Kind, conv float64) float64 {
 	}
 }
 
-// EvidenceCaveatText exposes the fixed caveat sentence so a surface OUTSIDE
-// this package (the MCP server) can ship it verbatim beside a stored accuracy
-// rather than paraphrasing it. A paraphrase of a caveat is how a caveat gets
-// softer with every copy.
+// EvidenceCaveatText exposes the caveat for when the live status is unknown,
+// so a surface OUTSIDE this package can ship it verbatim rather than
+// paraphrasing it. A paraphrase of a caveat is how a caveat gets softer with
+// every copy. Where the live count is known, use EvidenceCaveatFor.
 func EvidenceCaveatText() string { return evidenceCaveat }
 
 // FirstGradableOnDate exposes the mirrored first-gradable date for the same

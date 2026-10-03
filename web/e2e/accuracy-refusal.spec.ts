@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
 import type { BrowserContext } from "@playwright/test";
 
-const REFUSED = new Set(["REFUSED", "REFUSED_STALE"]);
+// Every refusal daemon/internal/api/accuracy.go emits. REFUSED_UNAVAILABLE is
+// the collapse gate's check outage (since 2026-09-13), distinct from a finding.
+const REFUSED = new Set(["REFUSED", "REFUSED_STALE", "REFUSED_UNAVAILABLE"]);
 
 const SMOKE_USER = "e2e-smoke";
 const SMOKE_PASS = "E2eSmoke!2026";
@@ -70,7 +72,12 @@ test("/api/accuracy either publishes with a grade stamp or refuses with a reason
   } else {
     expect(res.status()).toBe(503);
     expect(REFUSED.has(body.status), `unexpected refusal status ${body.status}`).toBe(true);
-    expect(body.grader_fresh).toBe(false);
+    // grader_fresh is measured once, before any branch, so only REFUSED_STALE
+    // implies false. A REFUSED window (the grader's own refusal marker, a
+    // collapse, an unreadable ledger) can come from a healthy grader, and
+    // REFUSED_UNAVAILABLE is reachable only after the freshness checks pass.
+    if (body.status === "REFUSED_STALE") expect(body.grader_fresh).toBe(false);
+    if (body.status === "REFUSED_UNAVAILABLE") expect(body.grader_fresh).toBe(true);
     // A refusal a reader cannot act on is barely better than silence.
     expect(body.reason, "a refusal must carry its reason").toBeTruthy();
     // Fail-closed: a refusal must not smuggle numbers out alongside it.
@@ -86,11 +93,21 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
 
   const banner = page.getByTestId("accuracy-status-banner").first();
   await expect(banner).toBeVisible();
-  await expect(banner).toHaveAttribute("data-status", /REFUSED/);
 
   // The heart of F-1: refusing must REMOVE the numbers, not decorate them. No
-  // percentage may appear anywhere on a refused page.
+  // percentage may appear anywhere on a refused page -- nor on an outage page.
   await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
+
+  // A daemon the page could not read is an OUTAGE, not a refusal (2026-10-02:
+  // timeouts rendered as REFUSED_STALE, a grader claim nobody made). It shows
+  // UNREACHABLE in the warn tone and says so; the refusal checks below are for
+  // verdicts the daemon actually returned.
+  if ((await banner.getAttribute("data-status")) === "UNREACHABLE") {
+    await expect(banner).toHaveAttribute("data-tone", "warn");
+    await expect(banner).toContainText("not a refusal by the grader");
+    return;
+  }
+  await expect(banner).toHaveAttribute("data-status", /REFUSED/);
 
   // ...and it must LOOK refused. This assertion exists because the two above
   // passed for weeks while the banner rendered
@@ -100,8 +117,9 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // that only reads the attribute cannot tell those apart. The one state this
   // page exists to shout was the one state it whispered.
   // WHICH refusal state this exercises depends on the daemon it runs against.
-  // An UNREACHABLE daemon yields REFUSED_STALE; a daemon serving a registry
-  // that is marked refused yields REFUSED. Both must be styled, and this
+  // A stale grader yields REFUSED_STALE; a daemon serving a registry that is
+  // marked refused yields REFUSED (an unreachable daemon returned above as
+  // UNREACHABLE, which is not a refusal). Both must be styled, and this
   // asserts whichever one appears -- so a green run here does NOT prove the
   // REFUSED path specifically was covered. That path is held by two other
   // things: colorMap is Record<AccuracyStatus, string>, so omitting REFUSED

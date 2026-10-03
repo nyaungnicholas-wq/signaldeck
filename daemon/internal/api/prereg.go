@@ -15,6 +15,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
@@ -76,16 +77,32 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// The live status, from the same count every regime row's caveat states
+	// (E-CAVEAT-DATE, 2026-10-02). This used to say the numbers are BACKTEST
+	// "until the live record starts arriving on 2026-08-07", which read as the
+	// current state long after resolutions began. nil when the count cannot be
+	// read: then nothing is said about it.
+	live := d.St.LiveRegimeResolutions(ctx)
+	var liveResolved any
+	if live != nil {
+		n := 0
+		for _, c := range live {
+			n += c
+		}
+		liveResolved = n
+	}
 	writeJSON(w, map[string]any{
-		"records":          out,
-		"chainVerified":    ok,
-		"brokenAtSeq":      brokenAt,
-		"firstGradableOn":  prereg.FirstGradableOn,
-		"registeredBefore": registeredBefore,
+		"records":            out,
+		"chainVerified":      ok,
+		"brokenAtSeq":        brokenAt,
+		"firstGradableOn":    prereg.FirstGradableOn,
+		"registeredBefore":   registeredBefore,
+		"liveResolved":       liveResolved,
+		"liveResolvedByKind": live,
 		"whatThisIs": "The claim each structural predictor made, frozen before any of its forecasts " +
-			"resolved. Every accuracy number these predictors advertise is a BACKTEST result until the " +
-			"live record starts arriving on " + prereg.FirstGradableOn + ". Recording the claims first, " +
-			"hashed and chained, is what makes the eventual comparison a measurement instead of a story.",
+			"resolved. Every accuracy number these predictors advertise is a BACKTEST result. " +
+			preregLiveStatus(liveResolved) + " Recording the claims first, hashed and chained, is " +
+			"what makes the comparison a measurement instead of a story.",
 		"whyChained": "A single stored record could be replaced wholesale. Each record links to the " +
 			"previous by hash, so rewriting an old claim breaks every link after it and the break is " +
 			"found by recomputation rather than by trust. chainVerified false means exactly that " +
@@ -100,6 +117,27 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 			"quarantine manifest, and any experiment that registered its own timetable. Null means not " +
 			"evaluated. It never means late.",
 	})
+}
+
+// preregLiveStatus is the sentence /api/prereg says about the live record:
+// how many calls have resolved, never how they scored (that is the track
+// record's to state). n is nil when the count could not be read.
+func preregLiveStatus(n any) string {
+	switch v, _ := n.(int); {
+	case n == nil:
+		return "The live record of resolved calls is a separate measurement: GET /api/track-record " +
+			"compares it with the claims below."
+	case v == 0:
+		return "No call has resolved live yet (first gradable " + prereg.FirstGradableOn + "), so none " +
+			"of these numbers has a live resolution behind it."
+	case v == 1:
+		return "1 call has resolved live so far (first gradable " + prereg.FirstGradableOn + "). It " +
+			"is not these numbers: GET /api/track-record compares it with the claims below."
+	default:
+		return strconv.Itoa(v) + " calls have resolved live so far (one per symbol per day; first " +
+			"gradable " + prereg.FirstGradableOn + "). They are not these numbers: GET " +
+			"/api/track-record compares them with the claims below."
+	}
 }
 
 func (d Deps) registerPrereg(mux *http.ServeMux) {

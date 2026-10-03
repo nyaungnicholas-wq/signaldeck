@@ -158,20 +158,20 @@ func TestScores_InsertSeedsOutcomeAndResolve(t *testing.T) {
 	}
 
 	// The outcome row must have been seeded, unresolved.
-	pend, err := st.UnresolvedOutcomesByHorizon(ctx, md.H1d, 2000, 10)
-	if err != nil || len(pend) != 1 || pend[0].Ts != 1000 || pend[0].Score != 0.42 {
+	pend, err := st.UnresolvedOutcomesByHorizon(ctx, md.H1d, 2000, -1, 0, 10)
+	if err != nil || len(pend) != 1 || pend[0].Ts != 1000 {
 		t.Fatalf("seeded outcome: %v %+v", err, pend)
 	}
 
 	if err := st.ResolveOutcome(ctx, sym.ID, md.H1d, 1000, 0.017); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	pend, err = st.UnresolvedOutcomesByHorizon(ctx, md.H1d, 2000, 10)
+	pend, err = st.UnresolvedOutcomesByHorizon(ctx, md.H1d, 2000, -1, 0, 10)
 	if err != nil || len(pend) != 0 {
 		t.Fatalf("still pending after resolve: %v %+v", err, pend)
 	}
 	res, err := st.ResolvedOutcomes(ctx, sym.ID, md.H1d, 10)
-	if err != nil || len(res) != 1 || res[0].FwdReturn == nil || *res[0].FwdReturn != 0.017 {
+	if err != nil || len(res) != 1 || res[0].FwdReturn == nil || *res[0].FwdReturn != 0.017 || res[0].Score != 0.42 {
 		t.Fatalf("resolved outcomes: %v %+v", err, res)
 	}
 }

@@ -406,6 +406,9 @@ type FeatureRedundancyRunner struct {
 func (w *FeatureRedundancyRunner) Name() string            { return "feature-redundancy-runner" }
 func (w *FeatureRedundancyRunner) Interval() time.Duration { return 24 * time.Hour }
 
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *FeatureRedundancyRunner) Heavy() bool { return true }
+
 // redundancySampleCap bounds the labeled rows pulled per horizon.
 const redundancySampleCap = 6000
 
@@ -601,6 +604,9 @@ type CanaryRunner struct {
 
 func (w *CanaryRunner) Name() string            { return "canary-runner" }
 func (w *CanaryRunner) Interval() time.Duration { return time.Hour }
+
+// Heavy implements workers.HeavyWorker: its first run is spread across the boot.
+func (w *CanaryRunner) Heavy() bool { return true }
 
 func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 	now := time.Now()
