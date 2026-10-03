@@ -611,6 +611,10 @@ type RegimeOutcomeDay struct {
 // every per-kind count undercounted. Exact at any volume; on the snapshot it
 // returns 204 tallies in 0.06 s. The weekly digest reads it too (it had the
 // same cap and no dedup), with since set to the start of its week.
+//
+// superseded_by IS NULL filters rows, as in StructuralRecords: the stored dedup
+// keeps the EARLIEST call of a key, so a newest-first pick alone could count the
+// row the table had already retired.
 func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context, since int64) ([]RegimeOutcomeDay, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT kind, day, COUNT(*), COALESCE(SUM(correct), 0), COALESCE(SUM(historical_accuracy), 0),
@@ -618,7 +622,7 @@ func (s *Store) ResolvedRegimeOutcomeDays(ctx context.Context, since int64) ([]R
 		FROM (
 		  SELECT kind, day, correct, historical_accuracy, resolved_at,
 		         ROW_NUMBER() OVER (PARTITION BY symbol_id, kind, day ORDER BY ts DESC, id DESC) AS rn
-		  FROM regime_outcomes WHERE resolved_at IS NOT NULL
+		  FROM regime_outcomes WHERE resolved_at IS NOT NULL AND superseded_by IS NULL
 		) WHERE rn = 1
 		GROUP BY kind, day ORDER BY kind, day`, since)
 	if err != nil {

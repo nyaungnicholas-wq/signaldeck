@@ -75,15 +75,16 @@ func TestDigestCountsEveryGradedCallOnce(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// A superseded duplicate of (DG00, trend21, last call day): an hour older
-	// than the winner, graded the other way, resolved inside the week.
+	// A superseded duplicate of (DG00, trend21, last call day): an hour NEWER
+	// than the winner, as in production (the dedup keeps the earliest call),
+	// graded the other way, resolved inside the week.
 	lastDay := dayBase + 279
 	var winner int64
 	if err := st.DB().QueryRowContext(ctx, `SELECT id FROM regime_outcomes
 		WHERE symbol_id=? AND kind='trend21' AND day=? AND superseded_by IS NULL`, syms[0].ID, lastDay).Scan(&winner); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB().ExecContext(ctx, ins, syms[0].ID, "trend21", lastDay*86400, lastDay,
+	if _, err := st.DB().ExecContext(ctx, ins, syms[0].ID, "trend21", lastDay*86400+7200, lastDay,
 		lastDay*86400+30*86400, "downtrend", 0, winner); err != nil {
 		t.Fatal(err)
 	}

@@ -354,6 +354,9 @@ func (c *swrCache) getAt(ctx context.Context, file, key string,
 				c.mu.Lock()
 				p = e.payload
 				c.mu.Unlock()
+				if p == nil { // the refresh dropped the copy: build cold, once
+					return c.getAt(ctx, file, key, build)
+				}
 				return p, nil
 			}
 			go c.refresh(context.Background(), e, file, key, build) //nolint:errcheck // logged inside
@@ -458,6 +461,13 @@ func (c *swrCache) refresh(parent context.Context, e *swrEntry, file, key string
 	if errors.As(err, new(uncachedResult)) { // answers no one here; the entry stands
 		c.mu.Lock()
 		e.rebuilding = false
+		// ...but not for good. A refusal that keeps recurring (a registry that
+		// stays unparsed) would otherwise leave the last published payload up
+		// indefinitely; past the limit the copy goes and the next read serves
+		// the refusal itself.
+		if time.Since(e.builtAt) >= uncachedStandLimit {
+			e.payload, e.fromDisk = nil, false
+		}
 		c.mu.Unlock()
 		return nil
 	}
@@ -525,6 +535,11 @@ func (c *swrCache) peek(key string) (map[string]any, bool) {
 //   - regimes: the regime runner writes every 6h → 5m TTL (earnings labels
 //     drift by the day, not the minute).
 //   - predictions: the prediction runner writes every 10m → 2m TTL.
+// uncachedStandLimit is how long a warm copy keeps serving while every rebuild
+// of it comes back uncached (a refusal for this moment only, e.g. a torn
+// registry read). Five track-record TTLs: a torn read heals within one.
+const uncachedStandLimit = 10 * time.Minute
+
 var (
 	sharedTrackCache       = newSWRCache(2 * time.Minute)
 	sharedRegimesCache     = newSWRCache(5 * time.Minute)

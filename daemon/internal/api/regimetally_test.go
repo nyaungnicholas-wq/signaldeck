@@ -69,14 +69,15 @@ func TestRegimeTrackRecordCountsEveryGradedCall(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// A superseded duplicate of (RT00, trend21, dayBase): an hour older than the
-	// winner and graded the other way. One call per (symbol, kind, day).
+	// A superseded duplicate of (RT00, trend21, dayBase): an hour NEWER than the
+	// winner, as in production (the dedup keeps the earliest call), and graded
+	// the other way. One call per (symbol, kind, day), and never the retired one.
 	var winner int64
 	if err := st.DB().QueryRowContext(ctx, `SELECT id FROM regime_outcomes
 		WHERE symbol_id=? AND kind='trend21' AND day=? AND superseded_by IS NULL`, syms[0].ID, dayBase).Scan(&winner); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB().ExecContext(ctx, ins, syms[0].ID, "trend21", dayBase*86400, dayBase,
+	if _, err := st.DB().ExecContext(ctx, ins, syms[0].ID, "trend21", dayBase*86400+7200, dayBase,
 		dayBase*86400+30*86400, "downtrend", 1, winner); err != nil {
 		t.Fatal(err)
 	}
