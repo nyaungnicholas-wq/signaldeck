@@ -112,6 +112,11 @@ func boundReadConns(db *sql.DB) {
 
 // Open opens (creating if needed) the database at path and applies the schema.
 func Open(path string) (*Store, error) {
+	seedFromTemplate(path) // no-op outside `go test`; see testtemplate.go
+	return open(path)
+}
+
+func open(path string) (*Store, error) {
 	// journal_size_limit caps the WAL FILE: once a checkpoint completes, SQLite
 	// truncates the WAL back to this bound instead of letting it grow without
 	// limit. Before this, a slow read (e.g. the old full-universe screener) held
