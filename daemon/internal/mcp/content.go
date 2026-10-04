@@ -317,18 +317,10 @@ var killedFindings = []killedFinding{
 
 // ── track record fallbacks ──────────────────────────────────────────────────
 //
-// These are the figures of record for the retired directional ensemble. They
-// exist as constants so that get_track_record can NEVER return a response
-// without the negative live record in it — not when the store is empty, not
-// when the health worker has not run, not on a fresh install. A test asserts
-// exactly that.
-
-const (
-	directionalLiveAccuracy = 0.467
-	directionalObservations = 8191
-	directionalBrierSkill   = -0.252
-	directionalNote         = "Retired on live evidence. Accuracy is below the naive baseline and " +
-		"Brier skill is negative, meaning the probability forecasts were worse than uninformative. " +
-		"This is the platform's flagship directional model and its record is published rather than " +
-		"withdrawn."
-)
+// get_track_record can NEVER return a response without the directional record
+// in it — not when the store is empty, not when the health worker has not run,
+// not on a fresh install; a test asserts exactly that. Its figures are the
+// current grading window's only (owner, 2026-10-04): the earlier record was
+// graded on the SD-30 label, so its figures of record are no longer served.
+// The note and the window date live in tools.go: they are computed from
+// store.GradingEpochTS, and everything in this file is a fixed string.

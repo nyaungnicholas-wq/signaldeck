@@ -61,12 +61,13 @@ type DirectionalRecordRow struct {
 // window: the prequential-majority rows only exist since the tracked-benchmark
 // wave, and grading the ensemble's whole record against them would compare
 // different stretches of market.
-func (s *Store) FirstResolutionAt(ctx context.Context, h md.Horizon) (int64, bool, error) {
+// issuedSince floors the call's issue ts (0 = the whole record).
+func (s *Store) FirstResolutionAt(ctx context.Context, h md.Horizon, issuedSince int64) (int64, bool, error) {
 	var ts sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT MIN(resolved_at) FROM prediction_outcomes
-		WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL`,
-		string(h)).Scan(&ts)
+		WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL AND ts >= ?`,
+		string(h), issuedSince).Scan(&ts)
 	if err != nil {
 		return 0, false, err
 	}

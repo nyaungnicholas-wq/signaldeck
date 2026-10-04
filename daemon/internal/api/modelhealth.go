@@ -89,6 +89,8 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 			}
 			if why, ok := publication.DirectionalWithheld(h); ok {
 				v = withholdModelHealth(v, why)
+			} else {
+				v = windowModelHealth(v)
 			}
 		}
 		models = append(models, v)
@@ -232,6 +234,57 @@ func withholdModelHealth(v map[string]any, why string) map[string]any {
 		v["note"] = "re-admitted by the coded threshold; " + why
 	}
 	v["withheld"] = why
+	delete(v, "window") // its figures are the corrected label's, withheld until the lift
+	return v
+}
+
+// windowModelHealth publishes a directional row's figures from the worker's
+// window block: calls issued since store.GradingEpochTS, the SD-30 label window
+// (owner, 2026-10-04). The lifetime figures mix in calls graded on the old
+// label, so neither they nor the composite score built on them are published.
+// Verdict and emitting stay: they are the operational state that drives
+// emission. A record stored before the block existed publishes no figures.
+func windowModelHealth(v map[string]any) map[string]any {
+	win, _ := v["window"].(map[string]any)
+	delete(v, "window")
+	since := time.Unix(store.GradingEpochTS, 0).UTC().Format("2006-01-02")
+	// The lifetime reasons explain the operational verdict in terms of figures
+	// graded on the old label; beside window figures they would contradict them.
+	v["reasons"] = []string{"the verdict is the operational grade over the whole record; its reasons rest on " +
+		"figures graded on the SD-30 label and are not published"}
+	v["overall"] = nil
+	if c, ok := v["components"].(map[string]any); ok {
+		c["skill"], c["calibration"], c["drift"] = nil, nil, nil
+	}
+	v["figuresSince"] = store.GradingEpochTS
+	if unreadable, _ := win["unreadable"].(bool); win == nil || unreadable {
+		// Not graded yet, or the worker's read failed: publish nothing rather
+		// than a zero count that reads as an empty window.
+		for _, k := range []string{"observations", "accuracy", "baseline", "skillVsBenchmark"} {
+			v[k] = nil
+		}
+		if b, ok := v["benchmark"].(map[string]any); ok {
+			b["n"], b["accuracy"], b["ensembleAlignedN"], b["ensembleAlignedAcc"] = nil, nil, nil, nil
+		}
+		v["figuresNote"] = "no figures for the window since " + since + " (SD-30) are available yet, so none are published"
+		return v
+	}
+	fig := func(nKey, key string) any {
+		if n, _ := win[nKey].(float64); n > 0 {
+			return win[key]
+		}
+		return nil
+	}
+	count := func(k string) int { n, _ := win[k].(float64); return int(n) }
+	v["observations"] = count("n")
+	v["accuracy"], v["baseline"] = fig("n", "accuracy"), fig("n", "baseline")
+	v["skillVsBenchmark"] = win["skillVsBenchmark"]
+	if b, ok := v["benchmark"].(map[string]any); ok {
+		b["n"], b["accuracy"] = count("benchN"), fig("benchN", "benchAccuracy")
+		b["ensembleAlignedN"], b["ensembleAlignedAcc"] = count("alignedN"), fig("alignedN", "alignedAccuracy")
+	}
+	v["figuresNote"] = "figures grade only calls issued since " + since + ", the corrected-label window (SD-30); " +
+		"verdict and emitting are the operational grade and the composite score is not published"
 	return v
 }
 

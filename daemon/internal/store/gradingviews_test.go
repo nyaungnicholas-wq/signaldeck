@@ -185,7 +185,7 @@ func TestDirectionalRecord_IndependentDaysAndBaseline(t *testing.T) {
 	ctx := context.Background()
 
 	// Before anything resolves: honest absence.
-	if _, ok, err := st.FirstResolutionAt(ctx, md.H1d); err != nil || ok {
+	if _, ok, err := st.FirstResolutionAt(ctx, md.H1d, 0); err != nil || ok {
 		t.Fatalf("FirstResolutionAt empty = ok=%v, %v; want false", ok, err)
 	}
 	if r, err := st.DirectionalRecord(ctx, md.H1d, 0); err != nil || r.N != 0 {
@@ -210,7 +210,7 @@ func TestDirectionalRecord_IndependentDaysAndBaseline(t *testing.T) {
 	seedResolvedPred(t, st, a.ID, md.H1d, epoch+101*day+120, 0.7, 0.7, 0.02) // latest, right
 	seedResolvedPred(t, st, b.ID, md.H1d, epoch+101*day+60, 0.6, 0.6, -0.02) // wrong
 
-	ts, ok, err := st.FirstResolutionAt(ctx, md.H1d)
+	ts, ok, err := st.FirstResolutionAt(ctx, md.H1d, 0)
 	if err != nil || !ok || ts == 0 {
 		t.Fatalf("FirstResolutionAt = %d, %v, %v; want ok", ts, ok, err)
 	}

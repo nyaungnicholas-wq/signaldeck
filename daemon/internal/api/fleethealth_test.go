@@ -82,7 +82,7 @@ func TestFleetHealthEmptyPlatformIsUnknownNotHealthy(t *testing.T) {
 // subsystems this codebase actually calls are Live, and the deliberately-narrow
 // model zoo is reported as not implemented rather than hidden.
 func TestFleetHealthReportsLayerCoverage(t *testing.T) {
-	srv, _ := newFleetHealthServer(t)
+	srv, st := newFleetHealthServer(t)
 
 	var got fleetHealthResp
 	if code := getFleetJSON(t, srv.URL+"/api/fleet-health", &got); code != 200 {
@@ -136,6 +136,26 @@ func TestFleetHealthReportsLayerCoverage(t *testing.T) {
 	}
 	if cov.BuiltNotLive == 0 {
 		t.Error("the dormant data-dependent layers should be counted as built-not-live")
+	}
+
+	// The canary grades only the current window and records no trial while it
+	// holds no comparable version pair, so a completed runner pass is what shows
+	// the gate is running.
+	id, err := st.StartWorkerRun(t.Context(), "canary-runner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishWorkerRun(t.Context(), id, "ok", "no version pair with resolved outcomes yet"); err != nil {
+		t.Fatal(err)
+	}
+	got = fleetHealthResp{}
+	if code := getFleetJSON(t, srv.URL+"/api/fleet-health", &got); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	for _, l := range got.Snapshot.Layers.Layers {
+		if l.Name == "continuous learning" && !l.Live {
+			t.Error("a completed canary-runner pass must count as the promotion gate running")
+		}
 	}
 }
 

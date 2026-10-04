@@ -22,10 +22,21 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// gradingWindowDate is the first issue day the published directional figures grade.
+var gradingWindowDate = time.Unix(store.GradingEpochTS, 0).UTC().Format("2006-01-02")
+
+// directionalNote accompanies every directional row of get_track_record.
+var directionalNote = "The flagship directional model was retired on its earlier live record, which was " +
+	"graded on a label partly realised at issue (SD-30), so those figures are not served. The figures here " +
+	"grade only calls issued since " + gradingWindowDate + " on the corrected label, and the verdict is its " +
+	"current state. Its record is published rather than withdrawn."
 
 type tool struct {
 	Name        string
@@ -337,11 +348,18 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 		}
 		row := map[string]any{
 			"model": m.key, "horizon": m.horizon, "source": "live graded record",
-			"note": directionalNote,
+			"note": directionalNote, "figuresSince": gradingWindowDate,
 		}
-		copyNum(v, row, "accuracy", "liveAccuracy")
-		copyNum(v, row, "observations", "independentObservations")
-		copyNum(v, row, "baseline", "baselineAccuracy")
+		// Figures from the worker's window block (calls issued since
+		// store.GradingEpochTS), never its lifetime grade, which mixes in the
+		// SD-30 label (owner, 2026-10-04).
+		win, _ := v["window"].(map[string]any)
+		copyNum(win, row, "n", "independentObservations")
+		if n, _ := win["n"].(float64); n > 0 {
+			copyNum(win, row, "accuracy", "liveAccuracy")
+			copyNum(win, row, "baseline", "baselineAccuracy")
+			copyNum(win, row, "brierSkill", "brierSkill")
+		}
 		if s, ok := v["verdict"].(string); ok {
 			row["verdict"] = s
 		}
@@ -356,15 +374,14 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 		// the health worker has written nothing, the figures of record stand
 		// in — labelled as such. An empty directional block would read as
 		// "no bad news", which is the one reading this platform must not offer.
+		// No figures: the documented figures of record were graded on the SD-30
+		// label, and the window has no grade on this daemon yet.
 		directional = append(directional, map[string]any{
 			"model": "directional-ensemble", "horizon": "1d",
-			"liveAccuracy":            directionalLiveAccuracy,
-			"independentObservations": directionalObservations,
-			"brierSkill":              directionalBrierSkill,
-			"verdict":                 "retired",
-			"emitting":                false,
-			"source":                  "documented figure of record (the grading worker has not written a verdict on this daemon)",
-			"note":                    directionalNote,
+			"verdict":  "retired",
+			"emitting": false,
+			"source":   "the grading worker has not written a verdict on this daemon, so no live figures are served",
+			"note":     directionalNote,
 		})
 		withholdDirectional(directional[0].(map[string]any), "1d")
 	}

@@ -229,6 +229,14 @@ func (s *Store) UpsertCanaryTrial(ctx context.Context, t CanaryTrial) error {
 	return err
 }
 
+// DeleteCanaryTrial drops a model's stored verdict. The runner calls it when the
+// current grading window holds no comparable version pair, so a verdict graded
+// on an earlier window is never served as current.
+func (s *Store) DeleteCanaryTrial(ctx context.Context, model string) error {
+	_, err := s.w.ExecContext(ctx, `DELETE FROM canary_trials WHERE model=?`, model)
+	return err
+}
+
 // CanaryTrials lists every trial, most recently decided first.
 func (s *Store) CanaryTrials(ctx context.Context) ([]CanaryTrial, error) {
 	rows, err := s.db.QueryContext(ctx, `
