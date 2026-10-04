@@ -63,7 +63,7 @@ func TestAttributionLive_DedupesPerDayAndScoresDirection(t *testing.T) {
 	}
 
 	const day = int64(86400)
-	base := int64(1_700_000_000)
+	base := int64(store.GradingEpochTS) // live evidence floors on the current window
 	base -= base % day
 
 	// AAA: four days, two right and two wrong — and both directions scored, so
@@ -149,7 +149,7 @@ func TestCurrentStateFor_CachesAndTolerates(t *testing.T) {
 func TestAttribution_CachedPerStore(t *testing.T) {
 	ctx := context.Background()
 	const day = int64(86400)
-	base := int64(1_700_000_000)
+	base := int64(store.GradingEpochTS) // live evidence floors on the current window
 	base -= base % day
 
 	// Store A: symbol AAA with 3 resolved days, all correct.

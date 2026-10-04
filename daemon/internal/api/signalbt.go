@@ -8,7 +8,9 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/signalbt"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // ── STAGE 5: own-signal backtester read route ────────────────────────────────
@@ -58,6 +60,31 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 		h = md.H1d // the daily feature store is what this backtester replays
 	}
 
+	// SD-30: the own-signal grade scores the stored 1d/1w forward return, which
+	// carries the label mostly realised at issue. Withheld with the reason, the
+	// pinned weekly copy included: nothing is read or computed. The page reads
+	// rawN, independentN and costBps before it checks gated, so those stay
+	// numbers; every skill figure is null rather than a 0 a reader could quote.
+	if why, ok := publication.DirectionalWithheld(string(h)); ok {
+		writeJSON(w, map[string]any{
+			"result": map[string]any{
+				"horizon": string(h), "rawN": 0, "independentN": 0, "minIndependentN": signalbt.MinIndependentN,
+				"gated": true, "costBps": 0, "ic": nil, "icDecay": nil, "quintiles": nil, "quintileSpread": nil,
+				"hitRate": nil, "meanFwd": nil, "turnover": nil, "equity": nil, "strategyReturn": nil,
+				"benchmarkReturn": nil, "excessReturn": nil, "live": false, "trackLabel": "", "note": why,
+			},
+			"horizons":        []md.Horizon{md.H1d, md.H1w},
+			"benchmarkSymbol": "SPY",
+			"hasBenchmark":    false,
+			"pinned":          false,
+			"survivorship":    survivorshipBlock(),
+			"cluster":         nil,
+			"icInterval":      nil,
+			"withheld":        why,
+		})
+		return
+	}
+
 	// STAGE 2: pinned weekly result, when asked for and available.
 	pinnedRequested := r.URL.Query().Get("pinned") == "1"
 	if pinnedRequested {
@@ -94,7 +121,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 		// labeled honestly below.
 	}
 
-	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs)
+	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs, store.GradingEpochTS)
 	if err != nil {
 		httpInternal(w, err)
 		return

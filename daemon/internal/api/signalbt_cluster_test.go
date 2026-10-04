@@ -72,6 +72,7 @@ func getSignalBTCluster(t *testing.T, url string) signalBTClusterBody {
 // grade ships a hit rate with no interval and no day count. The day count is the
 // only honest measure of how much independent evidence this record holds.
 func TestSignalBacktest_ClusterRobustHitRate(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	seedCompositeClusteredRecord(t, st, 12, 100)
 
@@ -110,6 +111,7 @@ func TestSignalBacktest_ClusterRobustHitRate(t *testing.T) {
 // same clustered rows, so it needs the same treatment — a day-resampled interval,
 // not a Fisher-z at the row count.
 func TestSignalBacktest_ICIntervalResamplesDays(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	seedCompositeClusteredRecord(t, st, 12, 100)
 
@@ -135,6 +137,7 @@ func TestSignalBacktest_ICIntervalResamplesDays(t *testing.T) {
 // interval, so the cluster block reports the sample-size facts and refuses, with
 // the reason naming the shortfall. It must NOT publish a narrow band.
 func TestSignalBacktest_ThinRecordWithheld(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	seedCompositeClusteredRecord(t, st, 4, 100) // 400 obs, 4 days
 
@@ -159,6 +162,7 @@ func TestSignalBacktest_ThinRecordWithheld(t *testing.T) {
 // cluster block computed from a different (live) read, which would put a Sunday
 // point estimate beside a Wednesday interval.
 func TestSignalBacktest_PinnedCarriesNoFabricatedCluster(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	ctx := context.Background()
 	pin := signalbt.Pinned{

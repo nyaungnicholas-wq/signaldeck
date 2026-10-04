@@ -45,6 +45,7 @@ func getSignalBTPinned(t *testing.T, url string) signalBTPinnedBody {
 }
 
 func TestSignalBacktestPinnedRetrieval(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	ctx := context.Background()
 
@@ -91,6 +92,7 @@ func TestSignalBacktestPinnedRetrieval(t *testing.T) {
 // TestSignalBacktestPinnedAbsent covers the fresh-install path: pinned=1 with
 // no stored snapshot at all → live compute + the explanatory note.
 func TestSignalBacktestPinnedAbsent(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, _ := newSignalBTServer(t, nil)
 	got := getSignalBTPinned(t, srv.URL+"/api/signal-backtest?horizon=1d&pinned=1")
 	if got.Pinned {

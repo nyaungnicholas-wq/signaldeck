@@ -24,6 +24,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 const confidenceNote = "One assembled read on a single prediction. The probability is the platform's calibrated output; confidence is a SEPARATE judgement about whether the out-of-sample record supports believing it at all, so a high probability from a model with no demonstrated edge reads as low confidence. Expected drawdown is the measured adverse excursion of historical holds of this length on this symbol — UNCONDITIONAL (it does not yet condition on the current market state), which is stated here rather than implied away. Every unmeasurable field is null and named in `withheld`. Not advice."
@@ -93,7 +94,9 @@ func (d Deps) confidenceRead(w http.ResponseWriter, r *http.Request) {
 // false rather than passing a zero — which would score the model as perfectly
 // calibrated on the strength of never having been checked.
 func (d Deps) confidenceEvidence(ctx context.Context, h md.Horizon) (confidence.Evidence, error) {
-	rec, err := d.St.DirectionalRecord(ctx, h, 0)
+	// Only calls issued in the current grading window: the record before
+	// store.GradingEpochTS was graded on the SD-30 label.
+	rec, err := d.St.DirectionalRecordIssued(ctx, h, 0, store.GradingEpochTS)
 	if err != nil {
 		return confidence.Evidence{}, err
 	}

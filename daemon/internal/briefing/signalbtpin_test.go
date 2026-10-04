@@ -29,7 +29,9 @@ func TestSignalBTPinWorkerEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	day := int64(86400)
-	predTs := now.Add(-72 * time.Hour).Unix()
+	// Inside the current grading window: the own-signal grade floors on
+	// store.GradingEpochTS and never compares the call to now.
+	predTs := int64(store.GradingEpochTS) + 12*3600
 	if err := st.UpsertBars(ctx, []md.Bar{
 		{SymbolID: aapl.ID, TF: md.TF1d, Ts: predTs, Open: 100, High: 100, Low: 100, Close: 100},
 		{SymbolID: aapl.ID, TF: md.TF1d, Ts: predTs + day, Open: 101, High: 101, Low: 101, Close: 101},

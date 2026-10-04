@@ -103,7 +103,7 @@ const (
 	pmClustersSQL = `
 		SELECT primary_reason, COUNT(*), AVG(magnitude), AVG(conviction)
 		FROM prediction_postmortems
-		WHERE created_at >= ?
+		WHERE created_at >= ? AND ts >= ?
 		GROUP BY primary_reason
 		ORDER BY COUNT(*) DESC, primary_reason ASC`
 	pmRecentSQL = `
@@ -118,8 +118,9 @@ const (
 // PostmortemClusters aggregates stored postmortems by primary reason over the
 // most recent `withinDays` days (0 ⇒ all time), biggest cluster first. This is
 // the "cluster failures / discover patterns" surface the Research Lab reads.
-func (s *Store) PostmortemClusters(ctx context.Context, sinceTs int64) ([]PostmortemCluster, int, error) {
-	rows, err := s.db.QueryContext(ctx, pmClustersSQL, sinceTs)
+// issuedSince floors the call's issue ts (0 = no floor).
+func (s *Store) PostmortemClusters(ctx context.Context, sinceTs, issuedSince int64) ([]PostmortemCluster, int, error) {
+	rows, err := s.db.QueryContext(ctx, pmClustersSQL, sinceTs, issuedSince)
 	if err != nil {
 		return nil, 0, err
 	}
