@@ -324,11 +324,11 @@ var killedFindings = []killedFinding{
 // exactly that.
 
 const (
-	directionalLiveAccuracy = 0.467
-	directionalObservations = 8191
-	directionalBrierSkill   = -0.252
-	directionalNote         = "Retired on live evidence. Accuracy is below the naive baseline and " +
-		"Brier skill is negative, meaning the probability forecasts were worse than uninformative. " +
-		"This is the platform's flagship directional model and its record is published rather than " +
-		"withdrawn."
+	// The retirement stands on the earlier live record. Its figures were graded
+	// on the SD-30 label, so only the corrected window's are served (owner,
+	// 2026-10-04).
+	directionalNote = "Retired on its earlier live record, and the retirement stands. That record was " +
+		"graded on a label partly realised at issue (SD-30), so its figures are not served; the figures " +
+		"here grade only calls issued since 2026-10-04 on the corrected label. This is the platform's " +
+		"flagship directional model and its record is published rather than withdrawn."
 )

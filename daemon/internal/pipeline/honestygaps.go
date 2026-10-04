@@ -615,17 +615,21 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 	}
 	var lines []string
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
-		// The whole record, deliberately: this is a HEAD-TO-HEAD grade of one
-		// feature version against another, and survivorship contamination sits in
-		// both arms alike, so bounding the window here would only shrink the
-		// comparison without making it cleaner. The gate that compares an
-		// absolute record against an absolute null — re-admission, in
-		// internal/api — is the one that must start at the epoch, and does.
-		rows, err := w.St.VersionedOutcomes(ctx, h, 200000, 0)
+		// The current grading window only (owner, 2026-10-04). This was the whole
+		// record, on the argument that survivorship contamination sits in both
+		// arms alike. SD-30 does not: older versions were graded only on the label
+		// partly realised at issue, so a lifetime head-to-head compares two labels.
+		// When the window holds no comparable pair yet, the stored verdict is
+		// dropped rather than left to be served as current.
+		model := "directional-ensemble-" + string(h)
+		rows, err := w.St.VersionedOutcomes(ctx, h, 200000, store.GradingEpoch)
 		if err != nil {
 			return "", err
 		}
 		if len(rows) == 0 {
+			if err := w.St.DeleteCanaryTrial(ctx, model); err != nil {
+				return "", err
+			}
 			continue
 		}
 		// Group by feature version — a changed vector IS a changed model.
@@ -688,6 +692,9 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 		}
 		sort.Ints(vers)
 		if len(vers) < 2 {
+			if err := w.St.DeleteCanaryTrial(ctx, model); err != nil {
+				return "", err
+			}
 			continue // nothing to compare against yet
 		}
 		chV, incV := vers[len(vers)-1], vers[len(vers)-2]
@@ -708,7 +715,6 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 				Days: len(ch.days), DayTallies: tallies(ch),
 				FirstTs: ch.first, LastTs: ch.last, BaselineAccuracy: base},
 		)
-		model := "directional-ensemble-" + string(h)
 		if err := w.St.UpsertCanaryTrial(ctx, store.CanaryTrial{
 			Model: model, Incumbent: fmt.Sprintf("v%d", incV), Challenger: fmt.Sprintf("v%d", chV),
 			Decision: string(v.Decision), Serving: v.Serving, Reason: v.Reason,

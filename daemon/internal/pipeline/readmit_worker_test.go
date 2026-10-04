@@ -100,6 +100,15 @@ func TestModelHealthWorkerPersistsReadmission(t *testing.T) {
 	if emitting, _ := ModelEmitting(ctx, st, "directional-ensemble-1d"); !emitting {
 		t.Fatal("ModelEmitting still reads the model as withheld after re-admission was persisted")
 	}
+	// The public figures (the window block) grade only the post-epoch calls; the
+	// lifetime grade beside them still counts all of them.
+	win, _ := v["window"].(map[string]any)
+	if win["n"] != float64(postDays) || win["accuracy"] != 1.0 || win["since"] != float64(store.GradingEpochTS) {
+		t.Fatalf("window block = %v, want %d post-epoch calls at 100%%", win, postDays)
+	}
+	if v["observations"] != float64(30+postDays) {
+		t.Fatalf("lifetime observations = %v, want %d", v["observations"], 30+postDays)
+	}
 }
 
 // A registry retire flag is the pre-registered auto-retire rule; the shadow

@@ -131,7 +131,7 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		}
 		var aligned store.DirectionalRecordRow
 		if bench.N > 0 {
-			if first, ok, err := w.St.FirstResolutionAt(ctx, benchmarkHorizon(h)); err == nil && ok {
+			if first, ok, err := w.St.FirstResolutionAt(ctx, benchmarkHorizon(h), 0); err == nil && ok {
 				if a, err := w.St.DirectionalRecord(ctx, h, first); err == nil {
 					aligned = a
 				}
@@ -140,6 +140,42 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		var skillVsBenchmark any // nil until both sides have aligned rows
 		if bench.N > 0 && aligned.N > 0 {
 			skillVsBenchmark = aligned.Accuracy - bench.Accuracy
+		}
+
+		// PUBLIC FIGURES (owner, 2026-10-04). /api/model-health and the MCP track
+		// record publish this block, graded only on calls issued since
+		// store.GradingEpochTS (the SD-30 label window), never the lifetime figures
+		// above. Those stay the operational grade on purpose: they drive emission,
+		// retirement and readmission. A failed read publishes no figures, not
+		// stale ones, and does not stop the verdict from being stored.
+		var window any
+		if win, err := w.St.DirectionalRecordIssued(ctx, h, 0, store.GradingEpochTS); err != nil {
+			slog.Warn("model-health: window record unreadable", "horizon", h, "err", err)
+		} else if winBench, err := w.St.DirectionalRecordIssued(ctx, benchmarkHorizon(h), 0, store.GradingEpochTS); err != nil {
+			slog.Warn("model-health: window benchmark unreadable", "horizon", h, "err", err)
+		} else {
+			// Same alignment as the lifetime head-to-head: the ensemble re-graded
+			// from the benchmark's first in-window resolution, so both cover the
+			// same market days.
+			var winAligned store.DirectionalRecordRow
+			if winBench.N > 0 {
+				if first, ok, err := w.St.FirstResolutionAt(ctx, benchmarkHorizon(h), store.GradingEpochTS); err == nil && ok {
+					if a, err := w.St.DirectionalRecordIssued(ctx, h, first, store.GradingEpochTS); err == nil {
+						winAligned = a
+					}
+				}
+			}
+			var winSkill any
+			if winBench.N > 0 && winAligned.N > 0 {
+				winSkill = winAligned.Accuracy - winBench.Accuracy
+			}
+			window = map[string]any{
+				"since": store.GradingEpochTS, "n": win.N, "accuracy": win.Accuracy,
+				"baseline": win.BaselineAcc, "brierSkill": win.BrierSkill,
+				"benchN": winBench.N, "benchAccuracy": winBench.Accuracy,
+				"alignedN": winAligned.N, "alignedAccuracy": winAligned.Accuracy,
+				"skillVsBenchmark": winSkill,
+			}
 		}
 
 		// FEATURE DRIFT (2026-07-25): compare the recent feature distribution
@@ -243,6 +279,7 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 				"ensembleAlignedAcc": aligned.Accuracy,
 			},
 			"skillVsBenchmark": skillVsBenchmark,
+			"window":           window,
 			"gradedAt":         time.Now().Unix(),
 		})
 		// COUNT THE OUTCOME, NOT THE INTENT. graded++ used to run before this

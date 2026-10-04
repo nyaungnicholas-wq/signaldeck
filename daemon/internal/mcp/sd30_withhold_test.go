@@ -26,9 +26,10 @@ func sd30On(t *testing.T)  { t.Helper(); sd30Set(t, true) }
 var sd30Sources = map[string]stubSource{
 	"meta": {health: map[string]string{
 		"directional-ensemble-1d": `{"model":"directional-ensemble-1d","verdict":"retired",` +
-			`"emitting":false,"accuracy":0.467,"baseline":0.52,"observations":8191}`,
+			`"emitting":false,"accuracy":0.467,"baseline":0.52,"observations":8191,` +
+			`"window":{"n":40,"accuracy":0.6123,"baseline":0.5317,"brierSkill":0.0219}}`,
 		"directional-ensemble-1w": `{"model":"directional-ensemble-1w","verdict":"retired",` +
-			`"emitting":false,"accuracy":0.451,"baseline":0.55,"observations":1200}`,
+			`"emitting":false,"accuracy":0.451,"baseline":0.55,"observations":1200,"window":{"n":0}}`,
 	}},
 	"fallback": {},
 }
@@ -75,7 +76,7 @@ func TestSD30_MCPTrackRecordWithholdsDirectionalFigures(t *testing.T) {
 		if !strings.Contains(blob, "stays retired") || !strings.Contains(blob, "(SD-30)") {
 			t.Errorf("%s: theHonestSummary must keep the retirement and name SD-30", name)
 		}
-		for _, fig := range []string{"0.467", "0.451", "-0.252", "below the naive baseline", "Brier skill is negative", "tested live and FAILED"} {
+		for _, fig := range []string{"0.467", "0.451", "-0.252", "0.6123", "0.5317", "below the naive baseline", "Brier skill is negative", "tested live and FAILED"} {
 			if strings.Contains(blob, fig) {
 				t.Errorf("%s: withheld figure %s still in the payload", name, fig)
 			}
@@ -86,16 +87,30 @@ func TestSD30_MCPTrackRecordWithholdsDirectionalFigures(t *testing.T) {
 func TestSD30_MCPTrackRecordOffRestoresFigures(t *testing.T) {
 	sd30Off(t)
 	rows, blob := sd30Directional(t, sd30Sources["meta"])
-	if !strings.Contains(blob, "tested live and FAILED") || strings.Contains(blob, "(SD-30)") {
+	// The directional note names SD-30 on purpose (it says why the earlier figures
+	// are not served); theHonestSummary itself must drop it with the flag off.
+	if !strings.Contains(blob, "tested live and FAILED") || strings.Contains(honestSummary(), "SD-30") {
 		t.Fatalf("flag off must restore theHonestSummary's live verdict")
 	}
-	if len(rows) != 2 || rows[0]["liveAccuracy"] != 0.467 || rows[0]["baselineAccuracy"] != 0.52 ||
-		rows[1]["liveAccuracy"] != 0.451 {
-		t.Fatalf("flag off must restore the graded figures: %v", rows)
+	// Flag off serves the window block (calls since 2026-10-04), never the
+	// lifetime figures, and the fallback serves no figures of record at all.
+	if len(rows) != 2 || rows[0]["liveAccuracy"] != 0.6123 || rows[0]["baselineAccuracy"] != 0.5317 ||
+		rows[0]["brierSkill"] != 0.0219 || rows[0]["independentObservations"] != 40.0 {
+		t.Fatalf("flag off must serve the window figures: %v", rows)
 	}
-	fb, _ := sd30Directional(t, sd30Sources["fallback"])
-	if fb[0]["liveAccuracy"] != 0.467 || fb[0]["brierSkill"] != -0.252 {
-		t.Fatalf("flag off must restore the figure of record: %v", fb[0])
+	if _, present := rows[1]["liveAccuracy"]; present {
+		t.Fatalf("an empty window must serve no accuracy: %v", rows[1])
+	}
+	fb, fbBlob := sd30Directional(t, sd30Sources["fallback"])
+	for _, k := range []string{"liveAccuracy", "brierSkill", "independentObservations"} {
+		if _, present := fb[0][k]; present {
+			t.Fatalf("the fallback served a figure of record (%s): %v", k, fb[0])
+		}
+	}
+	for _, fig := range []string{"0.467", "0.451", "-0.252"} {
+		if strings.Contains(blob+fbBlob, fig) {
+			t.Fatalf("a lifetime figure %s is served with the flag off", fig)
+		}
 	}
 	for _, row := range append(rows, fb...) {
 		if _, present := row["figuresWithheld"]; present {

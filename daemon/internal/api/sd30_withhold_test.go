@@ -474,7 +474,16 @@ func TestSD30_ModelHealthWithheld(t *testing.T) {
 	  "reasons":["lifetime accuracy is BELOW the naive baseline"],"observations":2257,
 	  "accuracy":0.462,"baseline":0.528,"skillVsBenchmark":-0.08,
 	  "benchmark":{"model":"prequential-majority-1d","n":100,"accuracy":0.55,"ensembleAlignedN":100,"ensembleAlignedAcc":0.47},
-	  "readmission":{"eligible":false,"lower":0.41,"upper":0.5,"null":0.55,"distinctDays":12,"minDistinctDays":20,"reason":"not re-admitted: lower bound 41.0%"}}`
+	  "readmission":{"eligible":false,"lower":0.41,"upper":0.5,"null":0.55,"distinctDays":12,"minDistinctDays":20,"reason":"not re-admitted: lower bound 41.0%"},
+	  "window":{"since":1791072000,"n":40,"accuracy":0.6,"baseline":0.52,"brierSkill":0.05,"benchN":30,"benchAccuracy":0.55,"alignedN":30,"alignedAccuracy":0.58,"skillVsBenchmark":0.03}}`
+	// A record stored before the window block existed: it must publish no figures.
+	old := `{"model":"directional-ensemble-1w","verdict":"retired","emitting":false,"overall":0.31,` +
+		`"components":{"skill":0.2,"calibration":0.3,"drift":0.5,"freshness":1},"observations":2257,` +
+		`"accuracy":0.462,"baseline":0.528,"skillVsBenchmark":-0.08,` +
+		`"benchmark":{"model":"prequential-majority-1w","n":100,"accuracy":0.55,"ensembleAlignedN":100,"ensembleAlignedAcc":0.47}}`
+	if err := st.SetMeta(t.Context(), pipeline.MetaKeyPrefix+"directional-ensemble-1w", old); err != nil {
+		t.Fatal(err)
+	}
 	for _, k := range []string{"directional-ensemble-1d", "structural-trend21"} {
 		b := strings.ReplaceAll(blob, "directional-ensemble-1d", k)
 		if err := st.SetMeta(t.Context(), pipeline.MetaKeyPrefix+k, b); err != nil {
@@ -510,6 +519,9 @@ func TestSD30_ModelHealthWithheld(t *testing.T) {
 	nilAt(c, "skill", "calibration", "drift")
 	ra, _ := m["readmission"].(map[string]any)
 	nilAt(ra, "lower", "upper", "null")
+	if _, present := m["window"]; present {
+		t.Fatalf("the window block (the corrected label's figures) leaked while withheld: %v", m)
+	}
 	if m["withheld"] != publication.SD30Reason || ra["reason"] != publication.SD30Reason {
 		t.Fatalf("the reason must be stated: withheld %v, readmission.reason %v", m["withheld"], ra["reason"])
 	}
@@ -521,9 +533,26 @@ func TestSD30_ModelHealthWithheld(t *testing.T) {
 	}
 
 	sd30Off(t)
-	m = byModel()["directional-ensemble-1d"]
-	if m["accuracy"] != 0.462 || m["skillVsBenchmark"] != -0.08 || m["withheld"] != nil {
-		t.Fatalf("flag off must restore the stored grade: %v", m)
+	got = byModel()
+	m = got["directional-ensemble-1d"]
+	b, _ = m["benchmark"].(map[string]any)
+	c, _ = m["components"].(map[string]any)
+	// Flag off publishes the window block (calls since 2026-10-04), never the
+	// lifetime grade: verdict and emitting stay, the composite score does not.
+	if m["accuracy"] != 0.6 || m["baseline"] != 0.52 || m["skillVsBenchmark"] != 0.03 || jnum(m, "observations") != 40 ||
+		jnum(b, "n") != 30 || b["accuracy"] != 0.55 || b["ensembleAlignedAcc"] != 0.58 || m["withheld"] != nil ||
+		m["verdict"] != "retired" || m["figuresSince"] == nil {
+		t.Fatalf("flag off must publish the window figures: %v", m)
+	}
+	nilAt(m, "overall")
+	nilAt(c, "skill", "calibration", "drift")
+	if _, present := m["window"]; present {
+		t.Fatalf("the raw window block is served alongside the figures: %v", m)
+	}
+	w1 := got["directional-ensemble-1w"]
+	nilAt(w1, "accuracy", "baseline", "skillVsBenchmark")
+	if jnum(w1, "observations") != 0 {
+		t.Fatalf("a record with no window block published lifetime figures: %v", w1)
 	}
 }
 
