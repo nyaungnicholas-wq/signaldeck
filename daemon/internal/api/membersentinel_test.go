@@ -274,6 +274,12 @@ func seedSentinels(t *testing.T, st *store.Store, variant int) sentinelFixture {
 	}
 	now := time.Now().Unix()
 	day := now / 86400 * 86400
+	// The calls below sit 2-5 days before `day` and must be inside the graded
+	// window: right after a re-registration (2026-10-04) that puts `day` a few
+	// days after the epoch, not today. A no-op once the window is older.
+	if floor := int64(store.GradingEpochTS) + 5*86400; day < floor {
+		day = floor
+	}
 	ids := []int64{fx.sntl.ID, fx.sntc.ID}
 
 	// Vendor rows. Alpaca/Kraken bars for both markets.
@@ -351,6 +357,11 @@ func seedSentinels(t *testing.T, st *store.Store, variant int) sentinelFixture {
 	miss(fx.sntc.ID, day-3*86400, sntFwd2, 0) // the only crypto row
 	for i := 0; i < variant; i++ {            // not a sentinel: SNTW has no vendor bars
 		miss(fx.sntw.ID, day-int64(4+i)*86400, 0.0123457, 0)
+	}
+	// ResolvePrediction stamps the real clock; when `day` was moved past it the
+	// calls must still read as resolved after their settlement, as in production.
+	if _, err := st.DB().ExecContext(ctx, `UPDATE prediction_outcomes SET resolved_at = MAX(resolved_at, ts + 10*86400)`); err != nil {
+		t.Fatal(err)
 	}
 	_, err := st.AppendLedger(ctx, store.LedgerEntry{PredictedAt: day - 2*86400, SymbolID: fx.sntl.ID,
 		Horizon: md.H1d, BarTs: day - 3*86400, RawProb: 0.31, CalProb: 0.3, FeatureHash: "sntl", ModelVersion: 1})

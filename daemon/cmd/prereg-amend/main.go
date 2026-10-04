@@ -45,7 +45,8 @@ func main() {
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
 				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
-				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+" or "+GradingWindow2Kind)
+				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+", "+GradingWindow2Kind+" or "+
+				LabelWindowKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
@@ -53,11 +54,13 @@ func main() {
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
 		*kind != BookExtremeKind && *kind != RVForecastKind &&
-		*kind != GradingWindowKind && *kind != GradingWindow2Kind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != GradingWindowKind && *kind != GradingWindow2Kind &&
+		*kind != LabelWindowKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
-			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind, GradingWindow2Kind)
+			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind, GradingWindow2Kind,
+			LabelWindowKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -177,6 +180,22 @@ func main() {
 				"so there is no refusal for this record to clear.")
 		}
 		spec, note = gradingWindow2Spec(m), gradingWindow2Note
+
+	case LabelWindowKind:
+		m, err := measureLabelWindow(ctx, db)
+		if err != nil {
+			die("measure label window: %v", err)
+		}
+		// The record asserts the new label rule and window are forward-only:
+		// no 1d/1w row issued at or after the cutoff may have resolved yet, or
+		// the rule would be chosen with its own outcomes readable.
+		if n := m.resolvedTotal(); n != 0 {
+			die("REFUSING to file: %d 1d/1w prediction outcome(s) issued at or after "+
+				"2026-10-04 have already resolved (%v). A label rule registered after its "+
+				"own outcomes are readable is not forward-only; move the cutoff and the "+
+				"epoch to a day with none resolved.", n, m.Resolved)
+		}
+		spec, note = labelWindowSpec(m), labelWindowNote
 
 	case RVForecastKind:
 		m, err := measureRVForecast(ctx, db)

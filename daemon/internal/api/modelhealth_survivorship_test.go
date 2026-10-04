@@ -104,11 +104,12 @@ func TestSurvivorshipEpochMatchesRegistryBoundary(t *testing.T) {
 		t.Fatalf("store.SurvivorshipEpoch = %d, want %d (tools/accuracy_registry.py SURVIVORSHIP_EPOCH)",
 			store.SurvivorshipEpoch, want)
 	}
-	// 2026-09-25T00:00:00Z — GRADING_EPOCH in tools/accuracy_registry.py, the
-	// start of the DIRECTIONAL graded window as re-registered 2026-09-30
-	// (grading-window-reregistration-2; was 2026-08-07 from 2026-09-20). It is a
-	// separate fact from the survivorship epoch and must never be folded back into it.
-	const wantGrading = int64(1790294400)
+	// 2026-10-04T00:00:00Z — GRADING_EPOCH in tools/accuracy_registry.py, the
+	// start of the DIRECTIONAL graded window as re-registered 2026-10-03
+	// (label-window-reregistration, SD-30; was 2026-09-25 from 2026-09-30 and
+	// 2026-08-07 from 2026-09-20). It is a separate fact from the survivorship
+	// epoch and must never be folded back into it.
+	const wantGrading = int64(1791072000)
 	if store.GradingEpoch != wantGrading || store.GradingEpochTS != wantGrading {
 		t.Fatalf("store.GradingEpoch = %d / GradingEpochTS = %d, want %d (tools/accuracy_registry.py GRADING_EPOCH)",
 			store.GradingEpoch, store.GradingEpochTS, wantGrading)

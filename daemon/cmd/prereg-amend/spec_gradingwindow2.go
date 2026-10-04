@@ -2,8 +2,6 @@ package main
 
 import (
 	"time"
-
-	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // GradingWindow2Kind re-registers the directional grading window a SECOND
@@ -30,8 +28,8 @@ import (
 const GradingWindow2Kind = "grading-window-reregistration-2"
 
 const (
-	window2OldEpochTS int64 = 1786060800         // 2026-08-07T00:00:00Z, set by seq 117
-	window2NewEpochTS       = store.GradingEpoch // 2026-09-25T00:00:00Z
+	window2OldEpochTS int64 = 1786060800 // 2026-08-07T00:00:00Z, set by seq 117
+	window2NewEpochTS int64 = 1790294400 // 2026-09-25T00:00:00Z; a literal, so seq 130's spec keeps stating its own boundary after later re-registrations
 )
 
 const gradingWindow2Note = "AMENDMENT — the directional grading window's start moves a second time, from " +

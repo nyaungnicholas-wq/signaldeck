@@ -873,8 +873,10 @@ SURVIVORSHIP_EPOCH_TS = int(dt.datetime(2026, 7, 24, tzinfo=dt.timezone.utc).tim
 # across 327 symbols; the prereg-amend guard refused 08-05 on exactly that). Two facts, two constants: SURVIVORSHIP_EPOCH
 # still bounds listing-status reconstruction; GRADING_EPOCH bounds every graded
 # population below. Mirrors store.GradingEpoch; the Go pin test holds both.
-GRADING_EPOCH = dt.date(2026, 9, 25)
-GRADING_EPOCH_TS = int(dt.datetime(2026, 9, 25, tzinfo=dt.timezone.utc).timestamp())
+# 2026-10-03 (label-window-reregistration, SD-30): restarts at 2026-10-04, where
+# the label base moved to the issue day's own bar (pipeline.labelBaseSinceTs).
+GRADING_EPOCH = dt.date(2026, 10, 4)
+GRADING_EPOCH_TS = int(dt.datetime(2026, 10, 4, tzinfo=dt.timezone.utc).timestamp())
 
 
 def population_epoch_ts(table: str) -> int:

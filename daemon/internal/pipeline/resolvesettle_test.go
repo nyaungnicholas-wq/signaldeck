@@ -48,7 +48,7 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 		t.Fatalf("UpsertPrediction: %v", err)
 	}
 
-	r := &PredictionResolver{St: st}
+	r := &PredictionResolver{St: st, clock: func() time.Time { return time.Unix(d0+10*86400, 0) }} // the window opened hours ago: fixtures sit in its first days
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestResolverPagesPastRowsItSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := (&PredictionResolver{St: st}).Run(ctx)
+	msg, err := (&PredictionResolver{St: st, clock: func() time.Time { return time.Unix(d0+10*86400, 0) }}).Run(ctx)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestResolverResolvesTheBenchmarkTwinWithItsRow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	msg, err := (&PredictionResolver{St: st}).Run(ctx)
+	msg, err := (&PredictionResolver{St: st, clock: func() time.Time { return time.Unix(d0+10*86400, 0) }}).Run(ctx)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

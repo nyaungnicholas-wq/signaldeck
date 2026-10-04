@@ -18,8 +18,11 @@ func TestGradingWindow2MeasuresItsOwnBoundaries(t *testing.T) {
 	if window2OldEpochTS != 1786060800 || newGradingEpochTS != 1786060800 {
 		t.Fatalf("seq 117's boundary moved: window2Old=%d newGradingEpochTS=%d", window2OldEpochTS, newGradingEpochTS)
 	}
-	if window2NewEpochTS != store.GradingEpoch || store.GradingEpoch != 1790294400 {
-		t.Fatalf("new epoch %d, store.GradingEpoch %d; want 1790294400 (2026-09-25)", window2NewEpochTS, store.GradingEpoch)
+	// Seq 130's spec stays pinned to the boundary it filed (a literal since the
+	// label-window record of 2026-10-03 moved store.GradingEpoch past it).
+	if window2NewEpochTS != 1790294400 || store.GradingEpoch <= window2NewEpochTS {
+		t.Fatalf("seq 130's boundary %d moved, or store.GradingEpoch %d is not past it; want 1790294400 (2026-09-25)",
+			window2NewEpochTS, store.GradingEpoch)
 	}
 	dbPath := filepath.Join(t.TempDir(), "w2.db")
 	st, err := store.Open(dbPath)

@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -12,6 +14,19 @@ import (
 // settled base; earlier rows keep the prior rule (base = bar at/before ts,
 // even if forming).
 const settledBaseSinceTs = int64(1788807600)
+
+// labelBaseSinceTs (2026-10-04T00:00:00Z) starts the SD-30 label window
+// (owner's call 2026-10-02/03; PREREGISTRATION.md §15, chain kind
+// label-window-reregistration). From here the base is the ISSUE DAY'S OWN daily
+// bar, the bar settle_ts already names and the grader groups by, so the label
+// runs from that bar's close to the next close and never starts before issue
+// for a stock row issued in or before its session or any crypto row. The
+// settled-only step back below made the base the PREVIOUS session for every
+// row issued between the close and settlement (the 00:00-02:00Z pass the
+// grader keeps): 93.8% of kept stock 1d outcomes matched the move already
+// visible at issue (crypto 78.6%). 1w keeps its calendar-week target from the
+// new base. Rows before this cutoff keep the rule they were frozen under.
+const labelBaseSinceTs = int64(1791072000)
 
 // trimFormingDaily removes the newest daily bar if it is still forming.
 // daily must be sorted ascending by Ts; only the last bar can be forming.
@@ -50,8 +65,29 @@ func settledBase(ctx context.Context, st *store.Store, market md.Market, symbolI
 	if err != nil || !ok {
 		return base, ok, err
 	}
+	if ts >= labelBaseSinceTs {
+		// The issue day's own bar or nothing: when that bar is missing, the
+		// bar at-or-before is an earlier session whose move was visible at
+		// issue, and grading from it would put the leak back. Leave the row
+		// pending until the backfill supplies the bar.
+		if labelBaseMissing(market, base.Ts, ts) {
+			return md.Bar{}, false, nil
+		}
+		return base, true, nil
+	}
 	if ts >= settledBaseSinceTs && !md.DailyBarSettled(market, base.Ts, ts) {
 		return st.BarAtOrBefore(ctx, symbolID, md.TF1d, base.Ts-1)
 	}
 	return base, true, nil
+}
+
+// labelBaseMissing reports whether baseTs, the daily bar at-or-before an issue
+// at ts, is OLDER than the issue day's bar: for stocks a whole session closed
+// after the bar's session and before issue; for crypto (one bar per UTC day)
+// the bar is a day or more before issue.
+func labelBaseMissing(market md.Market, baseTs, ts int64) bool {
+	if market == md.Crypto {
+		return ts-baseTs >= 86400
+	}
+	return marketcal.SessionsClosedSince(baseTs, time.Unix(ts, 0)) > 0
 }
