@@ -322,7 +322,13 @@ func seedSentinels(t *testing.T, st *store.Store, variant int) sentinelFixture {
 		Mid: sntMid, WMid: sntWMid, Spread: sntAsk - sntBid}))
 	must(st.InsertCryptoPerp(ctx, store.CryptoPerpRow{SymbolID: fx.sntc.ID, Ts: now, Funding: 0.0001,
 		OpenInterest: sntOI, MarkPx: sntMark}))
-	must(st.InsertDQ(ctx, md.DQEvent{SymbolID: &fx.sntl.ID, Ts: now, Kind: "stale",
+	// A stale-feed event drops calls minted on its trading day, so it must sit on
+	// `day` (as `now` did before the floor above), never on a floored call day.
+	dqTs := now
+	if day > dqTs {
+		dqTs = day
+	}
+	must(st.InsertDQ(ctx, md.DQEvent{SymbolID: &fx.sntl.ID, Ts: dqTs, Kind: "stale",
 		Detail: `Get "http://127.0.0.1:8321/api/snapshot?key=SNTL_DQ_SECRET": context deadline exceeded`}))
 	must(st.SetMeta(ctx, backup.MetaLastBackupFile, `C:\backups\SNTL_BACKUP_PATH.db`))
 	must(st.SetMeta(ctx, backup.MetaOffsiteDir, "s3://sntl-bucket/SNTL_OFFSITE"))

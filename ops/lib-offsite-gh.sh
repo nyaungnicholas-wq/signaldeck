@@ -100,6 +100,9 @@ gh_offsite_upload_verified() {
 # failed upload) is no backup: it neither counts toward KEEP nor is deleted here.
 gh_offsite_prune() {
     local repo="$1" keep="$2" created tag n count=0
+    # Now that the prune really deletes, a KEEP of 0, empty or non-numeric must
+    # delete NOTHING (it would otherwise remove every backup, the new one too).
+    case "$keep" in ""|*[!0-9]*|0) echo "gh prune: REFUSED, KEEP='$keep' is not a positive integer"; return 0 ;; esac
     while read -r created tag; do
         [ -z "$tag" ] && continue
         n=$(gh release view "$tag" --repo "$repo" --json assets \

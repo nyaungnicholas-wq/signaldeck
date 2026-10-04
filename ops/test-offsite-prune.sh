@@ -93,6 +93,17 @@ export ASSETS_backup_20261001_131000=1 ASSETS_backup_20261002_131000=1
 out=$(gh_offsite_prune o/r 7)
 check "nothing deleted under KEEP" "$(wc -l < "$DELETED" | tr -d ' ')" "0"
 
+# e. A KEEP that is not a positive integer deletes nothing (0 would delete all).
+for k in 0 "" abc; do
+    reset_fixtures
+    releases backup-20261001-131000 backup-20261002-131000
+    export ASSETS_backup_20261001_131000=1 ASSETS_backup_20261002_131000=1
+    out=$(gh_offsite_prune o/r "$k")
+    check "KEEP='$k' deletes nothing" "$(wc -l < "$DELETED" | tr -d ' ')" "0"
+    check "KEEP='$k' is reported as refused" "$(printf '%s
+' "$out" | grep -c 'REFUSED')" "1"
+done
+
 echo "----------------------------------------------------------------------"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ] && echo "OFFSITE PRUNE SELF-TEST OK"
