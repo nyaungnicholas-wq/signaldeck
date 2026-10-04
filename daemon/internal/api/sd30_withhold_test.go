@@ -566,7 +566,7 @@ func TestSD30_PostmortemsWithheld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ts := range []int64{1000, 2000} {
+	for _, ts := range []int64{1000, store.GradingEpochTS + 3600} {
 		if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 			RawProb: 0.7, CalProb: 0.7, NUsed: 40, Components: "{}"}); err != nil {
 			t.Fatal(err)
@@ -600,7 +600,26 @@ func TestSD30_PostmortemsWithheld(t *testing.T) {
 	body = serveRecorded(t, d.postmortems, "/api/postmortems?days=0")
 	cl, _ = body["clusters"].([]any)
 	rc, _ = body["recent"].([]any)
-	if jnum(body, "totalMisses") != 2 || len(cl) == 0 || len(rc) != 2 || body["withheld"] != nil {
+	// Only the call issued in the current window (ts >= store.GradingEpochTS) is graded.
+	if jnum(body, "totalMisses") != 1 || len(cl) == 0 || len(rc) != 1 || body["withheld"] != nil {
 		t.Fatalf("flag off: %v", body)
+	}
+}
+
+func TestConfidenceEvidence_GradesOnlyTheCurrentWindow(t *testing.T) {
+	_, st, d := newTestServer(t, func(c *config.Config) {})
+	sd30SeedPerfect(t, st) // 40 correct calls issued from the epoch day on
+	ctx := context.Background()
+	old, err := st.UpsertSymbol(ctx, "SDOLD", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ { // 10 wrong calls issued before the window
+		seedResolvedPrediction(t, st, old.ID, md.H1d, int64(store.GradingEpochTS)-int64(i+1)*86400, 0.8, -0.02)
+	}
+	sd30Off(t)
+	ev, err := d.confidenceEvidence(ctx, md.H1d)
+	if err != nil || ev.N != 40 || ev.Accuracy != 1.0 {
+		t.Fatalf("confidence must grade only calls issued since GradingEpochTS: N=%d acc=%v err=%v", ev.N, ev.Accuracy, err)
 	}
 }

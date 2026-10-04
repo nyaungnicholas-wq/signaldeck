@@ -91,8 +91,8 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 
 	// Check index usage before dropping
 	since := int64(1700000000 + 200*1800)
-	if !strings.Contains(plan(pmClustersSQL, since), "COVERING INDEX idx_postmortem_reason_cover") {
-		t.Fatalf("Clusters plan does not use index idx_postmortem_reason_cover:\n%s", plan(pmClustersSQL, since))
+	if !strings.Contains(plan(pmClustersSQL, since, GradingEpochTS), "COVERING INDEX idx_postmortem_reason_cover") {
+		t.Fatalf("Clusters plan does not use index idx_postmortem_reason_cover:\n%s", plan(pmClustersSQL, since, GradingEpochTS))
 	}
 	if !strings.Contains(plan(pmRecentSQL, 100), "idx_postmortem_ts") {
 		t.Fatalf("Recent plan does not use index idx_postmortem_ts:\n%s", plan(pmRecentSQL, 100))
@@ -102,7 +102,7 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 	}
 
 	// Read with indexes
-	c1, n1, err := st.PostmortemClusters(ctx, since)
+	c1, n1, err := st.PostmortemClusters(ctx, since, 0)
 	if err != nil {
 		t.Fatalf("PostmortemClusters: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentPostmortems: %v", err)
 	}
-	c1all, n1all, err := st.PostmortemClusters(ctx, 0)
+	c1all, n1all, err := st.PostmortemClusters(ctx, 0, 0)
 	if err != nil {
 		t.Fatalf("PostmortemClusters all: %v", err)
 	}
@@ -135,12 +135,12 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 	if _, err := st.w.ExecContext(ctx, "DROP INDEX idx_postmortem_reason_cover"); err != nil {
 		t.Fatalf("Drop cover index: %v", err)
 	}
-	if strings.Contains(plan(pmClustersSQL, since), "idx_postmortem_reason_cover") {
-		t.Fatalf("Clusters plan still mentions index idx_postmortem_reason_cover after drop:\n%s", plan(pmClustersSQL, since))
+	if strings.Contains(plan(pmClustersSQL, since, GradingEpochTS), "idx_postmortem_reason_cover") {
+		t.Fatalf("Clusters plan still mentions index idx_postmortem_reason_cover after drop:\n%s", plan(pmClustersSQL, since, GradingEpochTS))
 	}
 
 	// Read again after dropping indexes
-	c2, n2, err := st.PostmortemClusters(ctx, since)
+	c2, n2, err := st.PostmortemClusters(ctx, since, 0)
 	if err != nil {
 		t.Fatalf("PostmortemClusters after drop: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestPostmortemReadsUseTheirIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentPostmortems after drop: %v", err)
 	}
-	c2all, n2all, err := st.PostmortemClusters(ctx, 0)
+	c2all, n2all, err := st.PostmortemClusters(ctx, 0, 0)
 	if err != nil {
 		t.Fatalf("PostmortemClusters all after drop: %v", err)
 	}

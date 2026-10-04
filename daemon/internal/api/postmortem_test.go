@@ -25,8 +25,9 @@ func TestPostmortemsEndpoint(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
-	// two resolved misses, both unexplained (no evidence seeded)
-	for _, ts := range []int64{1000, 2000} {
+	// two resolved misses, both unexplained (no evidence seeded), issued inside the
+	// current grading window: the handler grades only calls since GradingEpochTS
+	for _, ts := range []int64{store.GradingEpochTS + 1000, store.GradingEpochTS + 2000} {
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts, RawProb: 0.7, CalProb: 0.7, NUsed: 40, Components: "{}",
 		}); err != nil {

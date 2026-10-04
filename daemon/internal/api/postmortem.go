@@ -32,7 +32,7 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 		sinceTs = time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 	}
 
-	clusters, totalMisses, err := d.St.PostmortemClusters(r.Context(), sinceTs)
+	clusters, totalMisses, err := d.St.PostmortemClusters(r.Context(), sinceTs, store.GradingEpochTS)
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -42,6 +42,15 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	// Only calls issued in the current grading window (store.GradingEpochTS);
+	// RecentPostmortems is newest-first, so this keeps the newest of them.
+	inWindow := recent[:0]
+	for _, p := range recent {
+		if p.Ts >= store.GradingEpochTS {
+			inWindow = append(inWindow, p)
+		}
+	}
+	recent = inWindow
 
 	// SD-30: a postmortem is a resolved 1d/1w directional call judged WRONG
 	// against the label that is mostly realised at issue, and the worker walks

@@ -53,7 +53,7 @@ func TestPostmortemWorker_Run(t *testing.T) {
 		t.Fatalf("expected misses to be processed, got %q", detail)
 	}
 
-	clusters, total, err := st.PostmortemClusters(ctx, 0)
+	clusters, total, err := st.PostmortemClusters(ctx, 0, 0)
 	if err != nil {
 		t.Fatalf("clusters: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestPostmortemWorker_Run(t *testing.T) {
 	if detail2 != "no new misses to postmortem" {
 		t.Fatalf("second run should be a no-op, got %q", detail2)
 	}
-	_, total2, _ := st.PostmortemClusters(ctx, 0)
+	_, total2, _ := st.PostmortemClusters(ctx, 0, 0)
 	if total2 != 2 {
 		t.Fatalf("idempotent worker should not duplicate; total=%d", total2)
 	}

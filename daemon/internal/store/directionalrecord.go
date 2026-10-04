@@ -76,13 +76,21 @@ func (s *Store) FirstResolutionAt(ctx context.Context, h md.Horizon) (int64, boo
 // DirectionalRecord grades resolved predictions for one horizon. `since`
 // filters by resolution time (0 = the whole record).
 func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64) (DirectionalRecordRow, error) {
+	return s.DirectionalRecordIssued(ctx, h, since, 0)
+}
+
+// DirectionalRecordIssued is DirectionalRecord restricted to calls ISSUED at or
+// after issuedSince (prediction ts). Public surfaces pass GradingEpochTS so a
+// restarted grading window never mixes in calls graded on the old label; model
+// health keeps calling DirectionalRecord, which grades the lifetime on purpose.
+func (s *Store) DirectionalRecordIssued(ctx context.Context, h md.Horizon, since, issuedSince int64) (DirectionalRecordRow, error) {
 	q := `
 	WITH dedup AS (
 	  SELECT symbol_id, prob, up,
 	         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
-	    AND prob IS NOT NULL AND resolved_at >= ?
+	    AND prob IS NOT NULL AND resolved_at >= ? AND ts >= ?
 	)
 	SELECT COUNT(*),
 	       AVG(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1.0 ELSE 0.0 END),
@@ -93,7 +101,7 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 
 	var r DirectionalRecordRow
 	var acc, upRate, brier, calErr *float64
-	if err := s.db.QueryRowContext(ctx, q, string(h), since).
+	if err := s.db.QueryRowContext(ctx, q, string(h), since, issuedSince).
 		Scan(&r.N, &acc, &upRate, &brier, &calErr); err != nil {
 		return r, err
 	}
@@ -134,14 +142,14 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 	         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
-	    AND prob IS NOT NULL AND resolved_at >= ?
+	    AND prob IS NOT NULL AND resolved_at >= ? AND ts >= ?
 	)
 	SELECT day, COUNT(*),
 	       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
 	       SUM(CASE WHEN (prob >= ?) = (up = 1) THEN 1 ELSE 0 END),
 	       SUM(CASE WHEN prob >= ? THEN 1 ELSE 0 END)
 	FROM dedup WHERE rn = 1 GROUP BY day ORDER BY day`
-	rows, err := s.db.QueryContext(ctx, qDays, string(h), since, thr, thr)
+	rows, err := s.db.QueryContext(ctx, qDays, string(h), since, issuedSince, thr, thr)
 	if err != nil {
 		return r, err
 	}

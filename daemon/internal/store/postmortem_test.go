@@ -130,7 +130,7 @@ func TestPostmortemClusters(t *testing.T) {
 	mk(2000, postmortem.ReasonUnexplained)
 	mk(3000, postmortem.ReasonRegimeShift)
 
-	clusters, total, err := st.PostmortemClusters(ctx, 0)
+	clusters, total, err := st.PostmortemClusters(ctx, 0, 0)
 	if err != nil {
 		t.Fatalf("clusters: %v", err)
 	}

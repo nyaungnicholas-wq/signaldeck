@@ -296,7 +296,7 @@ func (w *ResearchLabWorker) reEvaluateShadows(ctx context.Context, rows []resear
 // postmortems so hypothesis generation is steered toward the dominant failures.
 func (w *ResearchLabWorker) clusterPriority(ctx context.Context, nowUnix int64) map[string]float64 {
 	since := nowUnix - 30*86400
-	clusters, _, err := w.St.PostmortemClusters(ctx, since)
+	clusters, _, err := w.St.PostmortemClusters(ctx, since, 0)
 	if err != nil || len(clusters) == 0 {
 		return nil
 	}
