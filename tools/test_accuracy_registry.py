@@ -815,13 +815,22 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
     # once the 39,232 1d#pm twins had resolved: prequential-majority (1d)
     # is back (INSUFFICIENT DAYS 5/10), 1d counts its 5th day, and high
     # conviction now reads its day floor (2/10) instead of its row floor.
-    # Every string below was read off that snapshot, and the same 15 rows match
-    # data/accuracy_registry.json's grade of 2026-10-01 02:22 exactly.
+    # Re-frozen 2026-10-03, after the label-window re-registration (SD-30: chain
+    # seq 137 label-window-reregistration, the label base is the issue day's own
+    # bar from 2026-10-04 and the window restarts there; the grader re-pinned at
+    # seq 138 and again at seq 141 for the empty-window crash fix in ba34379),
+    # against the snapshot re-cut at 7cdfba5. The grading rules did not change:
+    #   WINDOW  - the directional window starts 2026-10-04 and holds no resolved
+    #             row yet, so directional-ensemble (1d), its high-conviction band
+    #             and prequential-majority (1d) are ABSENT (the grader emits no
+    #             row for n=0). They return as INSUFFICIENT (n/30), then
+    #             INSUFFICIENT DAYS, once the new window's rows resolve.
+    #   TIME    - vol21 accrued a non-overlapping horizon block: 3/10 (was 2/10).
+    #             trend63's PENDING anchor (2026-09-25) and every structural
+    #             first-call timestamp are unchanged.
+    # Every string below was read off that snapshot, and the same 12 rows match
+    # data/accuracy_registry.json's grade of 2026-10-03 20:03 PT exactly.
     EXPECTED = {
-        ('directional-ensemble (1d)', 'all'):
-            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
-        ('directional-ensemble (1d, high conviction)', '|p-0.5|>=0.15'):
-            'INSUFFICIENT DAYS (2/10 credible days of 2) — no interval, so no verdict',
         ('filingsdrift21', 'all'):
             'NO BASELINE — naive-persistence null not frozen for these calls',
         ('liquidity21', 'all'):
@@ -832,8 +841,6 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('liquidity21-crypto#persist', 'all'):
             'BENCHMARK — the frozen naive-persistence null itself',
-        ('prequential-majority (1d)', 'all'):
-            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
         ('trend21', 'all'):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('trend21#persist', 'all'):
@@ -845,7 +852,7 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         ('trend63', 'all'):
             'PENDING (first grade 2026-09-25, 0/30 resolved)',
         ('vol21', 'all'):
-            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+            'INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('vol21#persist', 'all'):
             'BENCHMARK — the frozen naive-persistence null itself',
     }
@@ -924,7 +931,20 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         """The hindsight null retired after its transition cycle; a row that
         publishes it again (or reads a verdict against it) must fail here."""
         directional = [r for r in self._rows() if r["family"] == "direction"]
-        self.assertTrue(directional)
+        if not directional:
+            # A window re-registered days before the cut has no resolved row,
+            # so the grader emits none (2026-10-04, seq 137). Allowed only while
+            # the snapshot was cut within a week of its grading epoch: rows
+            # resolve from day ~2, so an empty set past that is a broken grade.
+            import datetime as _dt
+            with open(os.path.join(self.REPRO, "MANIFEST.json"), encoding="utf-8") as f:
+                man = json.load(f)
+            cut = _dt.datetime.fromisoformat(man["generated"]).date()
+            epoch = _dt.date.fromisoformat(man["grading_epoch"])
+            self.assertLess((cut - epoch).days, 7,
+                            f"no directional row in a snapshot cut {cut}, a week or more "
+                            f"after its grading epoch {epoch}")
+            return
         for r in directional:
             self.assertNotIn("null_hindsight", r)
             self.assertIn("prequential", r["null_method"])
