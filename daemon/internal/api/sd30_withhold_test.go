@@ -550,9 +550,9 @@ func TestSD30_ModelHealthWithheld(t *testing.T) {
 		t.Fatalf("the raw window block is served alongside the figures: %v", m)
 	}
 	w1 := got["directional-ensemble-1w"]
-	nilAt(w1, "accuracy", "baseline", "skillVsBenchmark")
-	if jnum(w1, "observations") != 0 {
-		t.Fatalf("a record with no window block published lifetime figures: %v", w1)
+	nilAt(w1, "accuracy", "baseline", "skillVsBenchmark", "observations")
+	if rs, _ := m["reasons"].([]any); len(rs) != 1 || strings.Contains(fmt.Sprint(rs), "lifetime accuracy") {
+		t.Fatalf("the lifetime reasons must not sit beside window figures: %v", m["reasons"])
 	}
 }
 

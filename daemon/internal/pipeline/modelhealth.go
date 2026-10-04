@@ -147,8 +147,9 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		// store.GradingEpochTS (the SD-30 label window), never the lifetime figures
 		// above. Those stay the operational grade on purpose: they drive emission,
 		// retirement and readmission. A failed read publishes no figures, not
-		// stale ones, and does not stop the verdict from being stored.
-		var window any
+		// stale ones, and does not stop the verdict from being stored; the block
+		// then says it is unreadable so no reader mistakes it for an empty window.
+		var window any = map[string]any{"unreadable": true}
 		if win, err := w.St.DirectionalRecordIssued(ctx, h, 0, store.GradingEpochTS); err != nil {
 			slog.Warn("model-health: window record unreadable", "horizon", h, "err", err)
 		} else if winBench, err := w.St.DirectionalRecordIssued(ctx, benchmarkHorizon(h), 0, store.GradingEpochTS); err != nil {

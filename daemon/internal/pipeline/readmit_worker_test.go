@@ -43,6 +43,20 @@ func seedDay(t *testing.T, st *store.Store, sym int64, day int64, predUp, actual
 	}
 }
 
+// seedBenchDay writes the resolved prequential-majority twin ("1d#pm") for
+// the call seedDay places on `day`.
+func seedBenchDay(t *testing.T, st *store.Store, sym int64, day int64) {
+	t.Helper()
+	ctx := context.Background()
+	ts := day*86400 + 14*3600
+	if err := st.SeedBenchmarkOutcome(ctx, sym, md.H1d+"#pm", ts, 0.6); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ResolvePrediction(ctx, sym, md.H1d+"#pm", ts, 0.01); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The end-to-end shape the API-only path never had: a model whose LIFETIME
 // record retires it (30 pre-epoch days, every call wrong) but whose post-epoch
 // shadow clears the coded threshold (20+ days, every call right). After one
@@ -74,6 +88,14 @@ func TestModelHealthWorkerPersistsReadmission(t *testing.T) {
 		up := i%2 == 0
 		seedDay(t, st, sym.ID, epochDay+i, up, up) // shadow: perfect on an alternating tape, past the floor
 	}
+	// Benchmark twins on 5 pre-epoch and every post-epoch day: the window block
+	// must count only the post-epoch ones.
+	for _, day := range []int64{epochDay - 5, epochDay - 4, epochDay - 3, epochDay - 2, epochDay - 1} {
+		seedBenchDay(t, st, sym.ID, day)
+	}
+	for i := int64(0); i < postDays; i++ {
+		seedBenchDay(t, st, sym.ID, epochDay+i)
+	}
 	// The retirement must be genuine before re-admission can mean anything.
 	if shadow, ok := DirectionalShadow(ctx, st, md.H1d); !ok || shadow.Days != int(postDays) {
 		t.Fatalf("shadow = %+v ok=%v, want %d post-epoch days", shadow, ok, postDays)
@@ -103,7 +125,8 @@ func TestModelHealthWorkerPersistsReadmission(t *testing.T) {
 	// The public figures (the window block) grade only the post-epoch calls; the
 	// lifetime grade beside them still counts all of them.
 	win, _ := v["window"].(map[string]any)
-	if win["n"] != float64(postDays) || win["accuracy"] != 1.0 || win["since"] != float64(store.GradingEpochTS) {
+	if win["n"] != float64(postDays) || win["accuracy"] != 1.0 || win["since"] != float64(store.GradingEpochTS) ||
+		win["benchN"] != float64(postDays) {
 		t.Fatalf("window block = %v, want %d post-epoch calls at 100%%", win, postDays)
 	}
 	if v["observations"] != float64(30+postDays) {

@@ -54,8 +54,22 @@ func TestCanaryRunnerGradesOnlyTheWindow(t *testing.T) {
 		t.Fatalf("a verdict graded before the window is still stored: %+v err %v", trials, err)
 	}
 
-	for i := int64(0); i < 3; i++ { // the same pair inside the window
+	// One version inside the window: still nothing to compare, still no verdict.
+	for i := int64(0); i < 3; i++ {
 		seed(epochDay+2*i, 1)
+	}
+	if err := st.UpsertCanaryTrial(ctx, store.CanaryTrial{Model: "directional-ensemble-1d",
+		Incumbent: "v1", Challenger: "v2", Decision: "promote", DecidedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if trials, err := st.CanaryTrials(ctx); err != nil || len(trials) != 0 {
+		t.Fatalf("one in-window version must not keep a stored verdict: %+v err %v", trials, err)
+	}
+
+	for i := int64(0); i < 3; i++ { // its challenger inside the window too
 		seed(epochDay+2*i+1, 2)
 	}
 	if _, err := w.Run(ctx); err != nil {

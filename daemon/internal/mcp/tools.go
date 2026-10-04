@@ -22,10 +22,21 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// gradingWindowDate is the first issue day the published directional figures grade.
+var gradingWindowDate = time.Unix(store.GradingEpochTS, 0).UTC().Format("2006-01-02")
+
+// directionalNote accompanies every directional row of get_track_record.
+var directionalNote = "The flagship directional model was retired on its earlier live record, which was " +
+	"graded on a label partly realised at issue (SD-30), so those figures are not served. The figures here " +
+	"grade only calls issued since " + gradingWindowDate + " on the corrected label, and the verdict is its " +
+	"current state. Its record is published rather than withdrawn."
 
 type tool struct {
 	Name        string
@@ -337,7 +348,7 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 		}
 		row := map[string]any{
 			"model": m.key, "horizon": m.horizon, "source": "live graded record",
-			"note": directionalNote, "figuresSince": "2026-10-04",
+			"note": directionalNote, "figuresSince": gradingWindowDate,
 		}
 		// Figures from the worker's window block (calls issued since
 		// store.GradingEpochTS), never its lifetime grade, which mixes in the

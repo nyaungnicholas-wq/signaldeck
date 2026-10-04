@@ -405,9 +405,13 @@ func (d Deps) layerCoverage(ctx context.Context) []fleetmon.Layer {
 			break
 		}
 	}
-	// The promotion gate is live once it has recorded a trial.
+	// The promotion gate is live once it has recorded a trial, or once its runner
+	// completes a pass: it grades only the current window (owner, 2026-10-04) and
+	// records no trial while that window holds no comparable version pair.
 	canaryRun := false
 	if trials, err := d.St.CanaryTrials(ctx); err == nil && len(trials) > 0 {
+		canaryRun = true
+	} else if r, ok, err := d.St.LastWorkerRun(ctx, "canary-runner"); err == nil && ok && r.Status == "ok" {
 		canaryRun = true
 	}
 

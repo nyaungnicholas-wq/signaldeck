@@ -247,6 +247,28 @@ func withholdModelHealth(v map[string]any, why string) map[string]any {
 func windowModelHealth(v map[string]any) map[string]any {
 	win, _ := v["window"].(map[string]any)
 	delete(v, "window")
+	since := time.Unix(store.GradingEpochTS, 0).UTC().Format("2006-01-02")
+	// The lifetime reasons explain the operational verdict in terms of figures
+	// graded on the old label; beside window figures they would contradict them.
+	v["reasons"] = []string{"the verdict is the operational grade over the whole record; its reasons rest on " +
+		"figures graded on the SD-30 label and are not published"}
+	v["overall"] = nil
+	if c, ok := v["components"].(map[string]any); ok {
+		c["skill"], c["calibration"], c["drift"] = nil, nil, nil
+	}
+	v["figuresSince"] = store.GradingEpochTS
+	if unreadable, _ := win["unreadable"].(bool); win == nil || unreadable {
+		// Not graded yet, or the worker's read failed: publish nothing rather
+		// than a zero count that reads as an empty window.
+		for _, k := range []string{"observations", "accuracy", "baseline", "skillVsBenchmark"} {
+			v[k] = nil
+		}
+		if b, ok := v["benchmark"].(map[string]any); ok {
+			b["n"], b["accuracy"], b["ensembleAlignedN"], b["ensembleAlignedAcc"] = nil, nil, nil, nil
+		}
+		v["figuresNote"] = "no figures for the window since " + since + " (SD-30) are available yet, so none are published"
+		return v
+	}
 	fig := func(nKey, key string) any {
 		if n, _ := win[nKey].(float64); n > 0 {
 			return win[key]
@@ -261,12 +283,7 @@ func windowModelHealth(v map[string]any) map[string]any {
 		b["n"], b["accuracy"] = count("benchN"), fig("benchN", "benchAccuracy")
 		b["ensembleAlignedN"], b["ensembleAlignedAcc"] = count("alignedN"), fig("alignedN", "alignedAccuracy")
 	}
-	v["overall"] = nil
-	if c, ok := v["components"].(map[string]any); ok {
-		c["skill"], c["calibration"], c["drift"] = nil, nil, nil
-	}
-	v["figuresSince"] = store.GradingEpochTS
-	v["figuresNote"] = "figures grade only calls issued since 2026-10-04, the corrected-label window (SD-30); " +
+	v["figuresNote"] = "figures grade only calls issued since " + since + ", the corrected-label window (SD-30); " +
 		"verdict and emitting are the operational grade and the composite score is not published"
 	return v
 }

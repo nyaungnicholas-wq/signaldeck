@@ -44,4 +44,15 @@ func TestIssuedSinceFloorsTheOldLabel(t *testing.T) {
 			t.Fatalf("signal backtest since %d: %d obs want %d err %v", c.since, len(obs), c.want, err)
 		}
 	}
+	// FirstResolutionAt: the pre-window call resolved first, so only the floor
+	// can move the answer to the in-window call's resolution.
+	if _, err := st.w.ExecContext(ctx, `UPDATE prediction_outcomes SET resolved_at = CASE WHEN ts < ? THEN 100 ELSE 200 END WHERE symbol_id = ?`,
+		GradingEpochTS, sym.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ since, want int64 }{{0, 100}, {GradingEpochTS, 200}} {
+		if got, ok, err := st.FirstResolutionAt(ctx, md.H1d, c.since); err != nil || !ok || got != c.want {
+			t.Fatalf("FirstResolutionAt since %d = %d (ok %v err %v), want %d", c.since, got, ok, err, c.want)
+		}
+	}
 }
