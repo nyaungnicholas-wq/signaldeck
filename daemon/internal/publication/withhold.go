@@ -19,7 +19,7 @@ package publication
 // To republish: set SD30Withheld = false. That is the whole reversal.
 var SD30Withheld = true
 
-const SD30Reason = "withheld: label partly realised at issue (SD-30); a corrected label is pending a preregistration decision"
+const SD30Reason = "withheld: label partly realised at issue (SD-30); a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors"
 
 // DirectionalWithheld reports whether directional figures at horizon h are
 // withheld, and the reason to publish in their place.

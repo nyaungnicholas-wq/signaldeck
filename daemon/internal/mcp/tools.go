@@ -419,10 +419,7 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 			"evidence":          "non-overlapping 21-session sampling, quarter-block bootstrap intervals, universe including delisted names, independently re-implemented",
 		},
 		"headlineGuard": headlineGuard,
-		"theHonestSummary": "One flagship model was tested live and FAILED, and was switched off " +
-			"automatically. The structural claims that survived validation have not been tested live " +
-			"yet. Anyone quoting this platform as predictive of price is quoting the part that was " +
-			"already retired.",
+		"theHonestSummary": honestSummary(),
 		"disclaimer": disclaimerText,
 	}, nil
 }
@@ -451,6 +448,20 @@ const trackRecordWithheldDescription = "The platform's record, including the ret
 	"ensemble: its retirement stands, but its live figures are withheld while the label they were " +
 	"graded on is under review (SD-30). Structural claims are labelled as backtest until their " +
 	"first gradable date."
+
+// honestSummary is get_track_record's one-paragraph verdict. "Tested live and
+// FAILED" is a claim about the directional figures, so while SD-30 withholds
+// them it says the retirement stands and why the figures are not served.
+func honestSummary() string {
+	const rest = " The structural claims that survived validation have not been tested live " +
+		"yet. Anyone quoting this platform as predictive of price is quoting the part that was " +
+		"already retired."
+	if _, withheld := publication.DirectionalWithheld("1d"); withheld {
+		return "One flagship model was retired by its live record and stays retired; its live " +
+			"figures are withheld while the label they were graded on is under review (SD-30)." + rest
+	}
+	return "One flagship model was tested live and FAILED, and was switched off automatically." + rest
+}
 
 func copyNum(src map[string]any, dst map[string]any, from, to string) {
 	if f, ok := src[from].(float64); ok {

@@ -72,7 +72,10 @@ func TestSD30_MCPTrackRecordWithholdsDirectionalFigures(t *testing.T) {
 				t.Errorf("%s %v: note = %v, want the SD-30 reason in place of the figures in prose", name, row["horizon"], row["note"])
 			}
 		}
-		for _, fig := range []string{"0.467", "0.451", "-0.252", "below the naive baseline", "Brier skill is negative"} {
+		if !strings.Contains(blob, "stays retired") || !strings.Contains(blob, "(SD-30)") {
+			t.Errorf("%s: theHonestSummary must keep the retirement and name SD-30", name)
+		}
+		for _, fig := range []string{"0.467", "0.451", "-0.252", "below the naive baseline", "Brier skill is negative", "tested live and FAILED"} {
 			if strings.Contains(blob, fig) {
 				t.Errorf("%s: withheld figure %s still in the payload", name, fig)
 			}
@@ -82,7 +85,10 @@ func TestSD30_MCPTrackRecordWithholdsDirectionalFigures(t *testing.T) {
 
 func TestSD30_MCPTrackRecordOffRestoresFigures(t *testing.T) {
 	sd30Off(t)
-	rows, _ := sd30Directional(t, sd30Sources["meta"])
+	rows, blob := sd30Directional(t, sd30Sources["meta"])
+	if !strings.Contains(blob, "tested live and FAILED") || strings.Contains(blob, "(SD-30)") {
+		t.Fatalf("flag off must restore theHonestSummary's live verdict")
+	}
 	if len(rows) != 2 || rows[0]["liveAccuracy"] != 0.467 || rows[0]["baselineAccuracy"] != 0.52 ||
 		rows[1]["liveAccuracy"] != 0.451 {
 		t.Fatalf("flag off must restore the graded figures: %v", rows)

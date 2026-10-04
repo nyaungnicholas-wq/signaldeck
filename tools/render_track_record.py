@@ -118,6 +118,14 @@ def main():
             verdict = esc(why)
         out.append(f"| {predictor} | {family} | {band} | {live_n} | {live_acc} | {ci} | {null_prequential} | {verdict} | {note} |")
 
+    if sd30[0]:  # SD30-ANCHORS-JSON (owner's call 2026-10-03): publish the raw file, say why
+        out.append("")
+        out.append("**SD-30.** The 1d/1w directional figures withheld above are still inside "
+                   "[`accuracy_registry.json`](accuracy_registry.json): that exact file is what is "
+                   "timestamped, so it is published unaltered. Those figures rest on a label partly "
+                   "realised at issue and are not a claim; a corrected label grades from 2026-10-04 "
+                   "(PREREGISTRATION.md section 15).")
+
     _write_verification_footer(out)
     sys.stdout.write("\n".join(out) + "\n")
     sys.exit(0)

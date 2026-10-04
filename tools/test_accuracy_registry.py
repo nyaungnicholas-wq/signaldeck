@@ -815,13 +815,22 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
     # once the 39,232 1d#pm twins had resolved: prequential-majority (1d)
     # is back (INSUFFICIENT DAYS 5/10), 1d counts its 5th day, and high
     # conviction now reads its day floor (2/10) instead of its row floor.
-    # Every string below was read off that snapshot, and the same 15 rows match
-    # data/accuracy_registry.json's grade of 2026-10-01 02:22 exactly.
+    # Re-frozen 2026-10-03, after the label-window re-registration (SD-30: chain
+    # seq 137 label-window-reregistration, the label base is the issue day's own
+    # bar from 2026-10-04 and the window restarts there; the grader re-pinned at
+    # seq 138 and again at seq 141 for the empty-window crash fix in ba34379),
+    # against the snapshot re-cut at 7cdfba5. The grading rules did not change:
+    #   WINDOW  - the directional window starts 2026-10-04 and holds no resolved
+    #             row yet, so directional-ensemble (1d), its high-conviction band
+    #             and prequential-majority (1d) are ABSENT (the grader emits no
+    #             row for n=0). They return as INSUFFICIENT (n/30), then
+    #             INSUFFICIENT DAYS, once the new window's rows resolve.
+    #   TIME    - vol21 accrued a non-overlapping horizon block: 3/10 (was 2/10).
+    #             trend63's PENDING anchor (2026-09-25) and every structural
+    #             first-call timestamp are unchanged.
+    # Every string below was read off that snapshot, and the same 12 rows match
+    # data/accuracy_registry.json's grade of 2026-10-03 20:03 PT exactly.
     EXPECTED = {
-        ('directional-ensemble (1d)', 'all'):
-            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
-        ('directional-ensemble (1d, high conviction)', '|p-0.5|>=0.15'):
-            'INSUFFICIENT DAYS (2/10 credible days of 2) — no interval, so no verdict',
         ('filingsdrift21', 'all'):
             'NO BASELINE — naive-persistence null not frozen for these calls',
         ('liquidity21', 'all'):
@@ -832,8 +841,6 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('liquidity21-crypto#persist', 'all'):
             'BENCHMARK — the frozen naive-persistence null itself',
-        ('prequential-majority (1d)', 'all'):
-            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
         ('trend21', 'all'):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('trend21#persist', 'all'):
@@ -845,7 +852,7 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         ('trend63', 'all'):
             'PENDING (first grade 2026-09-25, 0/30 resolved)',
         ('vol21', 'all'):
-            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+            'INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('vol21#persist', 'all'):
             'BENCHMARK — the frozen naive-persistence null itself',
     }
@@ -924,7 +931,20 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         """The hindsight null retired after its transition cycle; a row that
         publishes it again (or reads a verdict against it) must fail here."""
         directional = [r for r in self._rows() if r["family"] == "direction"]
-        self.assertTrue(directional)
+        if not directional:
+            # A window re-registered days before the cut has no resolved row,
+            # so the grader emits none (2026-10-04, seq 137). Allowed only while
+            # the snapshot was cut within a week of its grading epoch: rows
+            # resolve from day ~2, so an empty set past that is a broken grade.
+            import datetime as _dt
+            with open(os.path.join(self.REPRO, "MANIFEST.json"), encoding="utf-8") as f:
+                man = json.load(f)
+            cut = _dt.datetime.fromisoformat(man["generated"]).date()
+            epoch = _dt.date.fromisoformat(man["grading_epoch"])
+            self.assertLess((cut - epoch).days, 7,
+                            f"no directional row in a snapshot cut {cut}, a week or more "
+                            f"after its grading epoch {epoch}")
+            return
         for r in directional:
             self.assertNotIn("null_hindsight", r)
             self.assertIn("prequential", r["null_method"])
@@ -962,7 +982,8 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         still fails here, and so does one that labels a row INSUFFICIENT while
         handing it an interval anyway.
         """
-        graded = self._assert_interval_invariant(self._rows())
+        rows = self._rows()
+        graded = self._assert_interval_invariant(rows)
         # A snapshot where nothing grades would satisfy every branch above
         # vacuously — the exact shape that let the dead reproduce path look
         # healthy. Require the freeze to be standing on real graded rows.
@@ -976,7 +997,23 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # structural fixture), which hold both an interval row and
         # under-evidenced rows. The shipped rows are still checked above; this
         # only replaces the "something graded" half while the snapshot is young.
+        # VACUITY (owner's call, 2026-10-02): YOUNG is the grader's own word.
+        # The window is young while its headline row, directional-ensemble (1d),
+        # is missing or still INSUFFICIENT on rows or credible days (fewer than
+        # MIN_DISTINCT_DAYS). Once
+        # it has had its first full grade the fallback stops applying and an
+        # empty grade fails here as the vacuity it is. (The structural rows wait
+        # on horizon blocks, months not days, so they cannot measure the window.)
         if graded == 0:
+            d1 = next((r for r in rows if r["predictor"] == "directional-ensemble (1d)"), None)
+            # Right after a re-registration the 1d row is absent (nothing
+            # resolved) or INSUFFICIENT (n/30) before it is INSUFFICIENT DAYS.
+            young = d1 is None or d1["verdict"].startswith(("INSUFFICIENT", "PENDING"))
+            self.assertTrue(young,
+                            f"no shipped row carries an interval although the 1d window is "
+                            f"past INSUFFICIENT DAYS ({d1['verdict'] if d1 else 'row missing'}): "
+                            f"the seeded fallback is for a young window only "
+                            f"(< {MIN_DISTINCT_DAYS} credible days)")
             con = TestNaivePersistenceNull._db()
             TestNaivePersistenceNull._seed(con, days=12)
             graded = self._assert_interval_invariant(grade_structural(con))
@@ -1335,6 +1372,44 @@ class TestChainPresenceIsRead(unittest.TestCase):
         self.assertIs(payload["retire_rule_chained"], False)
         self.assertIsNone(payload["retire_rule_chain_seq"])
 
+
+    def test_report_survives_an_empty_window(self):
+        """A window re-registered hours ago holds no post-epoch row while bars
+        exist, so settlement applies over zero rows and excluded_fraction is
+        None. Formatting it crashed the whole grade (2026-10-03, after seq 137):
+        the grader must print the empty quarantine and publish, not exit 1."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.db")
+            con = self._bare_db(path)
+            con.execute("CREATE TABLE symbols (id INTEGER PRIMARY KEY, market TEXT)")
+            con.execute("CREATE TABLE bars (symbol_id INTEGER, tf TEXT, ts INTEGER, close REAL)")
+            con.execute("INSERT INTO symbols VALUES (1, 'stocks')")
+            con.execute("INSERT INTO bars VALUES (1, '1d', ?, 100.0)", (GRADING_EPOCH_TS - 86400,))
+            con.execute("INSERT INTO prereg_records (ts, kind, spec_json, spec_hash,"
+                        " prev_hash, entry_hash, note)"
+                        " VALUES (1,'grading-protocol',?,'h','','e0','')",
+                        (json.dumps({"grader": "tools/accuracy_registry.py",
+                                     "graderCommit": "0" * 40,
+                                     "graderSha256": self_sha256(),
+                                     "minIndependentN": MIN_INDEPENDENT_N,
+                                     "minDistinctDays": MIN_DISTINCT_DAYS,
+                                     "minDistinctBlocks": _MDB,
+                                     "maxAlpha": MAX_ALPHA,
+                                     "multiplicityRule": MULTIPLICITY_RULE}),))
+            con.commit()
+            con.close()
+            out_json = os.path.join(d, "registry.json")
+            buf = io.StringIO()
+            argv = sys.argv
+            sys.argv = ["accuracy_registry.py", "--db", path, "--json", out_json]
+            try:
+                with contextlib.redirect_stdout(buf):
+                    registry_main()
+            finally:
+                sys.argv = argv
+            self.assertTrue(os.path.exists(out_json), "the grade must still be written")
+        self.assertIn("Settlement quarantine: 0 of 0", buf.getvalue())
+        self.assertIn("none considered", buf.getvalue())
 
 
 class TestHorizonBlockClustering(unittest.TestCase):

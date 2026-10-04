@@ -537,3 +537,73 @@ epoch; the measured table travels inside the chain record.
 carries the measured state at filing, the grader edit re-hashes the
 `grading-protocol` record and this document re-hashes `prereg-document` on the
 next registrar pass, until which the grader refuses to grade.
+
+## 15. AMENDMENT 2026-10-03 — label window (SD-30)
+
+**What changed.** The directional label window is re-registered under chain kind
+`label-window-reregistration`, filed with `cmd/prereg-amend`. At deploy the
+registrar appends its automatic `grading-protocol` and `prereg-document`
+AMENDMENT records; the grader file changes only its `GRADING_EPOCH` constant (and the
+`GRADING_EPOCH_TS` derived from it).
+The defect (SD-30): the directional 1d/1w labels leaked. The resolver's base
+was the newest SETTLED daily bar at issue, and stock bars settle only at 22:00
+ET. So the 00:00–02:00 UTC broad-universe pass (the row the grader keeps per
+symbol per settled base) took the PREVIOUS session as base and graded a move
+already visible. Measured: 93.8% of kept stocks 1d outcomes matched the visible
+move (crypto 78.6%).
+At 1w a stock call agreeing with the visible move was right 0.713 of the time,
+one disagreeing 0.232. Since 2026-10-02 all 1d/1w directional
+figures are withheld everywhere (`publication.SD30Withheld`).
+
+The owner's decision (2026-10-02/03), option (b), read as: base = the issue
+day's own daily bar (the latest 1d bar at/before issue; the bar `settle_ts`
+names and the grader groups by); the label runs from that bar's close to the
+next close; 1w = calendar week from that base (5 sessions, 4 in a holiday week;
+7 days crypto); applies to stocks issued after the close and in-session, and to
+crypto; a missing issue-day bar leaves the row pending, so it never grades
+across a visible session. Residual accepted: stock rows issued after the close
+still see the 16:00 ET-to-issue after-hours move. Expected visible-move
+agreement is ~55% (the `score_outcomes` probe measured 54–57%). Rejected: (a)
+pre-open rows only (drops ~62%); (c) withhold indefinitely.
+
+Cutoff: `pipeline.labelBaseSinceTs = 2026-10-04T00:00:00Z`. The graded window
+(`store.GradingEpoch` / `GRADING_EPOCH`) moves from 2026-09-25 (section 14 /
+seq 130) to 2026-10-04. Forward-only: earlier rows keep their frozen rule; no
+label is rewritten; nothing is backfilled (old labels cannot be rebuilt exactly,
+because bars are revised after resolution).
+
+**Why this is not outcome shopping.** It is forward-only; it was chosen by the
+leak's mechanism (visible-move agreement), not by accuracy; the filing guard
+refuses if any 1d/1w row at/after 2026-10-04 had resolved.
+
+**What cannot change.** Every accuracy, null, interval and skill figure; the
+evidence floors (30 independent observations, 10 distinct credible days); the
+auto-retire rule, the verdict map and the collapse detector; the survivorship
+epoch (2026-07-24); the seq 117 and seq 130 records; the directional ensemble's
+retirement.
+
+**Expected consequences.** No directional row at first (none resolved), then
+INSUFFICIENT (n/30) until 30 independent observations, then INSUFFICIENT DAYS
+until 10 credible days; the withhold stays until then AND the owner approves
+lifting it; calibration restarts on the new labels; the prequential-majority
+benchmark commits nothing for a horizon until it has a resolved row in the new
+window (about 2 days at 1d, about 8 at 1w), and issue days in that gap never get
+benchmark rows; the grader refuses until the registrar's pass at deploy.
+
+**Verification promised.** About three trading days after the cutoff, re-run
+`tools/sd30_label_window_probe.py` on new-window rows. Expected results: stock
+visible-move agreement falls to about 57% or below (from 93.8%); crypto rows
+show no visible window; the 1w agree/disagree accuracy split closes; stored up
+matches the sign of the next bar over the `settle_ts` bar on ~99% of rows.
+
+**How the day was chosen.** By the leak's mechanism and the forward-only
+constraint, never by an accuracy number. `prereg-amend -kind
+label-window-reregistration` measures the new window at filing and refuses while
+any 1d/1w row at/after 2026-10-04 has resolved; the measured state travels
+inside the chain record.
+
+**Chaining.** The `label-window-reregistration` record carries the measured
+state at filing; the grader edit re-hashes the `grading-protocol` record and
+this document re-hashes `prereg-document`, appending visible AMENDMENT entries
+on the next registrar pass. Until that pass runs the grader refuses to grade,
+exactly as section 12 describes.

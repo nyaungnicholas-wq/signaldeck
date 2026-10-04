@@ -147,8 +147,8 @@ func (s *Store) RepairAddedAtFromBars(ctx context.Context) (int64, int64, error)
 // publish.
 const SurvivorshipEpoch int64 = 1784851200
 
-// GradingEpoch is 2026-09-25T00:00:00Z: where the DIRECTIONAL GRADED WINDOW
-// starts. Re-registered twice by chain records filed with cmd/prereg-amend:
+// GradingEpoch is 2026-10-04T00:00:00Z: where the DIRECTIONAL GRADED WINDOW
+// starts. Re-registered three times by chain records filed with cmd/prereg-amend:
 // 2026-09-20 from SurvivorshipEpoch to 2026-08-07 (grading-window-reregistration,
 // seq 117), and 2026-09-30 from 2026-08-07 to 2026-09-25
 // (grading-window-reregistration-2): the 1d forecasts of 2026-09-08..09-24 came
@@ -161,7 +161,10 @@ const SurvivorshipEpoch int64 = 1784851200
 // cross-section collapse (08-06 itself is collapsed at 1d: 33 distinct across 327) and bounds every population the grader, the
 // publication gate, the live benchmark and the re-admission shadow read.
 // Mirrors tools/accuracy_registry.py GRADING_EPOCH_TS; the pin test holds both.
-const GradingEpoch int64 = 1790294400
+// 2026-10-03 (label-window-reregistration, SD-30): the label base moved to the
+// issue day's own bar from 2026-10-04 (pipeline.labelBaseSinceTs), so the window
+// restarts there and no row graded on the leaking label is in it.
+const GradingEpoch int64 = 1791072000
 
 // ResearchUniverse returns EVERY stock symbol ever tracked, active or not, for
 // backtests and statistical studies. Live trading paths must keep using

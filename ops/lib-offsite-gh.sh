@@ -91,17 +91,33 @@ gh_offsite_upload_verified() {
 }
 
 # gh_offsite_prune REPO KEEP
-# Delete backup-* releases beyond the newest KEEP; always returns 0.
+# Delete backup-* releases beyond the newest KEEP that carry a .db.gz; always
+# returns 0. Until 2026-10-03 this deleted NOTHING: `IFS= read -r created tag`
+# never splits, so tag was always empty and `gh release delete ""` failed while
+# the next line printed "deleted" anyway (12 releases, 11.8 GB, against KEEP 7).
+# Newest is by TAG (backup-YYYYMMDD-HHMMSS): every release reports the tag
+# commit's createdAt, so that field cannot order them. An assetless release (a
+# failed upload) is no backup: it neither counts toward KEEP nor is deleted here.
 gh_offsite_prune() {
-    local repo="$1" keep="$2" created tag count=0
-    while IFS= read -r created tag; do
-        ((count++))
+    local repo="$1" keep="$2" created tag n count=0
+    while read -r created tag; do
+        [ -z "$tag" ] && continue
+        n=$(gh release view "$tag" --repo "$repo" --json assets \
+            --jq '[.assets[].name | select(endswith(".db.gz"))] | length' 2>>"${LOG:-/dev/null}")
+        if ! [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+            echo "gh prune: kept $tag (no .db.gz asset, not counted)"
+            continue
+        fi
+        count=$((count + 1))
         if (( count > keep )); then
-            gh release delete "$tag" --repo "$repo" --yes --cleanup-tag >/dev/null 2>>"${LOG:-/dev/null}"
-            echo "gh prune: deleted $tag"
+            if gh release delete "$tag" --repo "$repo" --yes --cleanup-tag >/dev/null 2>>"${LOG:-/dev/null}"; then
+                echo "gh prune: deleted $tag"
+            else
+                echo "gh prune: FAILED to delete $tag"
+            fi
         fi
     done < <(gh release list --repo "$repo" --limit 200 --json tagName,createdAt \
-        --jq '.[] | select(.tagName|startswith("backup-")) | "\(.createdAt) \(.tagName)"' 2>>"${LOG:-/dev/null}" | sort -r)
+        --jq '.[] | select(.tagName|startswith("backup-")) | "\(.createdAt) \(.tagName)"' 2>>"${LOG:-/dev/null}" | sort -k2,2 -r)
     return 0
 }
 

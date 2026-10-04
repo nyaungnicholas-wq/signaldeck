@@ -68,9 +68,17 @@ func writeRegistry(t *testing.T, body string) string {
 // logic rather than stopping at the staleness gate.
 func freshHeartbeat(t *testing.T, st *store.Store) {
 	t.Helper()
+	freshHeartbeatAt(t, st, time.Now())
+}
+
+// freshHeartbeatAt stamps a successful grade at the test's own clock, for a
+// handler judged at a pinned d.Now (a window opened hours ago puts that clock
+// ahead of the real one, and a real-clock stamp would then read as stale).
+func freshHeartbeatAt(t *testing.T, st *store.Store, at time.Time) {
+	t.Helper()
 	if err := st.PutGraderHeartbeat(t.Context(), store.GraderHeartbeat{
 		Task: GraderTask, Success: true,
-		FinishedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		FinishedAt: at.UTC().Format("2006-01-02T15:04:05.000Z"),
 	}); err != nil {
 		t.Fatal(err)
 	}

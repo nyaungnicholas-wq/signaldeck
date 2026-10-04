@@ -206,6 +206,8 @@ class TestSD30RenderTrackRecord(unittest.TestCase):
         for banned in ("50.5%", "59.3%", "INSUFFICIENT DAYS"):
             self.assertNotIn(banned, row)
         self.assertIn("78.3%", self._row(out, "trend21"))
+        # The raw registry beside the README still holds them: say so (SD30-ANCHORS-JSON).
+        self.assertIn("is published unaltered", out.stdout)
 
     def test_flag_off_restores_directional_row(self):
         out = self._render(False)

@@ -43,8 +43,9 @@ import (
 
 // gateNow sits 4 days 18 hours into the graded window: the fixtures (here and
 // in collapsecache_test.go) seed at most 4 days back, so every seeded day is inside store.GradingEpoch whatever
-// date the window is registered from. It must stay in the PAST: freshHeartbeat
-// stamps the real clock, and a gateNow ahead of it reads the heartbeat as stale.
+// date the window is registered from. It may run ahead of the real clock (a
+// window opened hours ago): tests judged at gateNow stamp their heartbeat there
+// with freshHeartbeatAt, not at the real clock, which would read as stale.
 var gateNow = time.Unix(store.GradingEpoch, 0).UTC().Add(4*24*time.Hour + 18*time.Hour)
 
 // seedResolvedForecasts writes `symbols` resolved outcomes on one day with
@@ -196,7 +197,7 @@ func TestGate_BothSurfacesAgree(t *testing.T) {
 func TestGate_ApiRefusalMatchesTheDocumentGate(t *testing.T) {
 	now := gateNow
 	_, st, d := newTestServer(t, nil)
-	freshHeartbeat(t, st)
+	freshHeartbeatAt(t, st, now)
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -1), 300, 170)
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -2), 300, 5)
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -3), 300, 175)
@@ -304,7 +305,7 @@ func TestGate_UnreadableRegistryIsAnErrorNotAVerdict(t *testing.T) {
 func TestGate_UnavailableGateWithholdsAndSaysSo(t *testing.T) {
 	now := gateNow
 	_, st, d := newTestServer(t, nil)
-	freshHeartbeat(t, st)
+	freshHeartbeatAt(t, st, now)
 
 	// distinct_days > 0 so the gate does real work instead of returning early.
 	d.RegistryPath = writeRegistry(t, registryFor(map[string]int{"1d": 3}))

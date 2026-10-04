@@ -103,9 +103,16 @@ func TestTrackRecordGatePayload(t *testing.T) {
 	// One resolved 1d outcome (ResolvePrediction stamps resolved_at = now, so
 	// it counts as this week's accrual).
 	predTs := time.Now().Add(-48 * time.Hour).Unix()
+	// Inside the graded window even when it opened hours ago (2026-10-04).
+	if floor := int64(store.GradingEpochTS) + 3600; predTs < floor {
+		predTs = floor
+	}
 	seedResolvedPrediction(t, st, sym.ID, md.H1d, predTs, 0.7, 0.01)
 	// One still-open 1w prediction → the 1w horizon (0 resolved) gets an ETA.
 	openTs := time.Now().Add(-24 * time.Hour).Unix()
+	if floor := int64(store.GradingEpochTS) + 7200; openTs < floor {
+		openTs = floor
+	}
 	if err := st.UpsertPrediction(ctx, store.Prediction{
 		SymbolID: sym.ID, Horizon: md.H1w, Ts: openTs,
 		RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: "{}",

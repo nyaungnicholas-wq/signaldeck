@@ -636,6 +636,11 @@ func TestPredictionOutcomesForSymbol_SettlementForm(t *testing.T) {
 	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // right
 	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+day+23*3600, 0.7, 0.7, -0.01) // wrong
 	seedResolvedPred(t, st, msft.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // another symbol
+	// ResolvePrediction stamps the real clock, which can sit before these days'
+	// settlement when the window opened hours ago; production resolves after it.
+	if _, err := st.w.ExecContext(ctx, `UPDATE prediction_outcomes SET resolved_at = ts + 10*86400`); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 2 || correct != 1 {
 		t.Fatalf("AAPL correct/total = %d/%d (err %v); want 1/2, MSFT's row excluded", correct, total, err)

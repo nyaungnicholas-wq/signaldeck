@@ -1368,6 +1368,9 @@ const dstStampSlackSecs = int64(6 * 3600)
 // PredictionResolver grades past predictions (feeds the calibration curve).
 type PredictionResolver struct {
 	St *store.Store
+	// clock is nil in production (time.Now); tests pin it so a fixture dated in
+	// a just-registered window is already in the past.
+	clock func() time.Time
 }
 
 func (w *PredictionResolver) Name() string            { return "prediction-resolver" }
@@ -1375,6 +1378,9 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
+	if w.clock != nil {
+		now = w.clock().Unix()
+	}
 	resolved, twins := 0, 0
 	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
 	if err != nil {
@@ -1400,7 +1406,9 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 			}
 			for _, p := range pending {
 				// settledbase.go: rows frozen after settledBaseSinceTs are graded from
-				// the newest bar that was SETTLED at decision time (2026-09-07).
+				// the newest bar that was SETTLED at decision time (2026-09-07);
+				// from labelBaseSinceTs (2026-10-04, SD-30) from the issue day's
+				// own bar, so the label starts at or after issue.
 				base, okB, err := settledBase(ctx, w.St, marketByID[p.SymbolID], p.SymbolID, p.Ts)
 				if err != nil {
 					return "", err
