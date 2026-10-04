@@ -612,7 +612,7 @@ export default async function AccuracyPage() {
             retired and stopped emitting. Inverting or relabeling it is not a rescue: the competing
             model is the constant majority guess, whose rate is above 50%, so flipping the sign
             relabels the call without creating an edge. The directional rows below are its
-            post-retirement shadow record, restarted at the survivorship epoch.{" "}
+            post-retirement shadow record, graded from the start of the current grading window.{" "}
             <strong>{FLAGSHIP_RETIREMENT.history}</strong>
           </p>
           <div className="overflow-x-auto">

@@ -174,7 +174,7 @@ class TestSD30RenderTrackRecord(unittest.TestCase):
         ],
     }
 
-    def _render(self, flag):
+    def _render(self, flag, registry=None):
         go = (ROOT / "daemon" / "internal" / "publication" / "withhold.go").read_text(encoding="utf-8")
         self.reason = re.search(r'^const SD30Reason = "([^"]+)"', go, re.M).group(1)
         with tempfile.TemporaryDirectory() as d:
@@ -187,7 +187,7 @@ class TestSD30RenderTrackRecord(unittest.TestCase):
             (pub / "withhold.go").write_text(
                 re.sub(r"^var SD30Withheld = (true|false)", "var SD30Withheld = %s" % str(flag).lower(),
                        go, flags=re.M), encoding="utf-8")
-            (tmp / "reg.json").write_text(json.dumps(self.REGISTRY), encoding="utf-8")
+            (tmp / "reg.json").write_text(json.dumps(registry or self.REGISTRY), encoding="utf-8")
             return subprocess.run([sys.executable, str(tmp / "tools" / "render_track_record.py"),
                                    str(tmp / "reg.json")], capture_output=True, text=True,
                                   encoding="utf-8", cwd=str(tmp))
@@ -208,6 +208,15 @@ class TestSD30RenderTrackRecord(unittest.TestCase):
         self.assertIn("78.3%", self._row(out, "trend21"))
         # The raw registry beside the README still holds them: say so (SD30-ANCHORS-JSON).
         self.assertIn("is published unaltered", out.stdout)
+
+    def test_flag_on_with_nothing_withheld_prints_no_note(self):
+        # A window re-registered hours ago holds no directional row (2026-10-04):
+        # nothing is withheld, so the README must not say figures are withheld.
+        rows = [r for r in self.REGISTRY["rows"] if r.get("family") not in ("direction", "benchmark")]
+        self.assertTrue(rows)
+        out = self._render(True, registry=dict(self.REGISTRY, rows=rows))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("is published unaltered", out.stdout)
 
     def test_flag_off_restores_directional_row(self):
         out = self._render(False)

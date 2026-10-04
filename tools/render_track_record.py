@@ -102,6 +102,7 @@ def main():
     out.append("|---|---|---|--:|--:|---|--:|---|---|")
 
     sd30 = sd30_flag()
+    withheld_any = False
     for row in rows:
         predictor = esc(row.get("predictor"))
         family = esc(row.get("family") or "—")
@@ -114,11 +115,12 @@ def main():
         note = esc(row.get("note") or "")
         why = sd30_reason(row, sd30)
         if why:  # the same switch /api/accuracy reads (tools/live_accuracy.py)
+            withheld_any = True
             live_acc = ci = null_prequential = SD30_CELL
             verdict = esc(why)
         out.append(f"| {predictor} | {family} | {band} | {live_n} | {live_acc} | {ci} | {null_prequential} | {verdict} | {note} |")
 
-    if sd30[0]:  # SD30-ANCHORS-JSON (owner's call 2026-10-03): publish the raw file, say why
+    if withheld_any:  # SD30-ANCHORS-JSON (owner's call 2026-10-03): publish the raw file, say why
         out.append("")
         out.append("**SD-30.** The 1d/1w directional figures withheld above are still inside "
                    "[`accuracy_registry.json`](accuracy_registry.json): that exact file is what is "

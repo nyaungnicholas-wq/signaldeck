@@ -744,7 +744,8 @@ lines = [
     # The retirement is a fact and stays; the numbers behind it belong to the
     # generated table below and to the reconciliation, not to a static string.
     "**The flagship directional ensemble is RETIRED.** It no longer emits; the rows below",
-    "are its post-retirement shadow record, restarted at the survivorship epoch. The",
+    f"are its post-retirement shadow record, graded from the current window's start "
+    f"({reg.get('grading_epoch', '?')}). The",
     "pre-retirement figures behind that decision are a superseded pre-epoch population and",
     "are deliberately not restated here — see `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.",
     "",
@@ -763,6 +764,11 @@ for r in directional:
         f"| {r['predictor']} | {verdict_md} | {pct(r.get('live_acc'))} | {skill_cell(r)} "
         f"| {pct(baseline(r))} | {ci_cell(r)} | {eff_n_cell(r)} |"
     )
+if not directional:
+    # A window re-registered days ago (2026-10-04, SD-30) has no resolved row:
+    # say so instead of printing a bare header over nothing.
+    lines += ["", f"_No directional row has resolved in the window that started "
+              f"{reg.get('grading_epoch', '?')} yet; rows appear here as they resolve._"]
 
 if structural:
     pending = [r for r in structural if verdict_of(r).startswith("PENDING")]
