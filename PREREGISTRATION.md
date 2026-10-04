@@ -543,7 +543,8 @@ next registrar pass, until which the grader refuses to grade.
 **What changed.** The directional label window is re-registered under chain kind
 `label-window-reregistration`, filed with `cmd/prereg-amend`. At deploy the
 registrar appends its automatic `grading-protocol` and `prereg-document`
-AMENDMENT records; the grader file changes only its `GRADING_EPOCH` constant.
+AMENDMENT records; the grader file changes only its `GRADING_EPOCH` constant (and the
+`GRADING_EPOCH_TS` derived from it).
 The defect (SD-30): the directional 1d/1w labels leaked. The resolver's base
 was the newest SETTLED daily bar at issue, and stock bars settle only at 22:00
 ET. So the 00:00–02:00 UTC broad-universe pass (the row the grader keeps per
@@ -581,10 +582,13 @@ auto-retire rule, the verdict map and the collapse detector; the survivorship
 epoch (2026-07-24); the seq 117 and seq 130 records; the directional ensemble's
 retirement.
 
-**Expected consequences.** INSUFFICIENT DAYS for both horizons until 10 credible
-days accrue; the withhold stays until then AND the owner approves lifting it;
-calibration restarts on the new labels; the prequential-majority benchmark is
-absent for ~2 days; the grader refuses until the registrar's pass at deploy.
+**Expected consequences.** No directional row at first (none resolved), then
+INSUFFICIENT (n/30) until 30 independent observations, then INSUFFICIENT DAYS
+until 10 credible days; the withhold stays until then AND the owner approves
+lifting it; calibration restarts on the new labels; the prequential-majority
+benchmark commits nothing for a horizon until it has a resolved row in the new
+window (about 2 days at 1d, about 8 at 1w), and issue days in that gap never get
+benchmark rows; the grader refuses until the registrar's pass at deploy.
 
 **Verification promised.** About three trading days after the cutoff, re-run
 `tools/sd30_label_window_probe.py` on new-window rows. Expected results: stock

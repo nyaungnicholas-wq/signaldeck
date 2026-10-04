@@ -41,7 +41,7 @@ import (
 // Window: store.GradingEpoch / tools/accuracy_registry.py GRADING_EPOCH move
 // from 2026-09-25 (seq 130, grading-window-reregistration-2) to 2026-10-04,
 // so no row graded on the leaking label is in the graded window. The grader's
-// only code change is that constant; the registrar re-pins it automatically
+// only code change is that constant (GRADING_EPOCH and the GRADING_EPOCH_TS derived from it); the registrar re-pins it automatically
 // from the committed tree at deploy.
 // What this alters: no accuracy figure, null, interval, evidence floor (30
 // independent observations, 10 distinct credible days), auto-retire rule,
@@ -56,13 +56,14 @@ import (
 //   - the guard proves no row in the new window had resolved at filing.
 //
 // Expected consequences:
-//   - INSUFFICIENT DAYS for both horizons until 10 credible days accrue in
-//     the new window;
+//   - no directional row at first, then INSUFFICIENT (n/30), then
+//     INSUFFICIENT DAYS until 10 credible days accrue in the new window;
 //   - the SD-30 withhold stays on until then AND the owner says yes;
 //   - calibration (fit on the graded window) starts uncalibrated on the new
 //     labels;
-//   - the prequential-majority benchmark sits out ~2 days while its twins
-//     resolve;
+//   - the prequential-majority benchmark commits nothing for a horizon
+//     until that horizon has a resolved row in the new window (about 2 days
+//     at 1d, about 8 at 1w); issue days in that gap get no benchmark rows;
 //   - the grader refuses until the registrar's pass completes at deploy.
 const LabelWindowKind = "label-window-reregistration"
 
@@ -128,7 +129,7 @@ func jsonIntMap(m map[string]int) string {
 	return b.String()
 }
 
-const labelWindowNote = "AMENDMENT — the label base moves from the newest SETTLED daily bar at issue to the issue day's own daily bar, and the grading window start moves from 2026-09-25 to 2026-10-04. FILED WITH KNOWLEDGE OF AN OUTCOME, stated plainly: the directional ensemble is already retired on its own record and figures are withheld under SD-30. This alters no accuracy figure, null, interval, evidence floor, auto-retire rule, verdict map, collapse detector, or survivorship epoch. The expected consequence is INSUFFICIENT DAYS for both horizons until 10 credible days accrue in the new window; nothing publishes before then."
+const labelWindowNote = "AMENDMENT — the label base moves from the newest SETTLED daily bar at issue to the issue day's own daily bar, and the grading window start moves from 2026-09-25 to 2026-10-04. FILED WITH KNOWLEDGE OF AN OUTCOME, stated plainly: the directional ensemble is already retired on its own record and figures are withheld under SD-30. This alters no accuracy figure, null, interval, evidence floor, auto-retire rule, verdict map, collapse detector, or survivorship epoch. The expected consequence is no directional row at first (none resolved), then INSUFFICIENT (n/30) until 30 independent observations, then INSUFFICIENT DAYS until 10 credible days accrue in the new window; nothing publishes before then."
 
 func labelWindowSpec(m labelWindowMeasured) string {
 	return `{
@@ -183,10 +184,10 @@ func labelWindowSpec(m labelWindowMeasured) string {
     "the retirement already on record for the directional ensemble",
     "seq 117 and seq 130, which stay on the chain unaltered"
   ],
-  "expectedConsequence": "INSUFFICIENT DAYS for both horizons on the rows in hand: the new window holds only the days since 2026-10-04, below the 10-credible-day floor. That is a count, not a verdict; nothing publishes until it clears, and when it does the number published is whatever the record says.",
+  "expectedConsequence": "No directional row at first (none resolved), then INSUFFICIENT (n/30) until 30 independent observations, then INSUFFICIENT DAYS until 10 credible days: the new window holds only the days since 2026-10-04. That is a count, not a verdict; nothing publishes until it clears, and when it does the number published is whatever the record says.",
   "expectedSideEffects": [
     "calibration (fit on the graded window) starts uncalibrated on the new labels",
-    "the prequential-majority benchmark sits out ~2 days while its twins resolve",
+    "the prequential-majority benchmark commits nothing for a horizon until that horizon has a resolved row in the new window, about 2 days at 1d and about 8 days at 1w, and issue days in that gap never get benchmark rows",
     "the grader refuses until the registrar's pass completes at deploy"
   ]
 }`

@@ -56,7 +56,13 @@ type Prediction struct {
 // sees every row; a grader that wants one basis must say so itself. That is
 // deliberate — changing what the SHA-pinned grader counts is a pre-registration
 // change, not a code change.
-const BasisEpoch int64 = 1786060800
+//
+// Bumped 2026-10-03 to 2026-10-04 00:00Z for SD-30: from then the label base is
+// the issue day's own bar (pipeline.labelBaseSinceTs), so new rows are a
+// different measurement. The label rule follows the row's ts, so rows the
+// previous build wrote between 00:00Z and the deploy carry 1786060800 while
+// being labelled under the new rule; the ts cutoff is authoritative.
+const BasisEpoch int64 = 1791072000
 
 // UpsertPrediction stores a prediction and seeds its outcome row.
 func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {

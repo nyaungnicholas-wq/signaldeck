@@ -979,13 +979,16 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # only replaces the "something graded" half while the snapshot is young.
         # VACUITY (owner's call, 2026-10-02): YOUNG is the grader's own word.
         # The window is young while its headline row, directional-ensemble (1d),
-        # is INSUFFICIENT DAYS (fewer than MIN_DISTINCT_DAYS credible days). Once
+        # is missing or still INSUFFICIENT on rows or credible days (fewer than
+        # MIN_DISTINCT_DAYS). Once
         # it has had its first full grade the fallback stops applying and an
         # empty grade fails here as the vacuity it is. (The structural rows wait
         # on horizon blocks, months not days, so they cannot measure the window.)
         if graded == 0:
             d1 = next((r for r in rows if r["predictor"] == "directional-ensemble (1d)"), None)
-            young = d1 is not None and d1["verdict"].startswith("INSUFFICIENT DAYS")
+            # Right after a re-registration the 1d row is absent (nothing
+            # resolved) or INSUFFICIENT (n/30) before it is INSUFFICIENT DAYS.
+            young = d1 is None or d1["verdict"].startswith(("INSUFFICIENT", "PENDING"))
             self.assertTrue(young,
                             f"no shipped row carries an interval although the 1d window is "
                             f"past INSUFFICIENT DAYS ({d1['verdict'] if d1 else 'row missing'}): "
