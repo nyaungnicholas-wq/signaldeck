@@ -25,6 +25,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/attribution"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -235,6 +236,13 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 		writeWarming(w)
 		return
 	}
+	// SD-30: the live record is graded on the label mostly realised at issue.
+	// Withheld with the reason; the historical prior (expectancy, read from bars,
+	// never from that label) carries the report alone until the flag lifts.
+	var liveWithheld any
+	if why, ok := publication.DirectionalWithheld(string(h)); ok {
+		live, liveWithheld = attribution.Evidence{}, why
+	}
 
 	// ── regime context ──
 	regime := ""
@@ -248,6 +256,7 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 		"market":       s.Market,
 		"currentState": currentState,
 		"report":       attributionBand(rep, prior, live, h),
+		"liveWithheld": liveWithheld,
 		"doctrine":     "Blended evidence: a regime/state-conditioned HISTORICAL prior (~2y expectancy) plus LIVE resolved outcomes, kept strictly separate and weighted by sample size. Live weight = liveN/(priorEff+liveN). Underpowered live attribution is reported as such — it is NOT a measured lack of edge.",
 	})
 }

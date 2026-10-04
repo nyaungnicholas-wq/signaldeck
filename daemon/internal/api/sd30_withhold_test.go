@@ -16,6 +16,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/postmortem"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/signalbt"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -621,5 +622,62 @@ func TestConfidenceEvidence_GradesOnlyTheCurrentWindow(t *testing.T) {
 	ev, err := d.confidenceEvidence(ctx, md.H1d)
 	if err != nil || ev.N != 40 || ev.Accuracy != 1.0 {
 		t.Fatalf("confidence must grade only calls issued since GradingEpochTS: N=%d acc=%v err=%v", ev.N, ev.Accuracy, err)
+	}
+	if rec, err := st.DirectionalRecordIssued(ctx, md.H1d, 0, store.GradingEpochTS); err != nil || len(rec.Days) != 40 {
+		t.Fatalf("the per-day record must carry the same floor: %d days, err %v", len(rec.Days), err)
+	}
+}
+
+func TestSD30_AttributionLiveWithheld(t *testing.T) {
+	srv, st := newAttributionServer(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "LIVE", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAttributionLive(t, st, sym.ID, 40, 26)
+	sd30On(t)
+	url := srv.URL + "/api/attribution?symbol=LIVE&market=stocks&horizon=1d"
+	if body := getAttributionBand(t, url); body.Report.LiveN != 0 {
+		t.Fatalf("withheld live record still graded: liveN=%d", body.Report.LiveN)
+	}
+	res, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close() //nolint:errcheck
+	var m map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m["liveWithheld"] != publication.SD30Reason {
+		t.Fatalf("liveWithheld = %v, want the SD-30 reason", m["liveWithheld"])
+	}
+}
+
+func TestSD30_SignalBacktestWithheld(t *testing.T) {
+	srv, st := newSignalBTServer(t, nil)
+	pin := signalbt.Pinned{DayKey: "2026-07-05", ComputedTs: 1751756400, BenchmarkSymbol: "SPY", HasBenchmark: true,
+		Results: map[string]signalbt.Result{"1d": {Horizon: "1d", RawN: 100, IndependentN: 42, MinIndependentN: 30, IC: 0.05, HitRate: 0.6}}}
+	if err := st.SetJSON(context.Background(), signalbt.MetaKeyLatest, pin); err != nil {
+		t.Fatal(err)
+	}
+	sd30On(t)
+	for _, q := range []string{"?horizon=1d", "?horizon=1d&pinned=1", "?horizon=1w"} {
+		res, err := http.Get(srv.URL + "/api/signal-backtest" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		err = json.NewDecoder(res.Body).Decode(&m)
+		res.Body.Close() //nolint:errcheck
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _ := m["result"].(map[string]any)
+		if m["withheld"] != publication.SD30Reason || m["pinned"] != false || r == nil || r["gated"] != true ||
+			r["ic"] != nil || r["hitRate"] != nil || r["quintileSpread"] != nil || r["note"] != publication.SD30Reason {
+			t.Fatalf("%s: SD-30 must withhold the own-signal grade: %v", q, m)
+		}
 	}
 }

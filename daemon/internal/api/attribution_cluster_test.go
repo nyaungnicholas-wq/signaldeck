@@ -145,6 +145,7 @@ func TestAttribution_WeeklyPriorBandWithheld(t *testing.T) {
 // symbol is exactly its observation count, because the store admits at most one
 // row per (symbol, UTC-day).
 func TestAttribution_LiveBandReportsItsDayCount(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newAttributionServer(t)
 	ctx := context.Background()
 	sym, err := st.UpsertSymbol(ctx, "LIVE", md.Stocks, "")

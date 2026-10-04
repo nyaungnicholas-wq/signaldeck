@@ -83,6 +83,7 @@ func getSignalBT(t *testing.T, url string) signalBTBody {
 // result with 0 independent obs, live:false, and an honest note — never a
 // fabricated skill number.
 func TestSignalBacktest_InsufficientDataIsGatedAndHonest(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, _ := newSignalBTServer(t, nil)
 	body := getSignalBT(t, srv.URL+"/api/signal-backtest?horizon=1d")
 	if body.Result.IndependentN != 0 {
@@ -111,6 +112,7 @@ func TestSignalBacktest_InsufficientDataIsGatedAndHonest(t *testing.T) {
 // quintile spread, the SPY benchmark, and honest labeling. Everything runs on a
 // TEMP db — the live DB is never touched.
 func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	ctx := context.Background()
 	day := int64(86400)
@@ -208,6 +210,7 @@ func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
 // losing 1% over its forward window. One book, long the whole universe, down 1%
 // a day for three days, is down ~3% — not ~70%.
 func TestSignalBacktest_CompoundsPerDayNotPerSymbolDayRow(t *testing.T) {
+	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
 	ctx := context.Background()
 	day := int64(86400)
