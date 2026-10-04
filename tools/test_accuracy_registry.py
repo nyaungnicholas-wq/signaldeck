@@ -962,7 +962,8 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         still fails here, and so does one that labels a row INSUFFICIENT while
         handing it an interval anyway.
         """
-        graded = self._assert_interval_invariant(self._rows())
+        rows = self._rows()
+        graded = self._assert_interval_invariant(rows)
         # A snapshot where nothing grades would satisfy every branch above
         # vacuously — the exact shape that let the dead reproduce path look
         # healthy. Require the freeze to be standing on real graded rows.
@@ -976,7 +977,20 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # structural fixture), which hold both an interval row and
         # under-evidenced rows. The shipped rows are still checked above; this
         # only replaces the "something graded" half while the snapshot is young.
+        # VACUITY (owner's call, 2026-10-02): YOUNG is the grader's own word.
+        # The window is young while its headline row, directional-ensemble (1d),
+        # is INSUFFICIENT DAYS (fewer than MIN_DISTINCT_DAYS credible days). Once
+        # it has had its first full grade the fallback stops applying and an
+        # empty grade fails here as the vacuity it is. (The structural rows wait
+        # on horizon blocks, months not days, so they cannot measure the window.)
         if graded == 0:
+            d1 = next((r for r in rows if r["predictor"] == "directional-ensemble (1d)"), None)
+            young = d1 is not None and d1["verdict"].startswith("INSUFFICIENT DAYS")
+            self.assertTrue(young,
+                            f"no shipped row carries an interval although the 1d window is "
+                            f"past INSUFFICIENT DAYS ({d1['verdict'] if d1 else 'row missing'}): "
+                            f"the seeded fallback is for a young window only "
+                            f"(< {MIN_DISTINCT_DAYS} credible days)")
             con = TestNaivePersistenceNull._db()
             TestNaivePersistenceNull._seed(con, days=12)
             graded = self._assert_interval_invariant(grade_structural(con))

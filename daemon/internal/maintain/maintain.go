@@ -458,6 +458,9 @@ type OutcomeResolver struct {
 	// page, writeCap and maxPages are 0 in production (outcomePage,
 	// outcomeWriteCap, outcomeMaxPages); tests shrink them.
 	page, writeCap, maxPages int
+	// clock is nil in production (time.Now); tests pin it so the 30-day void
+	// rules do not depend on how long ago a fixture was written.
+	clock func() time.Time
 	// resume is where each horizon's last pass stopped early, as (ts,
 	// symbol_id); the next pass continues after it and wraps to the head at the
 	// end of the queue. In memory only: a restart starts from the head.
@@ -525,6 +528,9 @@ const (
 // reached within one sweep. Guards and labels are unchanged.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
+	if o.clock != nil {
+		now = o.clock().Unix()
+	}
 	resolved, voided, waiting := 0, 0, 0
 	page, writeCap, maxPages := o.page, o.writeCap, o.maxPages
 	if page <= 0 {
@@ -686,8 +692,16 @@ func (o *OutcomeResolver) judge(ctx context.Context, h md.Horizon, tf md.Timefra
 		// runs through the session too, so a daily bar read mid-morning
 		// carries live prices. "A later bar exists" needs no knowledge of
 		// exchange hours, half-days, DST or crypto's 24h day.
-		if _, settled, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); err != nil || !settled {
+		// A forward bar that never settles (nothing ever printed after it:
+		// CRNX, ~5.3k rows on 2026-10-02) gets the same 30-day void as the
+		// other never-arriving branches, by the owner's call (CRNX-NEVER-SETTLE);
+		// until then it waits.
+		_, settled, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1)
+		if err != nil {
 			return void, false, err
+		}
+		if !settled {
+			return void, now-p.Ts > 30*24*3600, nil
 		}
 		return store.OutcomeWrite{SymbolID: p.SymbolID, Ts: p.Ts, FwdReturn: fwd.Close/base.Close - 1}, true, nil
 	case now-p.Ts > 30*24*3600:

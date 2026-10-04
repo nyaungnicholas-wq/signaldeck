@@ -72,7 +72,10 @@ func TestOutcomeResolverPageCapResumesInsteadOfWedging(t *testing.T) {
 		}
 	}
 
-	r := &OutcomeResolver{St: st, page: 2, maxPages: 2}
+	// Ten days on, so the stuck rows still wait (the 30-day void is
+	// TestOutcomeResolverVoidsANeverSettlingRowAfter30Days).
+	r := &OutcomeResolver{St: st, page: 2, maxPages: 2,
+		clock: func() time.Time { return time.Unix(d0+10*day, 0) }}
 
 	graded := func(id int64) int {
 		t.Helper()

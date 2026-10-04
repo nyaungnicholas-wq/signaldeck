@@ -73,7 +73,10 @@ func TestOutcomeResolverPagesPastRowsThatNeverSettle(t *testing.T) {
 		}
 	}
 
-	r := &OutcomeResolver{St: st, page: 3, writeCap: 2}
+	// Ten days on: young enough that the stuck rows still wait (the 30-day void
+	// is TestOutcomeResolverVoidsANeverSettlingRowAfter30Days).
+	r := &OutcomeResolver{St: st, page: 3, writeCap: 2,
+		clock: func() time.Time { return time.Unix(d0+10*day, 0) }}
 
 	graded := func(id int64) int {
 		t.Helper()
@@ -129,5 +132,48 @@ func TestOutcomeResolverPagesPastRowsThatNeverSettle(t *testing.T) {
 		if ret < 0.0099 || ret > 0.0101 {
 			t.Fatalf("LIVE row %d: FwdReturn = %f, want between 0.0099 and 0.0101", o.Ts, ret)
 		}
+	}
+}
+
+// CRNX-NEVER-SETTLE (owner's call, 2026-10-02): a row whose forward bar exists
+// but never settles (nothing printed after it) waits like any other unsettled
+// row for 30 days, then is voided like the other never-arriving branches,
+// instead of waiting forever.
+func TestOutcomeResolverVoidsANeverSettlingRowAfter30Days(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	const day = int64(86400)
+	d0 := time.Date(2026, 8, 24, 4, 0, 0, 0, time.UTC).Unix()
+	sym, err := st.UpsertSymbol(ctx, "CRNX", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: d0, Open: 100, High: 100, Low: 100, Close: 100},
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: d0 + day, Open: 101, High: 101, Low: 101, Close: 101},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertScore(ctx, md.Score{SymbolID: sym.ID, Horizon: md.H1d, Ts: d0 + 60, Score: 0.5}); err != nil {
+		t.Fatal(err)
+	}
+	pass := func(at int64) []md.ScoreOutcome {
+		t.Helper()
+		r := &OutcomeResolver{St: st, clock: func() time.Time { return time.Unix(at, 0) }}
+		if _, err := r.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.ResolvedOutcomes(ctx, sym.ID, md.H1d, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := pass(d0 + 29*day); len(got) != 0 {
+		t.Fatalf("at 29 days the unsettled row must still wait; got %d resolved", len(got))
+	}
+	got := pass(d0 + 31*day)
+	if len(got) != 1 || got[0].FwdReturn != nil {
+		t.Fatalf("past 30 days the never-settling row must be VOID (resolved, no return); got %+v", got)
 	}
 }
