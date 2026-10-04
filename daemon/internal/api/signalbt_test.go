@@ -111,6 +111,11 @@ func TestSignalBacktest_InsufficientDataIsGatedAndHonest(t *testing.T) {
 // a rising SPY, and assert the endpoint ungates and reports positive IC, a
 // quintile spread, the SPY benchmark, and honest labeling. Everything runs on a
 // TEMP db — the live DB is never touched.
+// signalBTEpoch anchors these fixtures in the current grading window: the
+// own-signal grade floors on store.GradingEpochTS, a UTC midnight, so day
+// starts stay aligned with the SPY benchmark's.
+const signalBTEpoch = int64(store.GradingEpochTS)
+
 func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
 	sd30Off(t) // the pre-SD-30 path; sd30_withhold_test.go covers the flag on
 	srv, st := newSignalBTServer(t, nil)
@@ -125,7 +130,7 @@ func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
 	spyBars := make([]md.Bar, 0, 40)
 	px := 400.0
 	for i := 0; i < 40; i++ {
-		spyBars = append(spyBars, md.Bar{SymbolID: spy.ID, TF: md.TF1d, Ts: int64(i) * day, Close: px})
+		spyBars = append(spyBars, md.Bar{SymbolID: spy.ID, TF: md.TF1d, Ts: signalBTEpoch + int64(i)*day, Close: px})
 		px *= 1.005
 	}
 	if err := st.UpsertBars(ctx, spyBars); err != nil {
@@ -142,7 +147,7 @@ func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
 		}
 		sig := 0.30 + 0.40*float64(i)/39.0 // 0.30 .. 0.70
 		fwd := (sig - 0.5) * 0.10          // leads the return
-		ts := int64(i) * day
+		ts := signalBTEpoch + int64(i)*day
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: md.H1d, Ts: ts, RawProb: sig, CalProb: sig, NUsed: 2, Components: "{}",
 		}); err != nil {
@@ -151,6 +156,15 @@ func TestSignalBacktest_PopulatedWithBenchmark(t *testing.T) {
 		if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, ts, fwd); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	// Calls issued before the grading window are never graded.
+	old, err := st.UpsertSymbol(ctx, "OLDWIN", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k := int64(1); k <= 5; k++ {
+		seedResolvedPrediction(t, st, old.ID, md.H1d, signalBTEpoch-k*day, 0.7, 0.02)
 	}
 
 	body := getSignalBT(t, srv.URL+"/api/signal-backtest?horizon=1d")
@@ -226,7 +240,7 @@ func TestSignalBacktest_CompoundsPerDayNotPerSymbolDayRow(t *testing.T) {
 	spyBars := make([]md.Bar, 0, days+2)
 	px := 400.0
 	for i := 0; i < days+2; i++ {
-		spyBars = append(spyBars, md.Bar{SymbolID: spy.ID, TF: md.TF1d, Ts: int64(i) * day, Close: px})
+		spyBars = append(spyBars, md.Bar{SymbolID: spy.ID, TF: md.TF1d, Ts: signalBTEpoch + int64(i)*day, Close: px})
 		px *= 1.001
 	}
 	if err := st.UpsertBars(ctx, spyBars); err != nil {
@@ -239,7 +253,7 @@ func TestSignalBacktest_CompoundsPerDayNotPerSymbolDayRow(t *testing.T) {
 			t.Fatal(err)
 		}
 		for d := 0; d < days; d++ {
-			ts := int64(d) * day
+			ts := signalBTEpoch + int64(d)*day
 			if err := st.UpsertPrediction(ctx, store.Prediction{
 				SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
 				RawProb: 0.9, CalProb: 0.9, NUsed: 2, Components: "{}",
@@ -265,7 +279,7 @@ func TestSignalBacktest_CompoundsPerDayNotPerSymbolDayRow(t *testing.T) {
 		t.Fatalf("equity has %d marks, want %d — the curve is compounding per (symbol,day) row, not per day", len(body.Result.Equity), days)
 	}
 	for i, pt := range body.Result.Equity {
-		if want := int64(i) * day; pt.Ts != want {
+		if want := signalBTEpoch + int64(i)*day; pt.Ts != want {
 			t.Fatalf("equity[%d].ts=%d want day-start %d (strategy and benchmark must share the day index)", i, pt.Ts, want)
 		}
 	}

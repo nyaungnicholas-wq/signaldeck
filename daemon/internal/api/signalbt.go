@@ -10,6 +10,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/signalbt"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // ── STAGE 5: own-signal backtester read route ────────────────────────────────
@@ -120,7 +121,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 		// labeled honestly below.
 	}
 
-	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs)
+	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs, store.GradingEpochTS)
 	if err != nil {
 		httpInternal(w, err)
 		return

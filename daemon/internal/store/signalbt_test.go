@@ -49,7 +49,7 @@ func TestSignalBacktestObs_AssemblesResolvedWithMultiLag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	obs, err := st.SignalBacktestObs(ctx, md.H1d, []int{3, 5, 10}, 100)
+	obs, err := st.SignalBacktestObs(ctx, md.H1d, []int{3, 5, 10}, 100, 0)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestSignalBacktestObs_1wPrimaryIsFiveBars(t *testing.T) {
 	if err := st.ResolvePrediction(ctx, sym.ID, md.H1w, 0, 0.05); err != nil {
 		t.Fatal(err)
 	}
-	obs, err := st.SignalBacktestObs(ctx, md.H1w, nil, 100)
+	obs, err := st.SignalBacktestObs(ctx, md.H1w, nil, 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSignalBacktestObs_VoidedOutcomeExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No ResolvePrediction call → unresolved → excluded.
-	obs, err := st.SignalBacktestObs(ctx, md.H1d, nil, 100)
+	obs, err := st.SignalBacktestObs(ctx, md.H1d, nil, 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

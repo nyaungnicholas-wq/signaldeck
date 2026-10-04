@@ -99,7 +99,7 @@ func (w *SignalBTPinWorker) Run(ctx context.Context) (string, error) {
 		Results:         map[string]signalbt.Result{},
 	}
 	for _, h := range signalBTHorizons {
-		rawObs, err := w.St.SignalBacktestObs(ctx, h, signalbt.DefaultDecayLags, signalbt.DefaultMaxObs)
+		rawObs, err := w.St.SignalBacktestObs(ctx, h, signalbt.DefaultDecayLags, signalbt.DefaultMaxObs, store.GradingEpochTS)
 		if err != nil {
 			return "", fmt.Errorf("assemble %s: %w", h, err)
 		}

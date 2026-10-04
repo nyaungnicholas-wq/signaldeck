@@ -189,7 +189,11 @@ type DirectionalAccuracy struct {
 // DIRECTION — predUp == actualUp — not the up-rate. It grades the FULL ledger
 // rather than the newest 120k rows; 1d is already at 120,055 resolved rows, so
 // the old limit had begun to silently drop the oldest of them.
-func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon) (map[int64]DirectionalAccuracy, error) {
+//
+// issuedSince floors the call's issue ts (0 = the full ledger); the public
+// attribution route passes GradingEpochTS so a restarted window never mixes
+// in calls graded on the old label.
+func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon, issuedSince int64) (map[int64]DirectionalAccuracy, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol_id, COUNT(*) AS n,
 		       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END) AS correct
@@ -197,10 +201,10 @@ func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon) (
 		  SELECT symbol_id, prob, up,
 		         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) AS rn
 		  FROM prediction_outcomes
-		  WHERE resolved_at IS NOT NULL AND horizon = ? AND up IS NOT NULL
+		  WHERE resolved_at IS NOT NULL AND horizon = ? AND up IS NOT NULL AND ts >= ?
 		)
 		WHERE rn = 1
-		GROUP BY symbol_id`, string(h))
+		GROUP BY symbol_id`, string(h), issuedSince)
 	if err != nil {
 		return nil, err
 	}

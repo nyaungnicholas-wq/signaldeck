@@ -83,7 +83,7 @@ func attributionCacheKey(st *store.Store, h md.Horizon) string {
 // fleet-wide) — over at most one observation per UTC day, so a symbol predicted
 // many times in one session can't inflate its own N.
 func (d Deps) buildAttributionLive(ctx context.Context, h md.Horizon) (map[string]any, error) {
-	grades, err := d.St.DirectionalAccuracyBySymbol(ctx, h)
+	grades, err := d.St.DirectionalAccuracyBySymbol(ctx, h, store.GradingEpochTS)
 	if err != nil {
 		return nil, err
 	}

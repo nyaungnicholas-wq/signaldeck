@@ -62,7 +62,10 @@ func primaryLagForHorizon(h md.Horizon) int {
 // (symbol, UTC-day) set and sorts. A symbol with no daily bars still yields its
 // primary-lag observation (from the stored fwd_return); only the extra lags need
 // the bar series.
-func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags []int, limit int) ([]SignalBTObs, error) {
+//
+// issuedSince floors the call's issue ts (0 = no floor); both publishing
+// callers pass GradingEpochTS.
+func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags []int, limit int, issuedSince int64) ([]SignalBTObs, error) {
 	primary := primaryLagForHorizon(h)
 
 	// The resolved (signal, primary-fwd) pairs — the labeled set, resolved-only,
@@ -72,9 +75,9 @@ func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags [
 		SELECT symbol_id, ts, prob, fwd_return, settle_ts
 		FROM prediction_outcomes
 		WHERE horizon=? AND resolved_at IS NOT NULL
-		  AND up IS NOT NULL AND fwd_return IS NOT NULL
+		  AND up IS NOT NULL AND fwd_return IS NOT NULL AND ts >= ?
 		ORDER BY ts DESC LIMIT ?`,
-		string(h), limit)
+		string(h), issuedSince, limit)
 	if err != nil {
 		return nil, err
 	}

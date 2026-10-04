@@ -65,7 +65,7 @@ func seedAttributionLive(t *testing.T, st *store.Store, symbolID int64, days, co
 	t.Helper()
 	ctx := context.Background()
 	for day := 0; day < days; day++ {
-		ts := int64(20000+day)*86400 + 43200
+		ts := int64(store.GradingEpochTS) + int64(day)*86400 + 43200 // inside the current window
 		right := day < correct
 		prob, fwd := 0.7, 0.01
 		if !right {
@@ -153,6 +153,9 @@ func TestAttribution_LiveBandReportsItsDayCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedAttributionLive(t, st, sym.ID, 40, 26)
+	for k := int64(1); k <= 5; k++ { // calls issued before the window: never graded
+		seedResolvedPrediction(t, st, sym.ID, md.H1d, int64(store.GradingEpochTS)-k*86400+43200, 0.7, 0.01)
+	}
 
 	body := getAttributionBand(t, srv.URL+"/api/attribution?symbol=LIVE&market=stocks&horizon=1d")
 	if body.Report.LiveN != 40 {
