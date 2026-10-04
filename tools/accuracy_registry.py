@@ -2938,14 +2938,18 @@ def main() -> int:
     print(f"Independence rule: one observation per (symbol, horizon, trading-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
           f"on at least {MIN_DISTINCT_DAYS} distinct trading days.")
-    print(f"Grading window starts {GRADING_EPOCH.isoformat()} (re-registered 2026-09-20; the "
+    print(f"Grading window starts {GRADING_EPOCH.isoformat()} (re-registered 2026-10-03, chain seq 137; the "
           f"2026-07-27..08-06 collapsed cross-sections lie before it). "
           f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
           "against a survivor-seeded universe and are excluded from every tally above.")
     if settlement.get("applied"):
+        # excluded_fraction is None with no post-epoch row (a window just
+        # re-registered): formatting None crashed the whole grade on 2026-10-03.
+        frac = settlement["excluded_fraction"]
+        frac_txt = f"{frac:.1%}" if frac is not None else "none considered"
         print(f"Settlement quarantine: {settlement['rows_excluded']:,} of "
               f"{settlement['rows_considered']:,} resolved post-epoch outcome rows "
-              f"({settlement['excluded_fraction']:.1%}) are EXCLUDED from every "
+              f"({frac_txt}) are EXCLUDED from every "
               "directional tally and every reliability bin above. Their label was "
               "frozen before the forward bar's session had closed, so the resolver "
               "graded a partial bar as a close — "

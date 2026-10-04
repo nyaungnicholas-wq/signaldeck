@@ -1353,6 +1353,44 @@ class TestChainPresenceIsRead(unittest.TestCase):
         self.assertIsNone(payload["retire_rule_chain_seq"])
 
 
+    def test_report_survives_an_empty_window(self):
+        """A window re-registered hours ago holds no post-epoch row while bars
+        exist, so settlement applies over zero rows and excluded_fraction is
+        None. Formatting it crashed the whole grade (2026-10-03, after seq 137):
+        the grader must print the empty quarantine and publish, not exit 1."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.db")
+            con = self._bare_db(path)
+            con.execute("CREATE TABLE symbols (id INTEGER PRIMARY KEY, market TEXT)")
+            con.execute("CREATE TABLE bars (symbol_id INTEGER, tf TEXT, ts INTEGER, close REAL)")
+            con.execute("INSERT INTO symbols VALUES (1, 'stocks')")
+            con.execute("INSERT INTO bars VALUES (1, '1d', ?, 100.0)", (GRADING_EPOCH_TS - 86400,))
+            con.execute("INSERT INTO prereg_records (ts, kind, spec_json, spec_hash,"
+                        " prev_hash, entry_hash, note)"
+                        " VALUES (1,'grading-protocol',?,'h','','e0','')",
+                        (json.dumps({"grader": "tools/accuracy_registry.py",
+                                     "graderCommit": "0" * 40,
+                                     "graderSha256": self_sha256(),
+                                     "minIndependentN": MIN_INDEPENDENT_N,
+                                     "minDistinctDays": MIN_DISTINCT_DAYS,
+                                     "minDistinctBlocks": _MDB,
+                                     "maxAlpha": MAX_ALPHA,
+                                     "multiplicityRule": MULTIPLICITY_RULE}),))
+            con.commit()
+            con.close()
+            out_json = os.path.join(d, "registry.json")
+            buf = io.StringIO()
+            argv = sys.argv
+            sys.argv = ["accuracy_registry.py", "--db", path, "--json", out_json]
+            try:
+                with contextlib.redirect_stdout(buf):
+                    registry_main()
+            finally:
+                sys.argv = argv
+            self.assertTrue(os.path.exists(out_json), "the grade must still be written")
+        self.assertIn("Settlement quarantine: 0 of 0", buf.getvalue())
+        self.assertIn("none considered", buf.getvalue())
+
 
 class TestHorizonBlockClustering(unittest.TestCase):
     """A 21-day structural call made on 21 consecutive days is ONE forward
