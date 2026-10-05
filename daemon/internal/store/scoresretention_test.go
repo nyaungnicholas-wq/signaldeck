@@ -72,6 +72,35 @@ func TestScoresCompactor_StripAndDailyLastPrune(t *testing.T) {
 	}
 }
 
+// TestDailyLastPruneAcrossHourSlices: the prune now walks a day one hour at
+// a time (AUD-19). A row early in the day must still go when the day's newest
+// row sits in a later hour, and the newest must survive.
+func TestDailyLastPruneAcrossHourSlices(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
+	day := int64(86400)
+	for _, ts := range []int64{day + 600, day + 5*3600, day + 20*3600} {
+		if err := st.InsertScore(ctx, heavyScore(sym.ID, ts)); err != nil {
+			t.Fatalf("insert score: %v", err)
+		}
+	}
+	heavy, err := st.ScoresHeavyBelow(ctx, 3*day, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.StripScoreComponents(ctx, heavy); err != nil {
+		t.Fatal(err)
+	}
+	if pruned, err := st.PruneScoresKeepDailyLast(ctx, 3*day); err != nil || pruned != 2 {
+		t.Fatalf("pruned %d, %v; want 2 (the 00:10 and 05:00 rows)", pruned, err)
+	}
+	left, err := st.ScoresBefore(ctx, 1<<40, 0)
+	if err != nil || len(left) != 1 || left[0].Ts != day+20*3600 {
+		t.Fatalf("left %+v, %v; want only the 20:00 row", left, err)
+	}
+}
+
 func TestCompositeCompactor_StripAndDailyLastPrune(t *testing.T) {
 	st := openTemp(t)
 	ctx := context.Background()

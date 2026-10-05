@@ -51,6 +51,15 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
 			return
 		}
+		// 1b. The ngrok tunnel serves this daemon's port directly, bypassing
+		// the web tier, and exists only to carry TradingView alerts. Through
+		// it, every route answered, so the operator's bearer token worked from
+		// the internet on weekdays (2026-10-05 security review). An ngrok Host
+		// now reaches the webhook and nothing else.
+		if webhookOnlyHost(r.Host) && (r.Method != http.MethodPost || r.URL.Path != "/api/tv-webhook") {
+			httpErr(w, http.StatusForbidden, "this host serves only the TradingView webhook")
+			return
+		}
 
 		// 2. CORS: echo the Origin only if it is explicitly allowlisted.
 		origin := r.Header.Get("Origin")
@@ -511,6 +520,20 @@ func (d Deps) requiresAuth(path string) bool {
 		return true
 	}
 	return !d.Cfg.PublicReads
+}
+
+// webhookOnlyHost reports a Host that arrives through an ngrok tunnel.
+func webhookOnlyHost(host string) bool {
+	h := strings.ToLower(host)
+	if i := strings.LastIndex(h, ":"); i > strings.LastIndex(h, "]") {
+		h = h[:i]
+	}
+	for _, suffix := range []string{".ngrok-free.dev", ".ngrok-free.app", ".ngrok.app", ".ngrok.dev", ".ngrok.io", ".ngrok.pizza"} {
+		if strings.HasSuffix(h, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hostAllowed(host string, allowed []string) bool {

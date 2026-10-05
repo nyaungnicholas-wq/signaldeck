@@ -90,7 +90,10 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
 
 // Applied to every route. CSP still allows 'unsafe-inline' (Next.js inline
 // runtime scripts need it); the tightening path is a nonce-based CSP via
-// middleware once those are eliminated. 'unsafe-eval' is dev-only (webpack/
+// middleware once those are eliminated. Measured 2026-10-05: experimental.sri
+// with 'unsafe-inline' removed is NOT enough. SRI covers only external chunks;
+// the per-page inline flight scripts (self.__next_f.push) were blocked and
+// hydration failed (React #412). Nonces need every route dynamically rendered. 'unsafe-eval' is dev-only (webpack/
 // turbopack eval sourcemaps + HMR) — production builds never eval.
 // connect-src is 'self' plus Google's /gsi/ path (the sign-in button's own
 // fetches): 'self' already covers same-origin ws/wss

@@ -87,6 +87,9 @@ var memberRoutes = map[string]bool{
 	// The current HAR volatility forecasts (plan step 9): symbol, horizon,
 	// date and annualised vol only; no null, coefficient or outcome.
 	"/api/vol-forecast/latest": true,
+	// The member's own account data (AUD-05): a download of what is held about
+	// them, and erasure after the password confirms it.
+	"/api/account/export": true, "/api/account/delete": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published
@@ -512,18 +515,29 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	if err := d.St.PurgeStaleUnverified(ctx, time.Now().Add(-verifyTTL)); err != nil {
 		slog.Warn("signup: stale unverified purge failed", "err", err)
 	}
-	if _, exists, err := d.St.GetUserByName(ctx, creds.Username); err != nil {
-		httpInternal(w, err)
-		return
-	} else if exists {
-		httpErr(w, 409, "that username is taken")
-		return
-	}
-	// bcrypt runs on EVERY path below, before the taken/new split, so the two
+	// bcrypt runs on EVERY path below, before any taken/new split, so all the
 	// answers cost the same time.
 	hash, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
 	if err != nil {
 		httpInternal(w, err)
+		return
+	}
+	// A taken USERNAME used to answer 409 at once, before bcrypt: a fast,
+	// distinct reply that let anyone list account names to aim the sign-in
+	// lockout at (2026-10-05 review). It now answers exactly like success and
+	// tells the person at the address, who is the only one who needs to know.
+	if _, exists, err := d.St.GetUserByName(ctx, creds.Username); err != nil {
+		httpInternal(w, err)
+		return
+	} else if exists {
+		if mailLimiter.allow(email) {
+			d.sendAsync(email, "Your SignalDeck sign-up",
+				"Someone (hopefully you) tried to create a SignalDeck account with this email, but the username \""+
+					creds.Username+"\" is already taken, so no account was created.\n\n"+
+					"Choose another username: "+base+"/signup\n\n"+
+					"If this wasn't you, you can ignore this email.")
+		}
+		writeJSON(w, map[string]string{"status": verifySent})
 		return
 	}
 	if taken, err := d.St.EmailTaken(ctx, email); err != nil {

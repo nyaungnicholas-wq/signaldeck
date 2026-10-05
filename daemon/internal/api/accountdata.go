@@ -1,0 +1,90 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+)
+
+// registerAccountData serves a signed-in account's own data, to take away or
+// to erase (2026-10-05 audit, AUD-05: neither existed, so a member had no way
+// to see what was held about them or to leave).
+func (d Deps) registerAccountData(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/account/export", d.accountExport)
+	mux.HandleFunc("POST /api/account/delete", d.accountDelete)
+}
+
+func (d Deps) accountExport(w http.ResponseWriter, r *http.Request) {
+	uid := userID(r)
+	if uid == 0 {
+		httpErr(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	data, err := d.St.AccountExport(r.Context(), uid)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	data["exportedAt"] = time.Now().UTC().Format(time.RFC3339)
+	w.Header().Set("Content-Disposition", `attachment; filename="signaldeck-my-data.json"`)
+	writeJSON(w, data)
+}
+
+// accountDelete erases the signed-in account after the password confirms it.
+// Wrong passwords count on the same lockout as sign-in, so this cannot be used
+// to guess a password around that lockout.
+func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
+	uid := userID(r)
+	if uid == 0 {
+		httpErr(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Password == "" {
+		httpErr(w, http.StatusBadRequest, "confirm with your password")
+		return
+	}
+	ctx := r.Context()
+	u, ok, err := d.St.GetUserByID(ctx, uid)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	if !ok {
+		httpErr(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	if u.IsAdmin {
+		httpErr(w, http.StatusForbidden, store.ErrAdminAccount.Error())
+		return
+	}
+	lockKey := d.lockoutKey(r, u.Username)
+	if wait := loginFailures.retryAfter(lockKey, time.Now()); wait > 0 {
+		httpErr(w, http.StatusTooManyRequests, "too many wrong passwords — try again later")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PassHash), []byte(body.Password)) != nil {
+		loginFailures.fail(lockKey, time.Now())
+		httpErr(w, http.StatusForbidden, "that password is not right")
+		return
+	}
+	if err := d.St.DeleteAccount(ctx, uid); errors.Is(err, store.ErrAdminAccount) {
+		httpErr(w, http.StatusForbidden, err.Error())
+		return
+	} else if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	loginFailures.succeed(lockKey)
+	d.setSessionCookie(w, r, "", -1)
+	http.SetCookie(w, &http.Cookie{Name: deviceCookie, Value: "", Path: "/api/auth", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: d.secureCookie(r)})
+	writeJSON(w, map[string]string{"status": "deleted"})
+}

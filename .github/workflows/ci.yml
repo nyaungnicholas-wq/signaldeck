@@ -503,6 +503,7 @@ jobs:
           bash ops/test-market-close-keeps-web.sh
           bash ops/test-offsite-newest-tag.sh
           bash ops/test-offsite-prune.sh
+          bash ops/test-publication-posture.sh
 
   docs-gate:
     runs-on: ubuntu-latest

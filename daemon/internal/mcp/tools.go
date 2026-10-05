@@ -391,9 +391,13 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 	// were ten days apart on 2026-08-04, and publishing only the frozen one
 	// served a stale date as current fact.
 	structural := map[string]any{
-		"status": "BACKTEST ONLY. Six structural predictors carry outstanding forecasts, none of " +
-			"which has resolved. Every structural accuracy this platform quotes is a backtest " +
-			"measurement until the live record arrives.",
+		// Was "none of which has resolved": false since the first gradable date
+		// (tens of thousands have resolved; 2026-10-05 audit). Static text
+		// cannot hold a count, so it points at the record instead.
+		"status": "BACKTEST CLAIMS, LIVE RECORD ACCRUING. Structural forecasts have resolved live " +
+			"since the first gradable date; every structural accuracy this platform quotes is a " +
+			"backtest measurement, and whether the live record supports it is on /api/accuracy, " +
+			"where no structural row yet has the evidence for a verdict.",
 		"firstGradableOn": prereg.FirstGradableOn,
 		"note": "The claims were frozen and hash-chained before any of them could resolve, so the " +
 			"eventual comparison is a measurement rather than a story. See get_preregistration. " +

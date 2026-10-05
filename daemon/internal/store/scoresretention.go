@@ -116,9 +116,12 @@ func (s *Store) StripScoreComponents(ctx context.Context, rows []ScoreRow) (int6
 	return total, nil
 }
 
-// stripKeyChunk bounds the row-value tuples per UPDATE (SQLite caps host
-// parameters; 500 keys = 1500 params, comfortably inside the default 32k).
-const stripKeyChunk = 500
+// stripKeyChunk bounds the row-value tuples per UPDATE. The parameter cap
+// allowed 500 (1500 params of the default 32k), but each key rewrites a row
+// whose components spill into overflow pages, and 500 of them held the write
+// lock up to 21 s (56 times on 2026-10-04, AUD-19). 100 keeps each statement
+// short enough for a sign-in to interleave; the total work is the same.
+const stripKeyChunk = 100
 
 // PruneScoresKeepDailyLast deletes intraday scores rows older than cutoff,
 // keeping the LAST row per (symbol, horizon, UTC-day) so daily-resolution
@@ -169,16 +172,27 @@ func (s *Store) pruneKeepDailyLast(ctx context.Context, table, stripped string, 
 			WHERE k.symbol_id = r.symbol_id AND k.horizon = r.horizon
 			  AND k.ts > r.ts AND k.ts < (r.ts/86400 + 1) * 86400)
 		LIMIT ?)`
+	// One HOUR of rows per statement range, not a day (2026-10-05, AUD-19):
+	// each 1,000-row batch rescanned its whole UTC day through idx_scores_ts,
+	// a primary-key lookup per row for the stripped test, and 125 such
+	// statements held the write lock 3-48 s on 10-04. The keep rule is
+	// unchanged: EXISTS still looks for a newer row up to the row's own next
+	// midnight, whichever slice the row falls in.
 	var total int64
 	for day := lo.Int64 - lo.Int64%86400; day < cutoff; day += 86400 {
-		n, err := s.deleteInBatches(ctx, del, day, min(day+86400, cutoff))
-		total += n
-		if err != nil {
-			return total, err
+		for from := day; from < day+86400 && from < cutoff; from += pruneSliceSec {
+			n, err := s.deleteInBatches(ctx, del, from, min(from+pruneSliceSec, day+86400, cutoff))
+			total += n
+			if err != nil {
+				return total, err
+			}
 		}
 	}
 	return total, nil
 }
+
+// pruneSliceSec is the ts range one keep-the-last statement covers.
+const pruneSliceSec = 3600
 
 // CompositeHeavyBelow / StripCompositePayload / PruneCompositeKeepDailyLast
 // mirror the scores trio for composite_scores (payload sentinel '{}').

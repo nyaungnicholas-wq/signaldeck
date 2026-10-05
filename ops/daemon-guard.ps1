@@ -23,6 +23,20 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+$HEALTH_TIMEOUT_SEC = 30
+$MIN_UPTIME_MIN = 20
+$STRIKES_TO_RESTART = 3
+function Test-ShouldRestart([int]$strikes, [double]$uptimeMin) {
+    return ($uptimeMin -ge $MIN_UPTIME_MIN -and $strikes -ge $STRIKES_TO_RESTART)
+}
+if ($args.Count -gt 0 -and $args[0] -eq '__selfcheck') {
+    $bad = 0
+    if (Test-ShouldRestart 3 5)  { Write-Output 'FAIL: restarted a daemon still booting'; $bad++ }
+    if (Test-ShouldRestart 2 60) { Write-Output 'FAIL: restarted on two strikes'; $bad++ }
+    if (-not (Test-ShouldRestart 3 60)) { Write-Output 'FAIL: did not restart after three strikes'; $bad++ }
+    if ($bad -eq 0) { Write-Output 'SELFCHECK OK' } else { exit 1 }
+    exit 0
+}
 
 # THIS SCRIPT WRITES ITS OWN LOG, because its task cannot be made to.
 #
@@ -153,9 +167,44 @@ if (-not (Test-Path $refresh)) {
     }
 }
 
-if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
-    Write-Output "signaldeckd already running: nothing to do"
-    exit 0
+# HANG DETECTION (2026-10-05 audit, AUD-13). "The process exists" was the whole
+# check, so a daemon that stopped answering but stayed alive was never
+# restarted. Now a running daemon must also answer /api/health. A miss counts
+# as a strike only once the process is old enough to be past boot and WAL
+# recovery (measured up to ~7 min); three consecutive strikes (about 15 min
+# unanswered) restart it. Any answer clears the strikes.
+$strikeFile = Join-Path $root 'logs\daemon-guard.strikes'
+$running = Get-Process -Name signaldeckd -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($running) {
+    $answered = $false
+    try {
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8322/api/health' -TimeoutSec $HEALTH_TIMEOUT_SEC
+        $answered = ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
+    } catch {
+        $answered = $false
+    }
+    if ($answered) {
+        Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue
+        Write-Output "signaldeckd running and answering: nothing to do"
+        exit 0
+    }
+    $uptimeMin = 0
+    try { $uptimeMin = ((Get-Date) - $running.StartTime).TotalMinutes } catch { }
+    $strikes = 1
+    if (Test-Path $strikeFile) {
+        $prev = 0
+        if ([int]::TryParse((Get-Content $strikeFile -TotalCount 1), [ref]$prev)) { $strikes = $prev + 1 }
+    }
+    if ($uptimeMin -lt $MIN_UPTIME_MIN) { $strikes = 0 }
+    Set-Content -Path $strikeFile -Value $strikes -Encoding ascii
+    if (-not (Test-ShouldRestart $strikes $uptimeMin)) {
+        Write-Output ("signaldeckd running but NOT answering /api/health (strike {0} of {1}, up {2:N0} min): waiting" -f $strikes, $STRIKES_TO_RESTART, $uptimeMin)
+        exit 0
+    }
+    Write-Output ("signaldeckd HUNG: no /api/health answer on {0} consecutive checks (up {1:N0} min): killing pid {2} and restarting" -f $strikes, $uptimeMin, $running.Id)
+    Stop-Process -Id $running.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+    Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue
 }
 
 # -Wait, deliberately: this script must STAY the task's running process for as

@@ -115,6 +115,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux.HandleFunc("GET /api/ready", d.ready)     // can it serve CORRECT answers, not just answers
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
+	d.registerAccountData(mux)                    // a member's own data: download it or delete the account (accountdata.go)
 	d.registerAlertPrefs(mux)                     // member daily-read opt-ins + one-click unsubscribe (alertprefs.go)
 	d.registerJournal(mux)                        // member call journal: the member's own calls, graded (journal.go)
 	d.registerAsk(mux)                            // ask the data: cited answers from the copilot catalog (ask.go)

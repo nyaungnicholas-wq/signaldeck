@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import AlertsPanel from "@/components/account/AlertsPanel";
+import YourDataPanel from "@/components/account/YourDataPanel";
 
 type User = {
   id: number;
@@ -96,6 +97,7 @@ export default function AccountPage() {
         </div>
       </div>
       <AlertsPanel />
+      <YourDataPanel />
     </div>
   );
 }

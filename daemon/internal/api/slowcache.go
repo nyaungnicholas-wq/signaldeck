@@ -100,8 +100,12 @@ func detachedCtx() (context.Context, context.CancelFunc) {
 // is a different problem from a query that returned an error.
 func noteRebuildFailure(what string, err error) {
 	if errors.Is(err, context.DeadlineExceeded) {
-		slog.Warn("cache rebuild hit the detached-build ceiling and was abandoned; "+
-			"the stale copy keeps serving and the next stale hit will retry",
+		// Not necessarily the detached ceiling: a build with a tighter budget of
+		// its own (the ledger verify's ledgerVerifyBuildTimeout, 2 min) expires
+		// first. Saying "the 10-minute ceiling" four minutes after boot sent the
+		// 2026-10-05 audit looking for a 10-minute hang that never happened.
+		slog.Warn("cache rebuild ran out of time and was abandoned (its own build budget, "+
+			"or at most the detached ceiling); the stale copy keeps serving and the next stale hit will retry",
 			"cache", what, "ceiling", detachedBuildTimeout)
 		return
 	}
