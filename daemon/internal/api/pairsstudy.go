@@ -15,6 +15,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pairsstudy"
@@ -23,7 +24,7 @@ import (
 func (d Deps) pairsStudy(w http.ResponseWriter, r *http.Request) {
 	study, err := pairsstudy.Load()
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "pairs-study: "+err.Error())
+		httpInternal(w, fmt.Errorf("pairs-study: %w", err))
 		return
 	}
 

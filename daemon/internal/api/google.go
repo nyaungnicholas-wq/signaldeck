@@ -429,7 +429,7 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	slog.Info("google sign-up", "uid", uid, "username", username)
+	slog.Info("google sign-up", "uid", uid) // the username is derived from the Gmail address
 	d.googleSession(ctx, w, r, uid, username)
 }
 

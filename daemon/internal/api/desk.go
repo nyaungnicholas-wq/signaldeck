@@ -142,7 +142,7 @@ func (d Deps) deskRecommendation(w http.ResponseWriter, r *http.Request) {
 
 	var p composite.Payload
 	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
-		httpErr(w, 500, "stored payload does not parse: "+err.Error())
+		httpInternal(w, fmt.Errorf("stored payload does not parse: %w", err))
 		return
 	}
 

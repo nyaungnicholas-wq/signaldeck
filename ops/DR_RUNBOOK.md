@@ -34,7 +34,7 @@ encrypted disk), or accept the stated consequence:
 |---|---|
 | `daemon\.env` (gitignored: API token, TV webhook secret, data-source keys, allowlists) | re-enter every secret by hand; nothing else breaks |
 | `%USERPROFILE%\.signaldeck\ledger_anchor.key` (Ed25519 signing key — deliberately OUTSIDE `data\`, so it is in NO backup) | survivable but publicly visible: old anchors still verify (each `Record` embeds its `pubKey`), but the daemon generates a fresh key and every NEW anchor signs with it — external observers see a key rotation they are entitled to question |
-| everything written after the last nightly backup | gone. RPO = last offsite backup (≤ ~24h); backfill workers close price-data gaps, but resolved outcomes emitted in the lost window are not reconstructable |
+| everything written after the last nightly backup | gone. RPO = last offsite backup: ≤ ~24 h on weekdays, up to ~3 days across a weekend (the scheduled backup runs Mon–Fri after the close; the daemon's 30 h failsafe copy on weekends is local only); backfill workers close price-data gaps, but resolved outcomes emitted in the lost window are not reconstructable |
 
 ## 0. Prerequisites on the clean machine (~30 min)
 

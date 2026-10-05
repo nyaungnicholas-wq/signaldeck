@@ -266,6 +266,12 @@ func lockoutKey(r *http.Request, name string) string {
 	return name
 }
 
+// nameDigest is a short, stable stand-in for a typed username in logs.
+func nameDigest(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:6])
+}
+
 // lastHopLoopback reports whether the right-most X-Forwarded-For hop is a
 // loopback address, or the header is absent. Next fills the header from its
 // socket only when it is missing (base-server.js: x-forwarded-for ??=), so a
@@ -338,7 +344,10 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || !ok {
 		loginFailures.fail(lockKey, now)
-		slog.Warn("login failed", "username", name)
+		// The typed name, not the account: people type their email address
+		// here, and that landed in plain text in the rotated logs. A short
+		// digest still shows one name being hammered.
+		slog.Warn("login failed", "username_digest", nameDigest(name), "username_len", len(name))
 		httpErr(w, 401, "invalid username or password")
 		return
 	}

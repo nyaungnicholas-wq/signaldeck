@@ -6,6 +6,13 @@ import Link from "next/link";
 import PagePurpose from "@/components/PagePurpose";
 import GoogleButton from "@/components/auth/GoogleButton";
 import { api } from "@/lib/api";
+import { safeNext } from "@/lib/safenext";
+
+// The page a signed-out visitor asked for (AuthGate's ?next=), when it is a
+// same-origin path; otherwise the role's home.
+function resumeOr(home: string): string {
+  return safeNext(new URLSearchParams(window.location.search).get("next")) ?? home;
+}
 
 /** Minimal login / register form in the SignalDeck terminal style. */
 export default function LoginPage() {
@@ -56,7 +63,7 @@ export default function LoginPage() {
     api
       .me()
       .then((me) => {
-        if (live) router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
+        if (live) router.replace(resumeOr((me.member ?? !me.isAdmin) ? "/today" : "/dashboard"));
       })
       .catch(() => {});
     return () => {
@@ -78,7 +85,7 @@ export default function LoginPage() {
       // Members land on /account: the operator dashboard is admin-only on a
       // published deployment (daemon accounts.go, member tier).
       const me = mode === "login" ? await api.login(username, password) : await api.register(username, password);
-      router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
+      router.replace(resumeOr((me.member ?? !me.isAdmin) ? "/today" : "/dashboard"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "request failed");
     } finally {

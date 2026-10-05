@@ -18,6 +18,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ func (d Deps) sentimentCorrelation(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := d.St.SentCorrResults(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "sentiment-correlation: "+err.Error())
+		httpInternal(w, fmt.Errorf("sentiment-correlation: %w", err))
 		return
 	}
 	// Studies as raw result objects, so the page renders exactly the numbers the
@@ -55,7 +56,7 @@ func (d Deps) sentimentCorrelation(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := d.St.SentimentFeatureStats(ctx, newssent.Version)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "sentiment-correlation: "+err.Error())
+		httpInternal(w, fmt.Errorf("sentiment-correlation: %w", err))
 		return
 	}
 
@@ -97,7 +98,7 @@ func (d Deps) sentimentCorrelation(w http.ResponseWriter, r *http.Request) {
 	// has the backwards sweep reached the oldest scored headline?
 	oldestScored, err := d.St.OldestScoredNewsTs(ctx, newssent.Version)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "sentiment-correlation: "+err.Error())
+		httpInternal(w, fmt.Errorf("sentiment-correlation: %w", err))
 		return
 	}
 	alignment := map[string]any{

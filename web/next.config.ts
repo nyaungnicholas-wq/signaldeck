@@ -121,6 +121,10 @@ const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Frame-Options", value: "DENY" },
+  // Browsers honour this only on an HTTPS response (the tunnel), never on the
+  // plain-http localhost origins. No includeSubDomains: the quick tunnel is a
+  // shared trycloudflare.com host (2026-10-05 audit: no HSTS anywhere).
+  { key: "Strict-Transport-Security", value: "max-age=31536000" },
   {
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=()",
