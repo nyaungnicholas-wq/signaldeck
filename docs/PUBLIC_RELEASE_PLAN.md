@@ -102,7 +102,7 @@ checks that exercise the app the way a visitor does, which is the gap
 | Item | Why it needs the owner | Default if no decision |
 |------|------------------------|------------------------|
 | Paid hosting account (Fly.io/Railway/Render/VPS) | Required for Option B; no account exists, no card attached | Option A only (local demo) |
-| Make `signaldeck-anchors` repo public | READY, still PRIVATE (2026-09-30). History audited: 34 commits, only 5 paths ever, no releases, nothing secret or licensed (one local folder path in old registry revisions, already public in the main repo). Each publish now adds an RFC 3161 + OpenTimestamps statement, `verify.py` and `VERIFY.md`; a fresh clone verified end to end (620,725 entries recomputed). The flip is the owner's action: `gh repo edit nyaungnicholas-wq/signaldeck-anchors --visibility public --accept-visibility-change-consequences` | Remains private |
+| Make `signaldeck-anchors` repo public | DONE 2026-10-04 (owner's call): public. A scratch-clone scan before the flip found no secrets, personal data or provider data in the files or the full 39-commit history. Earlier audit (2026-09-30): 34 commits, only 5 paths ever, no releases, nothing secret or licensed (one local folder path in old registry revisions, already public in the main repo). Each publish now adds an RFC 3161 + OpenTimestamps statement, `verify.py` and `VERIFY.md`; a fresh clone verified end to end (620,725 entries recomputed). | — |
 | Expose any public hostname | `SIGNALDECK_ALLOWED_HOSTS` must be set; DNS, TLS, proxy config needed | No public hostname |
 | Change notification transports (Discord/Telegram/Slack/SMTP) | Secrets required; optional but if used must be configured | Disabled (no secrets set) |
 
