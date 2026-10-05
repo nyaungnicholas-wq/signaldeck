@@ -114,9 +114,10 @@ included, answers `403 this host serves only the TradingView webhook`. So the
 healthy answer here is the webhook's own refusal of the missing secret,
 `{"error":"invalid secret"}` (403), which proves the tunnel is up AND the Host
 allowlist accepts it. A `503 tv webhook disabled` also proves it, but means
-`SIGNALDECK_TV_WEBHOOK_SECRET` is unset, so TradingView alerts are refused. A `404`/`421`/connection error means the tunnel is
-running but the daemon is refusing the Host: fix `SIGNALDECK_ALLOWED_HOSTS`,
-not the tunnel.
+`SIGNALDECK_TV_WEBHOOK_SECRET` is unset, so TradingView alerts are refused. A `403` whose body says `forbidden host` (not
+`invalid secret`) means the tunnel is running but the daemon is refusing the
+Host: fix `SIGNALDECK_ALLOWED_HOSTS`, not the tunnel. A `404` or a connection
+error is the tunnel itself.
 
 ## DONE - the tunnel is live (2026-09-19)
 

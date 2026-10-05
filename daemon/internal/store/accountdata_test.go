@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -30,7 +32,7 @@ func TestDeleteAccountWaitsForTheWriteLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { time.Sleep(300 * time.Millisecond); tx.Commit() }() //nolint:errcheck
-	if err := st.DeleteAccount(ctx, uid); err != nil {
+	if err := st.DeleteAccount(ctx, uid, "member"); err != nil {
 		t.Fatalf("delete while a worker held the write lock: %v; want it to wait for the lock", err)
 	}
 	if _, ok, err := st.GetUserByID(ctx, uid); err != nil || ok {
@@ -46,7 +48,18 @@ func TestDeleteAccountWaitsForTheWriteLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteAccount(ctx, admin); err != ErrAdminAccount {
+	if err := st.DeleteAccount(ctx, admin, "owner"); err != ErrAdminAccount {
 		t.Fatalf("deleting the admin: %v; want ErrAdminAccount", err)
+	}
+	// A reused id: the verified name no longer owns it, so nothing is erased.
+	other, err := st.CreateUser(ctx, "newcomer", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteAccount(ctx, other, "member"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delete under another name: %v; want sql.ErrNoRows", err)
+	}
+	if _, ok, err := st.GetUserByID(ctx, other); err != nil || !ok {
+		t.Fatalf("the account under the reused id was erased (found=%v err=%v)", ok, err)
 	}
 }

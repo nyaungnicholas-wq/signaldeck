@@ -130,13 +130,23 @@ The first load run opened a new connection per request and exhausted the machine
 
 ## Round 6 (the fresh-context review of round 5)
 
-The review confirmed every round-4 item closed (it measured the delete waiting 1.84 s for the lock, and the guard's exit-3 refusal coming through the PowerShell pipeline) and found one overclaim and one masking path.
+The review confirmed the remaining round-4 items closed (it measured the delete waiting 1.84 s for the lock, and the guard's exit-3 refusal coming through the PowerShell pipeline). Two items were only partly closed and became this round's fixes: AUD-09 coverage (an overclaim) and a masking path in the guard's probe.
 
 | Review item | Fix | Proof |
 |---|---|---|
 | M1 AUD-09 claimed every automatic start was checked; market-close, refresh, collect and restart-on-failure start the Daemon task directly | The daemon on the web tier's port (8322) refuses at startup (exit 3) when unpublished while cloudflared runs; copies on other ports start normally | TestUnpublishedDaemonRefusesBehindATunnel (6 cases). Real binary on this host with the tunnel up, configured for 8322 against a scratch root: exits 3 with the reason (live daemon unaffected). The e2e test's scratch daemon (another port) starts; it failed while the first draft refused on every port |
 | S1 a 429 from the shared loopback bucket answered the guard's probe, so a wedged daemon under traffic was never restarted | A direct loopback GET of /api/health with no forwarded hop and no proxy key skips the limiter | TestLocalHealthProbeSkipsTheLimiter: with the bucket empty the direct probe gets 200, a proxy-keyed request still 429; the old rule fails it (429) |
-| Notes | Priority released by defer; stale lockout comment; a concurrent second delete answers 401, not 500; device-key creation goes ahead of the fleet; curl `--noproxy '*'`; launch names the real refusal; a warning when no process tool exists; runbook names the 503 "webhook disabled" answer; AUD-22 states what the collapse-gate reason can carry | guard selfcheck OK, PS 5.1 parse 0 errors, the guard's exact curl call returns 200 from the live daemon |
+| Notes | Priority released by defer; stale lockout comment; a concurrent second delete answers 401, not 500; device-key creation goes ahead of the fleet; curl `--noproxy '*'`; launch names the real refusal; a warning when no process tool exists; runbook names the 503 "webhook disabled" answer; AUD-22 states what the collapse-gate reason can carry | The guard edits: selfcheck OK, PS 5.1 parse 0 errors, its exact curl call returns 200 from the live daemon. The 401, the device-key priority and the defer were code-reviewed in round 6; round 7 adds tests for the delete paths |
+
+## Round 7 (the fresh-context review of round 6)
+
+No must-fix. Two should-fix and the notes, each with a test that fails on the old code:
+
+| Review item | Fix | Proof |
+|---|---|---|
+| S1 the posture check ran only at start: a tunnel that came up after the daemon (logon order, tunnel restart, first go-live) was never caught | A watcher re-checks every minute and stops an unpublished daemon on 8322 gracefully with exit 3 | TestWatchPostureStopsWhenATunnelAppears (fails when the watcher does not stop) |
+| S2 `tasklist` is a WMI client with no timeout on the startup path; "cannot tell" was silent | Toolhelp snapshot on Windows (no WMI, ms instead of 0.8 s), `pgrep` with a 10 s timeout elsewhere; "cannot tell" is logged | TestUnpublishedDaemonRefusesBehindATunnel requires the process list to be readable on the test host and the unknown case to be reported |
+| Notes | Port compared as a number (`:08322`); the check runs before the database opens; delete matches the verified username as well as the id (a reused id is never erased); `prioritized` helper for both priority holds; the limiter comment says why web requests always carry the hop; runbook's Host-refusal answer is a 403 `forbidden host`; AUD-09 and AUD-13 list their residuals | Leading-zero case fails on a string compare; the store test fails (`delete under another name: <nil>`) without the username match; real binary on 8322: exit 3, no database or data directory created, live daemon unaffected |
 
 ## Not verified
 

@@ -109,7 +109,9 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// with TRUST_PROXY off every proxied visitor shares the loopback bucket,
 		// so a 429 here hid a wedged daemon from it (2026-10-05 review). Only a
 		// direct loopback GET of /api/health, with no forwarded hop and no
-		// web-proxy key (both always set by the web tier), skips the limiter.
+		// web-proxy key, skips the limiter. Web-tier requests always carry the
+		// hop (Next fills X-Forwarded-For when a client sent none) and, under
+		// SIGNALDECK_LOCAL_ONLY_PROXY, the key; an ngrok Host is refused above.
 		localProbe := r.Method == http.MethodGet && r.URL.Path == "/api/health" && remoteAddrIsLoopback(r) &&
 			r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("X-Signaldeck-Local") == ""
 		if !localProbe && !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {

@@ -96,7 +96,12 @@ func (s *Store) exportRows(ctx context.Context, table string, uid int64) ([]map[
 // single transaction, so a failure leaves the account whole rather than half
 // erased. Member calls are the member's own private journal, not part of the
 // public ledger, so they go with the account.
-func (s *Store) DeleteAccount(ctx context.Context, uid int64) error {
+//
+// username is the name whose password the caller verified: users.id is reused
+// (no AUTOINCREMENT), so a delete racing a sign-up must not erase the new
+// account that took the id (2026-10-05 review). A vanished or reused id
+// returns sql.ErrNoRows.
+func (s *Store) DeleteAccount(ctx context.Context, uid int64, username string) error {
 	tx, err := s.authW().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -107,7 +112,7 @@ func (s *Store) DeleteAccount(ctx context.Context, uid int64) error {
 	// worker holds the lock, so members got a 500 (2026-10-05 review). The
 	// no-op UPDATE takes the write lock, waits like any write, and doubles as
 	// the admin guard.
-	res, err := tx.ExecContext(ctx, `UPDATE users SET id=id WHERE id=? AND COALESCE(is_admin,0)=0`, uid)
+	res, err := tx.ExecContext(ctx, `UPDATE users SET id=id WHERE id=? AND username=? AND COALESCE(is_admin,0)=0`, uid, username)
 	if err != nil {
 		return err
 	}
@@ -115,7 +120,7 @@ func (s *Store) DeleteAccount(ctx context.Context, uid int64) error {
 		return err
 	} else if n != 1 {
 		var admin int64
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_admin,0) FROM users WHERE id=?`, uid).Scan(&admin); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_admin,0) FROM users WHERE id=? AND username=?`, uid, username).Scan(&admin); err != nil {
 			return err
 		}
 		return ErrAdminAccount

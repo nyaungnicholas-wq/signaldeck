@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -63,6 +64,18 @@ func main() {
 			defer lw.Close() //nolint:errcheck
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lw), nil)))
 			slog.Info("file logging enabled", "path", logPath, "maxMB", logrotate.DefaultMaxMB, "keep", logrotate.DefaultKeep)
+		}
+	}
+
+	// Publication posture (AUD-09, posture.go), before the store is opened, so
+	// a refused start touches nothing. Not for the -sic-bulk-sync one-shot,
+	// which serves nothing.
+	if !*sicBulk {
+		if unknown, err := startupPosture(cfg.Published(), cfg.HTTPAddr, cloudflaredRunning); err != nil {
+			slog.Error("refusing to start", "why", err)
+			os.Exit(3)
+		} else if unknown {
+			slog.Warn("could not read the process list to check for a tunnel; starting unpublished on the web tier's port unchecked")
 		}
 	}
 
@@ -164,16 +177,16 @@ func main() {
 		return
 	}
 
-	if err := startupPosture(cfg.Published(), cfg.HTTPAddr, cloudflaredRunning); err != nil {
-		slog.Error("refusing to start", "why", err)
-		os.Exit(3)
-	}
-
 	// Windows maintenance stops arrive as `schtasks /End`, which terminates the
 	// process without reaching the signal handler; see stopfile.go. Armed here,
 	// after the -sic-bulk one-shot returns, so a one-shot never consumes a stop
 	// meant for the running daemon.
 	ctx = stopOnFile(ctx, filepath.Join(filepath.Dir(cfg.DBPath), ".stop-request"), processStart, time.Second)
+	ctx, stopForPosture := context.WithCancelCause(ctx)
+	defer stopForPosture(nil)
+	if !cfg.Published() {
+		go watchPosture(ctx, false, cfg.HTTPAddr, time.Minute, cloudflaredRunning, stopForPosture)
+	}
 
 	slog.Info("signaldeckd started", "db", cfg.DBPath, "http", cfg.HTTPAddr,
 		"alpaca", cfg.HasAlpaca(), "hud", cfg.HudURL)
@@ -195,6 +208,10 @@ func main() {
 	//     restart-on-failure policy (RestartCount=999) had never once fired.
 	//
 	// Exiting non-zero on case 2 is what makes that existing policy work.
+	if errors.Is(context.Cause(ctx), errTunnelBehindUnpublished) {
+		slog.Error("signaldeckd stopped: a tunnel came up in front of this unpublished daemon", "why", context.Cause(ctx))
+		os.Exit(3)
+	}
 	if ctx.Err() != nil {
 		slog.Info("signaldeckd stopped: shutdown signal received", "cause", ctx.Err())
 		return

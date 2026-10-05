@@ -80,14 +80,12 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusForbidden, "that password is not right")
 		return
 	}
-	func() {
-		defer d.St.Priority()() // a person is waiting: go ahead of the worker fleet
-		err = d.St.DeleteAccount(ctx, uid)
-	}()
+	// A person is waiting: go ahead of the worker fleet.
+	err = d.prioritized(func() error { return d.St.DeleteAccount(ctx, uid, u.Username) })
 	if errors.Is(err, store.ErrAdminAccount) {
 		httpErr(w, http.StatusForbidden, err.Error())
 		return
-	} else if errors.Is(err, sql.ErrNoRows) { // a concurrent second submit: already gone
+	} else if errors.Is(err, sql.ErrNoRows) { // already gone, or the id now belongs to someone else
 		httpErr(w, http.StatusUnauthorized, "sign in first")
 		return
 	} else if err != nil {
