@@ -629,12 +629,14 @@ export default function ProofPage() {
       {/* Verb-first, so it reads as the next thing to do rather than a link
           back. This is the one shareable page: most people arrive here first
           and need somewhere to go. */}
+      {/* Was "Open the full workspace" to /dashboard, which is operator-only:
+          every visitor and member who followed it bounced (2026-10-05 audit). */}
       <Link
-        href="/dashboard"
+        href="/volatility"
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
         style={{ color: "var(--accent)" }}
       >
-        Open the full workspace &rarr;
+        See how the volatility forecast is scoring &rarr;
       </Link>
       <p className="m-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
         Unfamiliar with a term above?{" "}

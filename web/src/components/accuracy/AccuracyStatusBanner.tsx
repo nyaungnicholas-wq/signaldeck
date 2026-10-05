@@ -10,6 +10,22 @@ export type AccuracyStatus =
   | "PRIVATE"
   | "UNREACHABLE";
 
+/** One sentence per publication status. The banner and the glossary both
+ *  read this, so the two cannot drift apart. */
+export const STATUS_GLOSS: Record<AccuracyStatus, string> = {
+  OK: "published: the live record supports this row",
+  INSUFFICIENT: "not enough independent evidence to publish an interval",
+  FAILED: "the live record contradicts this row",
+  RETIRED: "retired: the record has contradicted this model and retirement does not lapse",
+  REFUSED:
+    "refused: the publication gate will not stand behind figures over this window",
+  REFUSED_STALE: "refused: the grader has not produced a fresh result",
+  NO_BASELINE: "no comparable baseline; accuracy alone is not evidence",
+  QUARANTINED: "quarantined: excluded from every benchmark denominator",
+  PRIVATE: "private on this deployment: sign in to read the record (an access setting, not a statistical refusal)",
+  UNREACHABLE: "temporarily unavailable: the accuracy service did not answer (not a refusal by the grader)",
+};
+
 /**
  * Renders an explicit publication status for accuracy results.
  * A refusal a reader cannot act on is barely better than silence.
@@ -27,19 +43,7 @@ export function AccuracyStatusBanner({
   evidenceRefs?: string[];
   className?: string;
 }) {
-  const gloss: Record<AccuracyStatus, string> = {
-    OK: "published: the live record supports this row",
-    INSUFFICIENT: "not enough independent evidence to publish an interval",
-    FAILED: "the live record contradicts this row",
-    RETIRED: "retired: the record has contradicted this model and retirement does not lapse",
-    REFUSED:
-      "refused: the publication gate will not stand behind figures over this window",
-    REFUSED_STALE: "refused: the grader has not produced a fresh result",
-    NO_BASELINE: "no comparable baseline; accuracy alone is not evidence",
-    QUARANTINED: "quarantined: excluded from every benchmark denominator",
-    PRIVATE: "private on this deployment: sign in to read the record (an access setting, not a statistical refusal)",
-    UNREACHABLE: "temporarily unavailable: the accuracy service did not answer (not a refusal by the grader)",
-  };
+  const gloss = STATUS_GLOSS;
 
   const colorMap: Record<AccuracyStatus, string> = {
     OK: "border-emerald-500/60 bg-emerald-500/10 text-emerald-300",

@@ -126,7 +126,11 @@ export default function ProofStrip() {
           )}
         </div>
 
-        {/* paper P&L — always labeled a simulation */}
+        {/* paper P&L — always labeled a simulation. Operator-only since
+            2026-10-05 (daemon publicTrackRecord): absent, the block is not
+            drawn at all rather than read as a figure that failed to load. */}
+        {paper && (
+        <>
         <div className="flex flex-col gap-0.5">
           <span
             className="inline-flex items-center gap-1 text-[0.75rem] tracking-wider"
@@ -163,6 +167,8 @@ export default function ProofStrip() {
 
         {/* The paper figure is hypothetical performance; say so in the regulator's words, not only in a tip. */}
         <HypotheticalNote className="basis-full" />
+        </>
+        )}
 
         {/* ledger integrity — the record grades the record that was made */}
         {tr.ledger && ledger && (

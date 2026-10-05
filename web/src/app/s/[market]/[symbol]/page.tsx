@@ -790,7 +790,7 @@ function OperatorSymbolPage({
       {/* ── STORY, SECTION 2 · THE VALIDATED SIGNALS ── */}
       <StorySection
         n={2}
-        title="VALIDATED SIGNALS"
+        title="BACKTEST-VALIDATED SIGNALS"
         sub="the regime stack that survived re-validation — volatility leads, and each read carries the measured accuracy of its OWN conviction band"
       >
       <ValidatedSignalsPanel symbol={symbol} market={market} />

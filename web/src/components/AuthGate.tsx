@@ -58,9 +58,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         // form they can never pass. Send them to the front door instead;
         // /login stays routable for the operator, it just stops being the
         // destination for everyone who is not one.
+        // ?next= carries the page asked for through sign-in (lib/safenext).
         if (res.status === 401)
           window.location.replace(
-            process.env.NEXT_PUBLIC_SIGNALDECK_PUBLIC === "1" ? "/" : "/login",
+            process.env.NEXT_PUBLIC_SIGNALDECK_PUBLIC === "1"
+              ? "/"
+              : "/login?next=" + encodeURIComponent(window.location.pathname + window.location.search),
           ); // stay gated until the destination paints — no flash
         else setReady(true); // signed in, or daemon error (panels surface it)
       })

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -250,6 +251,43 @@ func (f *failCounter) sweep(now time.Time) {
 	}
 }
 
+// lockoutKey is the loginFailures key for one attempt. A sign-in typed on this
+// machine itself counts on its own ladder ('|' never appears in a username),
+// so failures sent through the public tunnel cannot lock the owner out of the
+// console: the 2026-10-05 security review kept "owner" locked for 24 hours
+// with about 96 requests a day, and the admin has no emailed reset. "Typed on
+// this machine" = loopback socket AND no forwarded hop but loopback. Both
+// tunnels (Cloudflare, ngrok) append the client's real address as the last
+// hop, so no internet client lands on the console ladder.
+func lockoutKey(r *http.Request, name string) string {
+	if remoteAddrIsLoopback(r) && lastHopLoopback(r.Header.Get("X-Forwarded-For")) {
+		return name + "|console"
+	}
+	return name
+}
+
+// nameDigest is a short, stable stand-in for a typed username in logs.
+func nameDigest(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:6])
+}
+
+// lastHopLoopback reports whether the right-most X-Forwarded-For hop is a
+// loopback address, or the header is absent. Next fills the header from its
+// socket only when it is missing (base-server.js: x-forwarded-for ??=), so a
+// sign-in at 127.0.0.1:8323 arrives as "127.0.0.1", while a tunnel request
+// keeps the edge's header, whose last hop is the real client.
+func lastHopLoopback(xff string) bool {
+	if xff == "" {
+		return true
+	}
+	if i := strings.LastIndex(xff, ","); i >= 0 {
+		xff = xff[i+1:]
+	}
+	ip := net.ParseIP(strings.TrimSpace(xff))
+	return ip != nil && ip.IsLoopback()
+}
+
 // loginFailSoftCap is the lockout-map size past which names stop being
 // remembered for loginLockoutMemory (see sweep).
 const loginFailSoftCap = 50000
@@ -278,7 +316,8 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 	// ~100ms hash on an attacker, and answering fast here is not an oracle
 	// because the lockout key exists for unknown usernames too.
 	now := time.Now()
-	if wait := loginFailures.retryAfter(name, now); wait > 0 {
+	lockKey := lockoutKey(r, name)
+	if wait := loginFailures.retryAfter(lockKey, now); wait > 0 {
 		// Round UP, and never below a second. Rounding to nearest produced
 		// "try again in 0s" for any sub-500ms remainder — an instruction to
 		// wait no time at all, on a request that was just refused.
@@ -304,8 +343,11 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || !ok {
-		loginFailures.fail(name, now)
-		slog.Warn("login failed", "username", name)
+		loginFailures.fail(lockKey, now)
+		// The typed name, not the account: people type their email address
+		// here, and that landed in plain text in the rotated logs. A short
+		// digest still shows one name being hammered.
+		slog.Warn("login failed", "username_digest", nameDigest(name), "username_len", len(name))
 		httpErr(w, 401, "invalid username or password")
 		return
 	}
@@ -322,7 +364,7 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Clear the counter only for a sign-in that actually issues a session.
-	loginFailures.succeed(name)
+	loginFailures.succeed(lockKey)
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 

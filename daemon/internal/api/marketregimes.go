@@ -19,6 +19,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 
@@ -56,7 +57,7 @@ func (d Deps) marketRegimes(w http.ResponseWriter, r *http.Request) {
 
 	calls, err := d.St.RegimeForecastCalls(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "market-regimes: "+err.Error())
+		httpInternal(w, fmt.Errorf("market-regimes: %w", err))
 		return
 	}
 	// symbol_id -> symbol, for the baskets only.

@@ -225,7 +225,7 @@ export default function ValidatedSignalsPanel({
   return (
     <section className="panel" aria-label={`validated regime signals for ${symbol}`}>
       <div className="panel-h flex-wrap gap-2">
-        <span>VALIDATED SIGNALS · {symbol}</span>
+        <span>BACKTEST-VALIDATED SIGNALS · {symbol}</span>
         <HelpTip label="why these are the validated ones">
           These are structure calls — which side of a moving average price sits
           on, whether volume and volatility stay in their current regime — and

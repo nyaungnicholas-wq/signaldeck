@@ -163,7 +163,7 @@ export default function TodaysRead({
       <div className="panel-h flex-wrap gap-2">
         <span style={{ color: "var(--accent)" }}>TODAY&rsquo;S READ</span>
         <span className="chip px-2 py-[1px] text-[0.75rem]">
-          {best ? `validated signal · ${best.fc.kind}` : "evidence gate"}
+          {best ? `backtest-validated signal · ${best.fc.kind}` : "evidence gate"}
         </span>
         <Link
           href="/proof"

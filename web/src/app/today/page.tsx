@@ -47,7 +47,7 @@ export default function TodayPage() {
       <header className="panel px-4 py-3">
         <h1 className="m-0 text-lg font-bold">Today</h1>
         <p className="m-0 mt-1 max-w-[75ch] text-[0.85rem]" style={{ color: "var(--dim)" }}>
-          SignalDeck&rsquo;s validated reads, each with the accuracy it has actually measured, and the
+          SignalDeck&rsquo;s regime reads, each with the accuracy it measured in backtests, and the
           live record that grades every call. What it cannot predict, it says so.
         </p>
         <p className="m-0 mt-1 max-w-[75ch] text-[0.8rem]" style={{ color: "var(--faint)" }}>

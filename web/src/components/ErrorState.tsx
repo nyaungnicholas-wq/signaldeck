@@ -16,6 +16,14 @@ export default function ErrorState({
   hint?: string | null;
   className?: string;
 }) {
+  // A symbol SignalDeck does not track is the reader's input, not an outage:
+  // "on our side" plus a Retry button sent people waiting on a page that could
+  // never load (/s/stocks/ZZZZQ, 2026-10-05 audit).
+  const unknownSymbol = /unknown (stock )?symbol/i.test(message);
+  const shownHint = unknownSymbol
+    ? "SignalDeck does not track this symbol. Check the ticker, or search for it from your watchlist."
+    : hint;
+  const shownRetry = unknownSymbol ? undefined : retry;
   return (
     <div
       role="alert"
@@ -23,16 +31,16 @@ export default function ErrorState({
     >
       <div className="min-w-0 flex-1">
         <span style={{ color: "var(--bad)" }}>{message}</span>
-        {hint ? (
+        {shownHint ? (
           <div className="mt-1 text-[0.75rem]" style={{ color: "var(--dim)" }}>
-            {hint}
+            {shownHint}
           </div>
         ) : null}
       </div>
-      {retry ? (
+      {shownRetry ? (
         <button
           type="button"
-          onClick={retry}
+          onClick={shownRetry}
           className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)]"
           style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
         >

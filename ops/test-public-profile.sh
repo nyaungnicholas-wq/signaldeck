@@ -90,8 +90,8 @@ fi
 echo "2. private profile (NEXT_PUBLIC_SIGNALDECK_PUBLIC=0)"
 build_with 0
 blob="$(chunks)"
-if grep -q 'location.replace("/login")' <<<"$blob"; then
-  ok 'an anonymous 401 redirects to "/login" -- gated, as a private host should be'
+if grep -q '"/login?next="' <<<"$blob"; then
+  ok 'an anonymous 401 redirects to "/login?next=..." -- gated, as a private host should be'
 else
   bad 'the private build does not send an anonymous visitor to /login'
 fi

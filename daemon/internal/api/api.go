@@ -600,8 +600,11 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// registration at all. Withholding it would hide the button on a
 			// deployment where signup is genuinely open. It discloses nothing —
 			// POSTing to /api/auth/register reveals the same thing.
-			"openSignup": d.Cfg.OpenSignup,
-			"detail":     "sign in or send the API token for the full breakdown",
+			"openSignup": d.signupOpen(),
+			// True while sign-up is configured open but held shut for want of a
+			// bot check, so the sign-up page can say why instead of failing.
+			"signupPaused": d.Cfg.OpenSignup && !d.signupOpen(),
+			"detail":       "sign in or send the API token for the full breakdown",
 			// Public by design: Turnstile site keys are embedded in every page that
 			// renders the widget. Served here so no rebuild is needed to set one.
 			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
@@ -632,7 +635,8 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 		// learn the same thing by POSTing to /api/auth/register and reading the
 		// 403. Health is the right home because it is the one endpoint that is
 		// reachable before you have any credential.
-		"openSignup": d.Cfg.OpenSignup,
+		"openSignup":   d.signupOpen(),
+		"signupPaused": d.Cfg.OpenSignup && !d.signupOpen(),
 	}
 	if werr != nil {
 		// Not being able to READ fleet state is itself unhealthy — say so rather

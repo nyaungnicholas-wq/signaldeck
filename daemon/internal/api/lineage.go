@@ -7,6 +7,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -44,7 +45,7 @@ func (d Deps) lineageTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	g, err := lineage.Trace(r.Context(), d.St, kind, id, depth)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "lineage: "+err.Error())
+		httpInternal(w, fmt.Errorf("lineage: %w", err))
 		return
 	}
 	writeJSON(w, map[string]any{"graph": g, "note": lineageNote})

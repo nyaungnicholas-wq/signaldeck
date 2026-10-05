@@ -12,6 +12,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -90,7 +91,7 @@ func (d Deps) confluence(w http.ResponseWriter, r *http.Request) {
 	}
 	var setup confluence.Setup
 	if err := json.Unmarshal([]byte(row.Payload), &setup); err != nil {
-		httpErr(w, 500, "stored payload does not parse: "+err.Error())
+		httpInternal(w, fmt.Errorf("stored payload does not parse: %w", err))
 		return
 	}
 	votes := setup.Votes

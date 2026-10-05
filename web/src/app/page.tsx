@@ -168,7 +168,7 @@ const TICKER = [
   "Graded against what actually happened",
   "Failures published, not buried",
   "Retired models stay retired",
-  "No figure without an interval",
+  "No skill claim without an interval",
   "Descriptive, never advice",
 ];
 
@@ -196,7 +196,7 @@ const REFUSALS: ReadonlyArray<readonly [string, string]> = [
     // thing it was denying, because it is the one page a reader uses to decide
     // whether to trust the rest. What is actually true is narrower and still
     // worth saying: the simulated book never reaches a broker.
-    "Nothing here is advice, and no order leaves this machine. There is a paper book under Lab that fills simulated orders against recorded prices so a strategy can be inspected end to end; it holds no money, connects to no brokerage, and its fills are a simulation, not evidence of what a real one would have cost.",
+    "Nothing here is advice, and no order leaves this machine. The operator's private workspace has a paper book that fills simulated orders against recorded prices; it holds no money, connects to no brokerage, is not available to visitors or members, and its fills are a simulation, not evidence of what a real one would have cost.",
   ],
   [
     "It will not publish a number it cannot stand behind.",
@@ -516,7 +516,7 @@ export default async function Landing() {
     { value: chain?.count ?? 0, label: "records on the hash chain", tone: "var(--accent)" },
     { value: graded, label: "predictors graded in public", tone: "#38bdf8" },
     { value: condemned, label: "rows failed or retired — shown, not hidden", tone: "var(--bad)" },
-    { value: maxDays, label: "days of live evidence (longest record)", tone: "var(--ok)" },
+    { value: maxDays, label: "distinct graded days (longest record)", tone: "var(--ok)" },
   ].filter((s) => s.value > 0);
 
   return (
@@ -584,7 +584,7 @@ export default async function Landing() {
             <HashChain blocks={chain.blocks} chainOk={chain.verified} brokenAt={chain.brokenAt} />
             <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
               These are the real, current records. Each one&rsquo;s hash covers the one before it, so
-              changing any past claim breaks every link after it. <Link href="/proof" style={{ color: "var(--accent)" }}>Recompute the whole chain yourself →</Link>
+              changing any past claim breaks every link after it. <Link href="/proof" style={{ color: "var(--accent)" }}>See what the daemon re-checked, and how to verify the anchors yourself →</Link>
             </p>
           </Section>
         </Reveal>

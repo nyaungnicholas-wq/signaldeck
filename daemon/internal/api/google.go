@@ -381,9 +381,14 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No account yet: a sign-up, behind the same gates as email sign-up.
+	// No account yet: a sign-up, behind the same gates as email sign-up,
+	// including the bot-check pause (signupOpen) the sign-up page reports.
 	if !d.Cfg.OpenSignup {
 		httpErr(w, http.StatusForbidden, "registration is closed")
+		return
+	}
+	if !d.signupOpen() {
+		httpErr(w, http.StatusServiceUnavailable, signupPaused)
 		return
 	}
 	if !signupLimiter.allow(acctKey(key)) {
@@ -424,7 +429,7 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	slog.Info("google sign-up", "uid", uid, "username", username)
+	slog.Info("google sign-up", "uid", uid) // the username is derived from the Gmail address
 	d.googleSession(ctx, w, r, uid, username)
 }
 

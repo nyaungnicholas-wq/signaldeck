@@ -11,6 +11,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -71,7 +72,7 @@ func (d Deps) smartMoney(w http.ResponseWriter, r *http.Request) {
 	}
 	var pay smartmoney.Payload
 	if err := json.Unmarshal([]byte(row.Payload), &pay); err != nil {
-		httpErr(w, 500, "stored payload does not parse: "+err.Error())
+		httpInternal(w, fmt.Errorf("stored payload does not parse: %w", err))
 		return
 	}
 	factors := pay.Factors

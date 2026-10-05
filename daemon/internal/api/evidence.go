@@ -12,6 +12,7 @@ package api
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -35,7 +36,7 @@ func (d Deps) evidenceList(w http.ResponseWriter, r *http.Request) {
 	feature := r.URL.Query().Get("feature")
 	claims, err := evidence.List(r.Context(), d.St, status, feature)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "evidence: "+err.Error())
+		httpInternal(w, fmt.Errorf("evidence: %w", err))
 		return
 	}
 	for i := range claims {
@@ -58,7 +59,7 @@ func (d Deps) evidenceOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "evidence: "+err.Error())
+		httpInternal(w, fmt.Errorf("evidence: %w", err))
 		return
 	}
 	writeJSON(w, map[string]any{"claim": datedRetirement(c), "note": evidenceNote})

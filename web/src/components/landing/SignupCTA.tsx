@@ -14,7 +14,7 @@ export default function SignupCTA() {
           Watch the record get written.
         </h2>
         <p className="max-w-[56ch] text-[0.98rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          Make an account to follow the live grades as the evidence lands — including the ones that fail. We confirm your email, never sell it, and never send anything but the record.
+          Make an account to follow the live grades as the evidence lands — including the ones that fail. We confirm your email and never sell it. Besides account emails (confirmation, password reset, or a notice that an address already has an account), we send only a daily watchlist read, and only if you turn it on.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <Link href="/signup" className="cta-primary">Create free account</Link>

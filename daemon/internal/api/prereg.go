@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,12 +27,12 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 
 	recs, err := d.St.PreregRecords(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "prereg: "+err.Error())
+		httpInternal(w, fmt.Errorf("prereg: %w", err))
 		return
 	}
 	ok, brokenAt, err := d.St.VerifyPrereg(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "prereg verify: "+err.Error())
+		httpInternal(w, fmt.Errorf("prereg verify: %w", err))
 		return
 	}
 

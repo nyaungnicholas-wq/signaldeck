@@ -11,6 +11,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -31,7 +32,7 @@ func (d Deps) evDecisions(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	rows, err := d.St.EVDecisions(r.Context(), q.Get("decision"), q.Get("symbol"), limit)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, "ev-decisions: "+err.Error())
+		httpInternal(w, fmt.Errorf("ev-decisions: %w", err))
 		return
 	}
 	// The stored snapshot is JSON already; re-emit it as an object rather than

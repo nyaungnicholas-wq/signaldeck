@@ -228,7 +228,7 @@ export default function CompanyPeekProvider({ children }: { children: React.Reac
             {report?.regimeStack?.length || report?.vol63 ? (
               <div className="panel p-3">
                 <div className="mb-1 text-[0.7rem] font-semibold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
-                  VALIDATED SIGNALS
+                  BACKTEST-VALIDATED SIGNALS
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {(report?.regimeStack ?? []).map((f) => (

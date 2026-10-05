@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef, Suspense } from "react";
+import { useState, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
@@ -8,15 +8,18 @@ function VerifyInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token") ?? "";
-  const [status, setStatus] = useState<"working" | "ok" | "error">(token ? "working" : "error");
+  // "ready" waits for a click. The token used to be redeemed on page load, so
+  // any mail scanner that opened the link and ran its script confirmed the
+  // address and received the session cookie (2026-10-05 security review).
+  const [status, setStatus] = useState<"ready" | "working" | "ok" | "error">(token ? "ready" : "error");
   const [message, setMessage] = useState(token ? "" : "This link is missing its token.");
   const executedRef = useRef(false);
 
-  useEffect(() => {
-    if (executedRef.current) return;
+  const confirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (executedRef.current || !token) return;
     executedRef.current = true;
-
-    if (!token) return;
+    setStatus("working");
 
     // A 503 means the server was busy and the link was NOT spent, so try again
     // quietly a few times before showing anything.
@@ -51,17 +54,30 @@ function VerifyInner() {
           setMessage("Request failed");
         }
       });
-  }, [token, router]);
+  };
 
   return (
     <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4 px-4">
-      <form className="panel w-full max-w-sm">
+      <form className="panel w-full max-w-sm" onSubmit={confirm}>
         <div className="panel-h">
           <span aria-hidden="true" className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--accent)" }} />
           <span className="mono tracking-[0.22em]">SIGNALDECK</span>
         </div>
         <div className="p-6">
           <h1 className="mb-6 text-lg font-bold tracking-widest text-[var(--text)]">CONFIRM EMAIL</h1>
+          {status === "ready" && (
+            <>
+              <p className="mb-4 text-xs leading-relaxed text-[var(--dim)]">
+                Confirm the email address for your SignalDeck account. The link works once.
+              </p>
+              <button
+                type="submit"
+                className="w-full rounded-lg border border-[var(--accent)] px-4 py-2 text-xs font-bold tracking-widest text-[var(--accent)] transition-colors duration-150 hover:bg-[var(--accent)] hover:text-[var(--bg)]"
+              >
+                CONFIRM MY EMAIL
+              </button>
+            </>
+          )}
           {status === "working" && (
             <p className="text-sm text-[var(--dim)]">Confirming…</p>
           )}
