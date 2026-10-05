@@ -60,10 +60,10 @@ export default function VolRegimeLead({ memberView = false }: { memberView?: boo
     .slice(0, 6);
 
   return (
-    <section className="panel" aria-label="volatility regime — the validated forecast">
+    <section className="panel" aria-label="volatility regime — the backtest-validated forecast">
       <div className="panel-h flex-wrap gap-2">
         <span>VOLATILITY REGIME</span>
-        <span className="chip px-2 py-[1px] text-[0.75rem]">the validated forecast</span>
+        <span className="chip px-2 py-[1px] text-[0.75rem]">the backtest-validated forecast</span>
         <HelpTip label="Why this one leads">
           {data.whyHonest || data.what}
           {data.what && data.whyHonest ? ` ${data.what}` : ""}
