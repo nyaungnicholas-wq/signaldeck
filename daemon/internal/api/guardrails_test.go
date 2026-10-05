@@ -36,6 +36,7 @@ var perUserRoutes = map[string]string{
 	"/api/auth/me":     "the session's own identity",
 	"/api/alert-prefs": "the member's own on/off delivery switches",
 	"/api/journal":     "the member's own calls and their grade; never a SignalDeck forecast, and no price or return",
+	"/api/account/export": "the member's own account data for download (AUD-05): their settings, list and calls, never a forecast",
 }
 
 // TestMemberForecastsAreImpersonal: two members with different watchlists and

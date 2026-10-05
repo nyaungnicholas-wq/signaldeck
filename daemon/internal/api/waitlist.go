@@ -55,6 +55,12 @@ func normaliseEmail(raw string) (string, bool) {
 	return e, true
 }
 
+// waitlistCap bounds the anonymous notification list; waitlistLimiter bounds
+// how fast one network can add to it. A var only so a test can lower it.
+var waitlistCap = 20000
+
+var waitlistLimiter = newWindowLimiter(5, time.Hour)
+
 type waitlistReq struct {
 	Email string `json:"email"`
 	// HP is a honeypot: a field hidden from humans in the browser. Anything
@@ -89,6 +95,20 @@ func (d Deps) waitlistAdd(w http.ResponseWriter, r *http.Request) {
 	email, ok := normaliseEmail(req.Email)
 	if !ok {
 		httpErr(w, 400, "that does not look like an email address")
+		return
+	}
+	// Bounded (2026-10-05 review: the anonymous list grew without limit).
+	// Per network first, then a ceiling no real launch list approaches.
+	if !waitlistLimiter.allow(acctKey(d.clientKey(r, 0))) {
+		w.Header().Set("Retry-After", "3600")
+		httpErr(w, http.StatusTooManyRequests, "too many sign-ups from this network — try again later")
+		return
+	}
+	if n, err := d.St.CountWaitlist(r.Context()); err != nil {
+		httpInternal(w, err)
+		return
+	} else if n >= waitlistCap {
+		httpErr(w, http.StatusServiceUnavailable, "the notification list is full")
 		return
 	}
 	source := req.Source

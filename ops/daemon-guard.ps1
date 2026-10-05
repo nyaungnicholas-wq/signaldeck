@@ -23,6 +23,37 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+$HEALTH_TIMEOUT_SEC = 30
+$MIN_UPTIME_MIN = 20
+$STRIKES_TO_RESTART = 3
+function Test-ShouldRestart([int]$strikes, [double]$uptimeMin) {
+    return ($uptimeMin -ge $MIN_UPTIME_MIN -and $strikes -ge $STRIKES_TO_RESTART)
+}
+# Any HTTP status, 403/429/503 included, means the daemon is alive: this is a
+# hang check, not a health check. Invoke-WebRequest throws on every non-2xx in
+# PS 5.1, so a 429 from the shared loopback bucket counted as a strike and could
+# kill a healthy daemon (2026-10-05 review S1). curl.exe prints 000 when nothing
+# answered.
+function Test-Answered([string]$code) {
+    return ($code -match '^[1-5][0-9][0-9]$')
+}
+function Get-HttpCode([string]$url) {
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (-not (Test-Path $curl)) { return 'nocurl' }
+    try { return [string](& $curl -s --noproxy '*' -o NUL -w '%{http_code}' -m $HEALTH_TIMEOUT_SEC $url) } catch { return '000' }
+}
+if ($args.Count -gt 0 -and $args[0] -eq '__selfcheck') {
+    $bad = 0
+    foreach ($c in @('200', '403', '429', '503')) { if (-not (Test-Answered $c)) { Write-Output "FAIL: HTTP $c counted as no answer"; $bad++ } }
+    foreach ($c in @('000', '', 'nocurl')) { if (Test-Answered $c) { Write-Output "FAIL: '$c' counted as an answer"; $bad++ } }
+    $dead = Get-HttpCode 'http://127.0.0.1:9/'
+    if (Test-Answered $dead) { Write-Output "FAIL: a closed port answered ($dead)"; $bad++ }
+    if (Test-ShouldRestart 3 5)  { Write-Output 'FAIL: restarted a daemon still booting'; $bad++ }
+    if (Test-ShouldRestart 2 60) { Write-Output 'FAIL: restarted on two strikes'; $bad++ }
+    if (-not (Test-ShouldRestart 3 60)) { Write-Output 'FAIL: did not restart after three strikes'; $bad++ }
+    if ($bad -eq 0) { Write-Output 'SELFCHECK OK' } else { exit 1 }
+    exit 0
+}
 
 # THIS SCRIPT WRITES ITS OWN LOG, because its task cannot be made to.
 #
@@ -153,9 +184,46 @@ if (-not (Test-Path $refresh)) {
     }
 }
 
-if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
-    Write-Output "signaldeckd already running: nothing to do"
-    exit 0
+# HANG DETECTION (2026-10-05 audit, AUD-13). "The process exists" was the whole
+# check, so a daemon that stopped answering but stayed alive was never
+# restarted. Now a running daemon must also answer /api/health. A miss counts
+# as a strike only once the process is old enough to be past boot and WAL
+# recovery (measured up to ~7 min); three consecutive strikes (about 15 min
+# unanswered) restart it. Any answer clears the strikes.
+$strikeFile = Join-Path $root 'logs\daemon-guard.strikes'
+# Only the live binary: e2e, drill and audit copies run under the same name
+# on other ports (2026-10-05 review). A path this account cannot read (the
+# Services session) keeps the old behaviour rather than hiding the daemon.
+$running = Get-Process -Name signaldeckd -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.Path -or $_.Path -eq $exe } | Select-Object -First 1
+if ($running) {
+    $code = Get-HttpCode 'http://127.0.0.1:8322/api/health'
+    if ($code -eq 'nocurl') {
+        Write-Output "hang check SKIPPED: no curl.exe; a probe that cannot run never kills the daemon"
+        exit 0
+    }
+    if (Test-Answered $code) {
+        Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue
+        Write-Output "signaldeckd running and answering (HTTP $code): nothing to do"
+        exit 0
+    }
+    $uptimeMin = 0
+    try { $uptimeMin = ((Get-Date) - $running.StartTime).TotalMinutes } catch { Write-Output "hang check: could not read the daemon's start time ($_); not counting this miss" }
+    $strikes = 1
+    if (Test-Path $strikeFile) {
+        $prev = 0
+        if ([int]::TryParse((Get-Content $strikeFile -TotalCount 1), [ref]$prev)) { $strikes = $prev + 1 }
+    }
+    if ($uptimeMin -lt $MIN_UPTIME_MIN) { $strikes = 0 }
+    Set-Content -Path $strikeFile -Value $strikes -Encoding ascii
+    if (-not (Test-ShouldRestart $strikes $uptimeMin)) {
+        Write-Output ("signaldeckd running but NOT answering /api/health (strike {0} of {1}, up {2:N0} min): waiting" -f $strikes, $STRIKES_TO_RESTART, $uptimeMin)
+        exit 0
+    }
+    Write-Output ("signaldeckd HUNG: no /api/health answer on {0} consecutive checks (up {1:N0} min): killing pid {2} and restarting" -f $strikes, $uptimeMin, $running.Id)
+    Stop-Process -Id $running.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+    Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue
 }
 
 # -Wait, deliberately: this script must STAY the task's running process for as
@@ -215,6 +283,25 @@ if (Test-Path $prov) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
 } else {
     Write-Output "WARNING: provenance preflight NOT RUN - $prov is missing (a copy exists at round2-drafts\devops\). The daemon is starting WITHOUT a stale-binary check."
+}
+
+# Publication posture (AUD-09; 2026-10-05 review S4). An early warning: do not
+# start a binary that reads daemon\.env as unpublished while a tunnel runs
+# (every tunnel visitor would be local, with operator authority). The daemon
+# refuses that itself at startup (cmd/signaldeckd/posture.go), which also
+# covers the starts that bypass this script (market-close, refresh, collect,
+# the task's restart-on-failure). Exit 3 is the binary's "not published"; any
+# other code (a binary built before the flag existed) starts as before.
+if (Get-Process -Name cloudflared -ErrorAction SilentlyContinue) {
+    $pc = 0
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    Push-Location (Join-Path $root 'daemon')
+    try { & $exe -publication-posture | Select-Object -Last 1 | ForEach-Object { Write-Output $_ }; $pc = $LASTEXITCODE } catch { $pc = 0 } finally { Pop-Location; $ErrorActionPreference = $eap }
+    if ($pc -eq 3) {
+        Write-Output "NOT starting signaldeckd: a tunnel is running and daemon\.env makes it unpublished. Set SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG or SIGNALDECK_PUBLIC_SURFACE=1 first (ops/CLOUDFLARE_TUNNEL.md section 3)."
+        exit 1
+    }
 }
 
 $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'

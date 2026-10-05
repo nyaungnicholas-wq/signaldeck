@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -57,7 +60,37 @@ func newWaitlistDeps(t *testing.T) Deps {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	oldLim := waitlistLimiter
+	waitlistLimiter = newWindowLimiter(5, time.Hour)
+	t.Cleanup(func() { waitlistLimiter = oldLim })
 	return Deps{St: st, Cfg: config.Config{}}
+}
+
+// TestWaitlistIsBounded: the anonymous list grew without limit (2026-10-05
+// review). One network gets 5 adds an hour, and the list stops at its cap.
+func TestWaitlistIsBounded(t *testing.T) {
+	d := newWaitlistDeps(t)
+	for i := 0; i < 5; i++ {
+		if rec := post(t, d, fmt.Sprintf(`{"email":"n%d@b.co"}`, i)); rec.Code != 200 {
+			t.Fatalf("add %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := post(t, d, `{"email":"n6@b.co"}`); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sixth add from one network: %d, want 429", rec.Code)
+	}
+
+	d = newWaitlistDeps(t) // fresh store and limiter
+	oldCap := waitlistCap
+	waitlistCap = 2
+	t.Cleanup(func() { waitlistCap = oldCap })
+	post(t, d, `{"email":"c1@b.co"}`)
+	post(t, d, `{"email":"c2@b.co"}`)
+	if rec := post(t, d, `{"email":"c3@b.co"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("add past the cap: %d, want 503", rec.Code)
+	}
+	if n, _ := d.St.CountWaitlist(context.Background()); n != 2 {
+		t.Fatalf("stored %d rows past a cap of 2", n)
+	}
 }
 
 func post(t *testing.T, d Deps, body string) *httptest.ResponseRecorder {

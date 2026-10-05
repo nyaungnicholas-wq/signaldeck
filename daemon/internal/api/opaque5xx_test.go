@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,5 +49,23 @@ func TestNoRawErrorsIn5xxBodies(t *testing.T) {
 func TestAIErrorsAreNotEchoed(t *testing.T) {
 	if got := aiErr(errors.New("SQL logic error: no such table: insights")); strings.Contains(got, "SQL") {
 		t.Fatalf("aiErr echoed the raw error: %q", got)
+	}
+}
+
+// TestAccuracyRefusalCarriesNoReadError pins the 2026-10-05 review: an
+// anonymous /api/accuracy refusal named the failed read's raw error, which for
+// a missing registry is a server filesystem path (AUD-22's rule).
+func TestAccuracyRefusalCarriesNoReadError(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	freshHeartbeat(t, st)
+	d.RegistryPath = filepath.Join(t.TempDir(), "missing-registry.json")
+	rr := httptest.NewRecorder()
+	d.accuracy(rr, httptest.NewRequest("GET", "/api/accuracy", nil))
+	body := rr.Body.String()
+	if !strings.Contains(body, "accuracy registry unavailable") {
+		t.Fatalf("not refused as unavailable: %d %s", rr.Code, body)
+	}
+	if strings.Contains(body, "missing-registry") || strings.Contains(body, "no such file") || strings.Contains(body, "cannot find") {
+		t.Fatalf("the refusal echoes the read error: %s", body)
 	}
 }

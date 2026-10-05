@@ -36,7 +36,7 @@ const REQUEST_HEADERS = [
 ] as const;
 // location: fetch() runs with redirect:"manual", so an upstream 3xx must
 // carry its Location through or the browser gets an unfollowable redirect.
-const RESPONSE_HEADERS = ["content-type", "retry-after", "cache-control", "location"] as const;
+const RESPONSE_HEADERS = ["content-type", "retry-after", "cache-control", "location", "content-disposition"] as const;
 
 function cappedBody(body: ReadableStream<Uint8Array>, onOverflow: () => void): ReadableStream<Uint8Array> {
   // A Content-Length check alone cannot do this job, because a chunked upload declares no length

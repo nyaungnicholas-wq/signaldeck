@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // tokenEqual compares a presented credential to the configured one in constant
@@ -259,11 +262,105 @@ func (f *failCounter) sweep(now time.Time) {
 // this machine" = loopback socket AND no forwarded hop but loopback. Both
 // tunnels (Cloudflare, ngrok) append the client's real address as the last
 // hop, so no internet client lands on the console ladder.
-func lockoutKey(r *http.Request, name string) string {
+//
+// A browser that has signed in to this account before carries a signed
+// known-device cookie and counts on a third ladder (OWASP "device cookies"):
+// an attacker who keeps a member's name locked from the internet no longer
+// locks that member out of their own browser (2026-10-05 review, residual of
+// the console fix). The cookie cannot be forged without the per-install key.
+func (d Deps) lockoutKey(r *http.Request, name string) string {
 	if remoteAddrIsLoopback(r) && lastHopLoopback(r.Header.Get("X-Forwarded-For")) {
 		return name + "|console"
 	}
+	if c, err := r.Cookie(deviceCookie); err == nil && c.Value != "" {
+		if key := d.deviceKey(r.Context()); key != nil && hmac.Equal([]byte(c.Value), []byte(deviceMAC(key, name))) {
+			return name + "|device"
+		}
+	}
 	return name
+}
+
+const (
+	deviceCookie  = "signaldeck_device"
+	metaDeviceKey = "known_device_key"
+	deviceTTL     = 180 * 24 * time.Hour
+)
+
+// deviceKeyMemo holds the known-device HMAC key per store, read from meta once
+// and created on first use. Losing it only resets every browser to the shared
+// ladder until its next sign-in.
+var deviceKeyMemo struct {
+	sync.Mutex
+	st  *store.Store
+	key []byte
+}
+
+// deviceKey returns the known-device key, or nil (callers fall back to the
+// shared ladder). A failed read never creates a key: overwriting the stored one
+// voided every device cookie. Creation is insert-if-absent then re-read, and no
+// lock is held across database I/O (2026-10-05 review S3).
+func (d Deps) deviceKey(ctx context.Context) []byte {
+	if d.St == nil {
+		return nil
+	}
+	deviceKeyMemo.Lock()
+	if deviceKeyMemo.st == d.St && deviceKeyMemo.key != nil {
+		k := deviceKeyMemo.key
+		deviceKeyMemo.Unlock()
+		return k
+	}
+	deviceKeyMemo.Unlock()
+	v, err := d.St.GetMeta(ctx, metaDeviceKey)
+	if err != nil {
+		return nil
+	}
+	if v == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return nil
+		}
+		// Runs inside a sign-in: go ahead of the worker fleet.
+		if err := d.prioritized(func() error {
+			return d.St.SetMetaIfAbsent(ctx, metaDeviceKey, hex.EncodeToString(b))
+		}); err != nil {
+			return nil
+		}
+		if v, err = d.St.GetMeta(ctx, metaDeviceKey); err != nil {
+			return nil
+		}
+	}
+	key, err := hex.DecodeString(v)
+	if err != nil || len(key) != 32 {
+		return nil
+	}
+	deviceKeyMemo.Lock()
+	deviceKeyMemo.st, deviceKeyMemo.key = d.St, key
+	deviceKeyMemo.Unlock()
+	return key
+}
+
+func deviceMAC(key []byte, name string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("known-device|v1|" + name))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// setDeviceCookie marks this browser as one that has signed in as name. It is
+// scoped to /api/auth: no other route ever needs it.
+func (d Deps) setDeviceCookie(w http.ResponseWriter, r *http.Request, name string) {
+	key := d.deviceKey(r.Context())
+	if key == nil {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     deviceCookie,
+		Value:    deviceMAC(key, name),
+		Path:     "/api/auth",
+		MaxAge:   int(deviceTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   d.secureCookie(r),
+	})
 }
 
 // nameDigest is a short, stable stand-in for a typed username in logs.
@@ -316,7 +413,7 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 	// ~100ms hash on an attacker, and answering fast here is not an oracle
 	// because the lockout key exists for unknown usernames too.
 	now := time.Now()
-	lockKey := lockoutKey(r, name)
+	lockKey := d.lockoutKey(r, name)
 	if wait := loginFailures.retryAfter(lockKey, now); wait > 0 {
 		// Round UP, and never below a second. Rounding to nearest produced
 		// "try again in 0s" for any sub-500ms remainder — an instruction to
@@ -365,6 +462,7 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Clear the counter only for a sign-in that actually issues a session.
 	loginFailures.succeed(lockKey)
+	d.setDeviceCookie(w, r, name)
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 

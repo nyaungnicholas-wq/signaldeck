@@ -142,6 +142,41 @@ func (s *Store) RetirementHistory(ctx context.Context, predictor, horizon, varia
 	return true, reason, source, nil
 }
 
+// RetiredVerdict is the first retirement on record for one row.
+type RetiredVerdict struct {
+	Predictor, Horizon, Variant, Reason, Source string
+}
+
+// RetiredVerdicts lists every row ever retired, with its first retirement's
+// reason and source. Retirement is sticky, so a row the current registry no
+// longer carries is still retired; /api/accuracy serves these (AUD-12).
+func (s *Store) RetiredVerdicts(ctx context.Context) ([]RetiredVerdict, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT predictor, horizon, variant, COALESCE(retire_reason,''), COALESCE(retirement_source,'')
+		  FROM publication_verdicts
+		 WHERE retired=1
+		 ORDER BY predictor, horizon, variant, evaluated_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []RetiredVerdict
+	seen := map[[3]string]bool{}
+	for rows.Next() {
+		var v RetiredVerdict
+		if err := rows.Scan(&v.Predictor, &v.Horizon, &v.Variant, &v.Reason, &v.Source); err != nil {
+			return nil, err
+		}
+		k := [3]string{v.Predictor, v.Horizon, v.Variant}
+		if seen[k] {
+			continue // earliest retirement only
+		}
+		seen[k] = true
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // GraderHeartbeat is one record of whether the GRADE ran — not whether the
 // process started. A scheduled task exiting 0 proves only the latter, which is
 // how a 33-hour grading outage reported success on 2026-08-03.

@@ -88,12 +88,85 @@ Role, start state, steps, expected and actual. P = public tunnel, I = isolated c
 | J27 | I + P | anonymous | `/api/track-record?horizon=1d` | No `regimes`, no `paper` (isolated copy and production after deploy). PASS |
 | J28 | I | member | /today | Paper P&L block absent, no error boundary, no failing requests. PASS |
 
+## Round 4 (e35fe93d plus the proxy fix)
+
+| Check | Result |
+|---|---|
+| `go test ./internal/api/ -count=1` | ok (43.7 s). One earlier run failed TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly at its 30 s wait while a Next build and two isolated boots shared the CPU; it then passed 3/3 alone and in the full run. Recorded as load-sensitive, not fixed |
+| store, pipeline, mcp packages; `go vet` | ok |
+| `npm test` (web) | 146 pass. The new Content-Disposition test FAILS when the header is removed from the allowlist |
+| `ops/daemon-guard.ps1 __selfcheck`; PowerShell 5.1 parse | SELFCHECK OK; 0 parse errors |
+| `bash ops/test-publication-posture.sh` | 7 cases OK |
+
+| # | Env | Role | Journey | Result |
+|---|---|---|---|---|
+| J29 | I | member | Account page | YOUR DATA panel renders under ALERTS. PASS |
+| J30 | I | member | Download my data | 200, JSON with account, member_symbols, member_calls, member_alert_prefs, member_digest_tries; no hash, token or session text. Through the proxy the attachment header was missing; fixed (proxy allowlist) and re-checked: `attachment; filename="signaldeck-my-data.json"`. PASS |
+| J31 | I | member | Delete with a wrong password | "that password is not right"; account intact. PASS |
+| J32 | I | member | Delete with the password | Lands on /; /api/auth/me 401; sign-in with the same credentials 401; export 401; DB: user row and sessions gone, admin row intact. PASS |
+| J33 | I | anonymous | `/api/accuracy` on the 10-03 backup | 503 REFUSED_STALE (last grade 26h49m old, max 26h): fails closed. The retired rows are checked in production after deploy |
+
+## Round 5 (the fresh-context review of round 4)
+
+The review (scratch report, not committed) found 2 must-fix and 4 should-fix. Each fix has a test that fails on the old code (mutation-checked).
+
+| Review item | Fix | Proof |
+|---|---|---|
+| M1 delete fails under worker load (read-then-write on a deferred transaction: SQLITE_BUSY with no wait) | Write first; the delete also goes ahead of the fleet (Priority) | TestDeleteAccountWaitsForTheWriteLock: old order fails `database is locked (5)` |
+| M2 deploy posture refusal came after the daemon was stopped | Check runs in build_from_head before the stop (deploy and launch) | Reviewed in ctl; self-test below |
+| S1 guard counted HTTP 403/429 as hang strikes (PS 5.1 throws on non-2xx) | curl.exe status code; any HTTP status = alive | Selfcheck fails on the old 2xx-only rule (3 FAIL lines) |
+| S2 a locked name blocked the member's own delete | Delete keeps a session-only ladder | Delete through an internet hop with the name locked: 200; old key: 429 |
+| S3 device key replaced on a read error; created under a global lock on the busy writer | Read-only on error; insert-if-absent on the account writer; per-store memo | TestDeviceKeyIsReadNotReplaced fails on a global memo |
+| S4 posture grep disagreed with the daemon's .env parser | The binary answers (`-publication-posture`); the guard asks it too | TestPublishedReadsDotEnvLikeTheDaemon (8 cases incl. quoted-empty, `1x`, later blank, tunnel host); shell self-test 6 cases, fails on an always-allow mutant; live: the new binary reads production as `published` |
+| Notes | Runbook ngrok check; landing "over 0 forecasts"; raw read errors in /api/accuracy refusals; registry candidates reaching the live file from a package directory; MCP claim; returning-member sign-up mail; copilot quota on a reused id | TestAccuracyRefusalCarriesNoReadError (old code leaks a full path), TestSignupDoesNotRevealTakenUsernames (old order fails), TestRegistryCandidatesAnchorOnTheBinary, delete test checks the quota keys |
+
+| Check | Result |
+|---|---|
+| Hour-sliced prune on a copy of the 10-03 backup (30-day window) | Backlog: 127,904 scores + 2,663 composite rows in 17.0 s + 3.1 s, **0** write-lock holds over 3 s (10-04 live: 125 holds of 3-48 s). Steady state: 3.0 s + 3.4 s against 3.5 s + 2.8 s for day slices |
+| Load, isolated copy only (never the tunnel): web tier, 50 simulated clients, 20 concurrent, 60 s | 33,254 requests, 554/s, 0 errors, p95 83 ms, max 697 ms. /api/accuracy 503 throughout = the stale refusal on the old backup |
+| Load, daemon directly, 50 clients, 20 concurrent, 30 s | 107,412 requests, 3,580/s, 0 errors; the rate limiter answered 85% with 429; served requests p95 under 65 ms; /api/health 200 in 15 ms afterwards |
+
+The first load run opened a new connection per request and exhausted the machine's ephemeral ports (the daemon's own probe logged it); the tool now keeps connections alive and counts every status. That run is discarded.
+
+## Round 6 (the fresh-context review of round 5)
+
+The review confirmed the remaining round-4 items closed (it measured the delete waiting 1.84 s for the lock, and the guard's exit-3 refusal coming through the PowerShell pipeline). Two items were only partly closed and became this round's fixes: AUD-09 coverage (an overclaim) and a masking path in the guard's probe.
+
+| Review item | Fix | Proof |
+|---|---|---|
+| M1 AUD-09 claimed every automatic start was checked; market-close, refresh, collect and restart-on-failure start the Daemon task directly | The daemon on the web tier's port (8322) refuses at startup (exit 3) when unpublished while cloudflared runs; copies on other ports start normally | TestUnpublishedDaemonRefusesBehindATunnel (6 cases). Real binary on this host with the tunnel up, configured for 8322 against a scratch root: exits 3 with the reason (live daemon unaffected). The e2e test's scratch daemon (another port) starts; it failed while the first draft refused on every port |
+| S1 a 429 from the shared loopback bucket answered the guard's probe, so a wedged daemon under traffic was never restarted | A direct loopback GET of /api/health with no forwarded hop and no proxy key skips the limiter | TestLocalHealthProbeSkipsTheLimiter: with the bucket empty the direct probe gets 200, a proxy-keyed request still 429; the old rule fails it (429) |
+| Notes | Priority released by defer; stale lockout comment; a concurrent second delete answers 401, not 500; device-key creation goes ahead of the fleet; curl `--noproxy '*'`; launch names the real refusal; a warning when no process tool exists; runbook names the 503 "webhook disabled" answer; AUD-22 states what the collapse-gate reason can carry | The guard edits: selfcheck OK, PS 5.1 parse 0 errors, its exact curl call returns 200 from the live daemon. The 401, the device-key priority and the defer were code-reviewed in round 6; round 7 adds tests for the delete paths |
+
+## Round 7 (the fresh-context review of round 6)
+
+No must-fix. Two should-fix and the notes, each with a test that fails on the old code:
+
+| Review item | Fix | Proof |
+|---|---|---|
+| S1 the posture check ran only at start: a tunnel that came up after the daemon (logon order, tunnel restart, first go-live) was never caught | A watcher re-checks every minute and stops an unpublished daemon on 8322 gracefully with exit 3 | TestWatchPostureStopsWhenATunnelAppears (fails when the watcher does not stop) |
+| S2 `tasklist` is a WMI client with no timeout on the startup path; "cannot tell" was silent | Toolhelp snapshot on Windows (no WMI, ms instead of 0.8 s), `pgrep` with a 10 s timeout elsewhere; "cannot tell" is logged | TestUnpublishedDaemonRefusesBehindATunnel requires the process list to be readable on the test host and the unknown case to be reported |
+| Notes | Port compared as a number (`:08322`); the check runs before the database opens; delete matches the verified username as well as the id (a reused id is never erased); `prioritized` helper for both priority holds; the limiter comment says why web requests always carry the hop; runbook's Host-refusal answer is a 403 `forbidden host`; AUD-09 and AUD-13 list their residuals | Leading-zero case fails on a string compare; the store test fails (`delete under another name: <nil>`) without the username match; real binary on 8322: exit 3, no database or data directory created, live daemon unaffected |
+
+## Round 8 (the pre-deploy review of the whole branch)
+
+Verdict DEPLOY: GO, no must-fix. It ran the full gate set CI and ctl deploy run (go vet, golangci-lint on Windows and Linux, `go test ./...` 133 packages, web tests, tsc, eslint, 481 Python tool tests, the docs and deck gates, the controls table) and measured this branch's binary reading production as published.
+
+| Review item | Fix | Proof |
+|---|---|---|
+| S1 a bare `pgrep` in lib-deploy.sh turned CI's ops step red (test-no-bare-pkill) before the posture self-test ran | The call sits on its `command -v` line | `ops/test-no-bare-pkill.sh`: all checks passed; posture self-test 6 cases |
+| S2 the waitlist limiter keys on the client key, which is site-wide when TRUST_PROXY is off | Live has TRUST_PROXY on (the one boolean was read, nothing else), so the key is the visitor's address; recorded on AUD-32 | |
+| N1 a posture stop exited 0 (read as an operator stop) when a worker outlived the 75 s drain | OperatorStop excludes the posture cause | TestPostureWatchWiring (an operator cancel is not a posture stop); the run.go line is code-reviewed |
+| N2 the main.go watcher wiring had no test | `startPostureWatch` and `postureStopped`, used by main and run | TestPostureWatchWiring fails when the watcher is not started |
+| N3 the guard's hang check took any `signaldeckd` copy | It takes the live binary only; an unreadable path keeps the old behaviour | selfcheck OK, PS 5.1 parse 0 errors; from this session the Services-session daemon's path is unreadable, so the fallback is what runs there |
+| N4 AUD-09 residuals | Image-name and Docker clauses added | |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
 - Google sign-in: no client ID is configured anywhere.
 - Turnstile with real keys: none exist; the server path is covered only by the stubbed-siteverify tests.
 - Keyboard-only and screen-reader passes: only spot checks (skip link present, labelled form fields, focus moved to the error box on sign-up). No full assistive-technology run.
-- Load: no concurrency test was run against any environment this pass.
+- Load against production: deliberately not run (the brief forbids stressing the public tunnel). The isolated copy was loaded (Round 5 above); production capacity behind Cloudflare is not measured.
 - Restore drill: the weekly data-level rehearsal is recorded passing (latest 2026-10-04 07:18). This audit did not run the full drill. Commands are in the ops review.
 - The production member view of `/today` (it needs a member account on production).

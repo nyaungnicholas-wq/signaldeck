@@ -544,6 +544,16 @@ func (c Config) ReachablePrivately() bool {
 	return reachablePrivately(c.HTTPAddr, strings.Join(c.AllowedHosts, ","))
 }
 
+// Published is true whenever strangers can reach the daemon: an explicit public
+// surface, a public URL or quick-tunnel log, or a tunnel/allowlisted host. A
+// configured public URL or tunnel log is an explicit statement; relying on
+// ReachablePrivately() alone made the whole member tier hinge on a stale
+// hostname left in ALLOWED_HOSTS. `signaldeckd -publication-posture` prints
+// this, so the deploy preflight reads .env exactly as the daemon does.
+func (c Config) Published() bool {
+	return c.PublicSurface || c.PublicURL != "" || c.TunnelLog != "" || !c.ReachablePrivately()
+}
+
 // PublicOriginMissing reports a stated public deployment whose browser-origin
 // allowlist names no HTTPS origin.
 //

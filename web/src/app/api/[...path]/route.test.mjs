@@ -27,3 +27,12 @@ test("upstreamPath carries no query", () => {
   assert.ok(m, "upstreamPath not found");
   assert.ok(!/search|\?/.test(m[1]), `upstreamPath includes a query: ${m[1]}`);
 });
+
+// The daemon's attachment routes (account export, the CSV exports) name their
+// file in Content-Disposition; a proxy that drops it serves them as a page
+// instead of a download (2026-10-05 audit).
+test("the proxy passes Content-Disposition through", () => {
+  const m = src.match(/const RESPONSE_HEADERS = \[([^\]]*)\]/);
+  assert.ok(m, "RESPONSE_HEADERS not found");
+  assert.match(m[1], /"content-disposition"/);
+});

@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -479,10 +478,7 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) *float64 {
 func (w *ModelHealthWorker) registryFlags() (map[string]regFlag, error) {
 	path := w.RegistryPath
 	if path == "" {
-		for _, p := range []string{
-			filepath.Join("..", "data", "accuracy_registry.json"),
-			filepath.Join("data", "accuracy_registry.json"),
-		} {
+		for _, p := range RegistryCandidates() {
 			if _, err := os.Stat(p); err == nil {
 				path = p
 				break

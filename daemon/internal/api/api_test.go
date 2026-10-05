@@ -287,7 +287,11 @@ func TestRateLimit429WithRetryAfter(t *testing.T) {
 	})
 	var got429 bool
 	for i := 0; i < 30; i++ {
-		resp, err := http.Get(srv.URL + "/api/health")
+		// As a proxied visitor: a direct local probe of /api/health is exempt
+		// (TestLocalHealthProbeSkipsTheLimiter).
+		req, _ := http.NewRequest("GET", srv.URL+"/api/health", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.7")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}
@@ -303,6 +307,45 @@ func TestRateLimit429WithRetryAfter(t *testing.T) {
 	}
 	if !got429 {
 		t.Fatalf("never rate limited after 30 rapid requests (burst 3)")
+	}
+}
+
+// TestLocalHealthProbeSkipsTheLimiter pins the 2026-10-05 review: with
+// TRUST_PROXY off, proxied visitors share the loopback bucket, so the guard's
+// hang probe got an instant 429 and a wedged daemon was never restarted. A
+// direct loopback GET of /api/health skips the limiter; anything carrying a
+// forwarded hop or the web-proxy key does not.
+func TestLocalHealthProbeSkipsTheLimiter(t *testing.T) {
+	srv, _, _ := newTestServer(t, func(c *config.Config) {
+		c.RateRPS = 1
+		c.RateBurst = 3
+	})
+	get := func(hdr, val string) int {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/health", nil)
+		if hdr != "" {
+			req.Header.Set(hdr, val)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("health: %v", err)
+		}
+		drain(t, resp)
+		return resp.StatusCode
+	}
+	exhausted := false
+	for i := 0; i < 30 && !exhausted; i++ {
+		exhausted = get("X-Forwarded-For", "203.0.113.7") == http.StatusTooManyRequests
+	}
+	if !exhausted {
+		t.Fatal("setup: the shared loopback bucket never emptied")
+	}
+	for i := 0; i < 5; i++ {
+		if code := get("", ""); code != 200 {
+			t.Fatalf("direct local probe %d: %d, want 200 with the bucket empty", i, code)
+		}
+	}
+	if code := get("X-Signaldeck-Local", "anything"); code != http.StatusTooManyRequests {
+		t.Fatalf("a request carrying the web-proxy key skipped the limiter: %d", code)
 	}
 }
 

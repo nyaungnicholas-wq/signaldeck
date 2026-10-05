@@ -147,6 +147,12 @@ build_from_head() {
     echo "REFUSED: build from the extracted commit failed." >&2
     rm -rf "$tmp"; return 1
   fi
+  # Publication posture (AUD-09), asked of the NEW binary and before the stop
+  # below: refusing after the swap left the guard to restart the new binary on
+  # the same .env within 5 minutes (2026-10-05 review M2).
+  if ! sd_check_publication_posture "$tmp/signaldeckd$exe" "$REPO/daemon" "$(sd_tunnel_running)" >&2; then
+    rm -rf "$tmp"; return 1
+  fi
   mkdir -p "$REPO/bin"
   # A running daemon holds its own image open on Windows, so install(1) fails
   # with "File exists" (Unix silently replaces the inode instead). Stop first,
@@ -294,7 +300,7 @@ case "${1:-status}" in
     # when any step refuses. The daemon's own startup check is the last line of
     # defence; this one stops an unattributable binary from ever being written.
     BUILT_REV=""
-    build_from_head || { echo "launch REFUSED: not starting an unattributable build." >&2; exit 1; }
+    build_from_head || { echo "launch REFUSED (see above): not starting." >&2; exit 1; }
     echo "launch: exec signaldeckd built from commit $BUILT_REV" >&2
     exe=""
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac

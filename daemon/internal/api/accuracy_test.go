@@ -98,6 +98,46 @@ func getAccuracy(t *testing.T, url string) (int, map[string]any) {
 	return resp.StatusCode, body
 }
 
+// TestAccuracy_RetirementOutlivesTheWindow: a model retired on the record
+// stays visible as RETIRED when the current registry no longer carries its
+// row (AUD-12), with no figures and its recorded reason.
+func TestAccuracy_RetirementOutlivesTheWindow(t *testing.T) {
+	_, st, d := newTestServer(t, nil)
+	d.RegistryPath = writeRegistry(t, thinWindowRegistry) // carries directional-ensemble 1d only
+	srv := restartWith(t, d)
+	freshHeartbeat(t, st)
+	if err := st.PutPublicationVerdict(t.Context(), store.PublicationVerdictRow{
+		Predictor: "directional-ensemble", Horizon: "1w", Variant: "",
+		PublicationStatus: "RETIRED", Retired: true, RetirementSticky: true,
+		RetireReason: "FAILED: interval below the majority-class baseline", RetirementSource: "grade",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := getAccuracy(t, srv.URL)
+	if code != http.StatusOK {
+		t.Fatalf("status %d (%v)", code, body["reason"])
+	}
+	rows, _ := body["rows"].([]any)
+	var found map[string]any
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		if m["predictor"] == "directional-ensemble" && m["horizon"] == "1w" {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatalf("the 1w retirement is missing from %d rows", len(rows))
+	}
+	if found["publication_status"] != "RETIRED" || found["retired"] != true {
+		t.Fatalf("row = %v, want RETIRED and retired", found)
+	}
+	for _, k := range []string{"live_acc", "null_acc", "skill"} {
+		if found[k] != nil {
+			t.Errorf("%s = %v on a row with no rows in the window, want null", k, found[k])
+		}
+	}
+}
+
 // THE 2026-08-03 DEFECT, end to end.
 func TestAccuracy_RefutedModelReadsRetiredNotInsufficient(t *testing.T) {
 	_, st, d := newTestServer(t, nil)

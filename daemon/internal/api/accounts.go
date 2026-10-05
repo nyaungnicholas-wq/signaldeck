@@ -87,6 +87,9 @@ var memberRoutes = map[string]bool{
 	// The current HAR volatility forecasts (plan step 9): symbol, horizon,
 	// date and annualised vol only; no null, coefficient or outcome.
 	"/api/vol-forecast/latest": true,
+	// The member's own account data (AUD-05): a download of what is held about
+	// them, and erasure after the password confirms it.
+	"/api/account/export": true, "/api/account/delete": true,
 }
 
 // isMember is a signed-in account that is not the operator on a published
@@ -220,12 +223,7 @@ func (d Deps) isAdminUID(ctx context.Context, uid int64) bool {
 // published is true whenever strangers can reach the daemon: an explicit public
 // surface, or a tunnel/allowlisted host (reachablePrivately false).
 func (d Deps) published() bool {
-	// A configured public URL or quick-tunnel log is an explicit statement that
-	// strangers reach this daemon. Relying on ReachablePrivately() alone made
-	// the whole member tier hinge on a stale hostname left in ALLOWED_HOSTS:
-	// deleting it would have silently opened operator authority to sign-ups.
-	return d.Cfg.PublicSurface || d.Cfg.PublicURL != "" || d.Cfg.TunnelLog != "" ||
-		!d.Cfg.ReachablePrivately()
+	return d.Cfg.Published()
 }
 
 // isOperator is true for the admin (or API token) on a published deployment,
@@ -512,14 +510,7 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	if err := d.St.PurgeStaleUnverified(ctx, time.Now().Add(-verifyTTL)); err != nil {
 		slog.Warn("signup: stale unverified purge failed", "err", err)
 	}
-	if _, exists, err := d.St.GetUserByName(ctx, creds.Username); err != nil {
-		httpInternal(w, err)
-		return
-	} else if exists {
-		httpErr(w, 409, "that username is taken")
-		return
-	}
-	// bcrypt runs on EVERY path below, before the taken/new split, so the two
+	// bcrypt runs on EVERY path below, before any taken/new split, so all the
 	// answers cost the same time.
 	hash, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -531,10 +522,31 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if taken {
 		// Same answer as success; tell the real owner instead of the requester.
+		// Checked before the username, so a member who signs up again with
+		// their own name and address is sent to sign in, not told to pick
+		// another name (2026-10-05 review).
 		if mailLimiter.allow(email) {
 			d.sendAsync(email, "Your SignalDeck account",
 				"Someone (hopefully you) tried to create a SignalDeck account with this email, but one already exists.\n\n"+
 					"Sign in: "+base+"/login\nForgot your password? "+base+"/forgot\n\n"+
+					"If this wasn't you, you can ignore this email.")
+		}
+		writeJSON(w, map[string]string{"status": verifySent})
+		return
+	}
+	// A taken USERNAME used to answer 409 at once, before bcrypt: a fast,
+	// distinct reply that let anyone list account names to aim the sign-in
+	// lockout at (2026-10-05 review). It now answers exactly like success and
+	// tells the person at the address, who is the only one who needs to know.
+	if _, exists, err := d.St.GetUserByName(ctx, creds.Username); err != nil {
+		httpInternal(w, err)
+		return
+	} else if exists {
+		if mailLimiter.allow(email) {
+			d.sendAsync(email, "Your SignalDeck sign-up",
+				"Someone (hopefully you) tried to create a SignalDeck account with this email, but the username \""+
+					creds.Username+"\" is already taken, so no account was created.\n\n"+
+					"Choose another username: "+base+"/signup\n\n"+
 					"If this wasn't you, you can ignore this email.")
 		}
 		writeJSON(w, map[string]string{"status": verifySent})

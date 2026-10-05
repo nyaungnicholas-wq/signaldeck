@@ -28,13 +28,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -175,10 +174,11 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GraderStaleReason: graderStaleReason,
-			Reason:            "accuracy registry unavailable: " + err.Error(),
+			Reason:            "accuracy registry unavailable",
 		})
 		return
 	}
@@ -251,6 +251,8 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// pointed the other way.
 	reason, collapsed, err := d.collapsedGradingWindowCached(ctx, reg, now)
 	if err != nil {
+		// The gate's own errors are composed to be read ("graded window is
+		// unmeasured"; collapsecache_test pins it), so this one keeps its text.
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED_UNAVAILABLE", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
@@ -277,10 +279,11 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// as live, with HTTP 200 and nothing in the payload saying the read failed.
 	claims, err := d.St.EvidenceClaims(ctx, "", "")
 	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
-			Reason:   "evidence claims unreadable: " + err.Error(),
+			Reason:   "evidence claims unreadable",
 		})
 		return
 	}
@@ -292,9 +295,10 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		priorRetired, priorReason, priorSource, err := d.St.RetirementHistory(ctx, predictor, horizon, variant)
 		if err != nil {
 			// An unreadable history must not read as "never retired".
+			slog.Warn("accuracy refused: a read failed", "err", err)
 			writeAccuracyRefusal(w, accuracyResponse{
 				Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
-				Reason: "retirement history unreadable: " + err.Error(),
+				Reason: "retirement history unreadable",
 			})
 			return
 		}
@@ -378,6 +382,49 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			if !row.Retired {
 				row.PublicationStatus = "REFUSED"
 			}
+		}
+		rows = append(rows, row)
+	}
+
+	// RETIREMENT OUTLIVES THE WINDOW (AUD-12, 2026-10-05). Rows came only from
+	// the registry, so once a re-registered window held no directional rows the
+	// four sticky retirements in publication_verdicts vanished from this route,
+	// and the landing page's "Retired by its own rule" panel and the "Retired
+	// models stay retired" line had nothing behind them. Every retirement on
+	// record that the registry no longer lists is served as RETIRED, with its
+	// recorded reason and no figures: the current window holds none for it.
+	retired, err := d.St.RetiredVerdicts(ctx)
+	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
+			Reason: "retirement history unreadable",
+		})
+		return
+	}
+	present := make(map[[3]string]bool, len(rows))
+	for _, r := range rows {
+		present[[3]string{r.Predictor, r.Horizon, r.Variant}] = true
+	}
+	for _, rv := range retired {
+		if present[[3]string{rv.Predictor, rv.Horizon, rv.Variant}] {
+			continue
+		}
+		row := accuracyRow{
+			Predictor: rv.Predictor, Horizon: rv.Horizon, Variant: rv.Variant,
+			PublicationStatus: "RETIRED",
+			Retired:           true,
+			RetirementSticky:  true,
+			RetirementSource:  rv.Source,
+			Reasons:           []string{"retired on the record; it has no rows in the current grading window"},
+			EvidenceRefs:      []string{},
+			Note:              "retired on the record",
+		}
+		if rv.Reason != "" {
+			row.Reasons = append(row.Reasons, rv.Reason)
+		}
+		if why, ok := publication.DirectionalWithheld(rv.Horizon); ok {
+			row.FiguresWithheld = why
 		}
 		rows = append(rows, row)
 	}
@@ -477,10 +524,7 @@ func firstWord(label string) string {
 // repo root, so both are candidates. An explicit override wins, which is what
 // keeps tests off the live artifact.
 func loadRegistry(override string) (*registryFile, error) {
-	candidates := []string{
-		filepath.Join("..", prereg.RegistryRel),
-		prereg.RegistryRel,
-	}
+	candidates := pipeline.RegistryCandidates()
 	if override != "" {
 		candidates = []string{override}
 	}

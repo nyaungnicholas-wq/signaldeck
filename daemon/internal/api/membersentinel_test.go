@@ -499,6 +499,7 @@ var memberProbeExempt = map[string]string{
 	"/api/auth/google":   "account flow: verifies a Google ID token; off without a client ID",
 	"/api/tv-webhook":    "inbound TradingView POST authenticated by a shared secret; serves nothing back",
 	"/api/waitlist":      "takes an email and answers ok either way; serves nothing back",
+	"/api/account/delete": "account flow: erases the probing member's own account and answers status only (accountdata_test.go)",
 }
 
 // memberProbeFloor is the measured size of the probed member surface. It may
@@ -516,6 +517,8 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/accuracy": get("/api/accuracy", `"publication_status":"RETIRED"`),
 		// Alert switches (plan step 5): the member's own settings, never data.
 		"/api/alert-prefs": get("/api/alert-prefs", `"emailVerified":true`),
+		// The member's own data download (AUD-05): member tables only.
+		"/api/account/export": get("/api/account/export", `"account":{`),
 		"POST /api/alert-prefs": {method: "POST", url: "/api/alert-prefs", body: map[string]bool{"emailDigest": true},
 			marker: `"emailDigest":true,"emailVerified":true`},
 		"/api/alert-prefs/telegram-link": {method: "POST", url: "/api/alert-prefs/telegram-link", body: map[string]string{},

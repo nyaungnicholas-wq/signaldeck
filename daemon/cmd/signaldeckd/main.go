@@ -28,6 +28,8 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	sicBulk := flag.Bool("sic-bulk-sync", false,
 		"run ONE forced SIC bulk sync (SEC EDGAR bulk submissions.zip, ~1.5 GB streamed to SIGNALDECK_TMP) against the configured DB, print the result, and exit — stop the daemon first")
+	posture := flag.Bool("publication-posture", false,
+		"load the config exactly as the daemon would, print whether it is published (strangers can reach it), and exit: 0 published, 3 not (ops/lib-deploy.sh)")
 	flag.Parse()
 	fmt.Printf("signaldeckd v%s\n", version)
 	if *showVersion {
@@ -35,6 +37,15 @@ func main() {
 	}
 
 	cfg := config.Load()
+	if *posture {
+		if cfg.Published() {
+			fmt.Println("publication posture: published")
+			return
+		}
+		fmt.Println("publication posture: NOT published (no SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG, " +
+			"SIGNALDECK_PUBLIC_SURFACE=1 or non-loopback SIGNALDECK_ALLOWED_HOSTS)")
+		os.Exit(3)
+	}
 
 	// Log slog to BOTH stderr and a size-capped rotating file (20 MB x 3).
 	// SIGNALDECK_LOG_FILE overrides the path; set it to "" to disable file
@@ -52,6 +63,18 @@ func main() {
 			defer lw.Close() //nolint:errcheck
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lw), nil)))
 			slog.Info("file logging enabled", "path", logPath, "maxMB", logrotate.DefaultMaxMB, "keep", logrotate.DefaultKeep)
+		}
+	}
+
+	// Publication posture (AUD-09, posture.go), before the store is opened, so
+	// a refused start touches nothing. Not for the -sic-bulk-sync one-shot,
+	// which serves nothing.
+	if !*sicBulk {
+		if unknown, err := startupPosture(cfg.Published(), cfg.HTTPAddr, cloudflaredRunning); err != nil {
+			slog.Error("refusing to start", "why", err)
+			os.Exit(3)
+		} else if unknown {
+			slog.Warn("could not read the process list to check for a tunnel; starting unpublished on the web tier's port unchecked")
 		}
 	}
 
@@ -158,6 +181,8 @@ func main() {
 	// after the -sic-bulk one-shot returns, so a one-shot never consumes a stop
 	// meant for the running daemon.
 	ctx = stopOnFile(ctx, filepath.Join(filepath.Dir(cfg.DBPath), ".stop-request"), processStart, time.Second)
+	ctx, stopForPosture := startPostureWatch(ctx, cfg.Published(), cfg.HTTPAddr, time.Minute, cloudflaredRunning)
+	defer stopForPosture(nil)
 
 	slog.Info("signaldeckd started", "db", cfg.DBPath, "http", cfg.HTTPAddr,
 		"alpaca", cfg.HasAlpaca(), "hud", cfg.HudURL)
@@ -179,6 +204,10 @@ func main() {
 	//     restart-on-failure policy (RestartCount=999) had never once fired.
 	//
 	// Exiting non-zero on case 2 is what makes that existing policy work.
+	if postureStopped(ctx) {
+		slog.Error("signaldeckd stopped: a tunnel came up in front of this unpublished daemon", "why", context.Cause(ctx))
+		os.Exit(3)
+	}
 	if ctx.Err() != nil {
 		slog.Info("signaldeckd stopped: shutdown signal received", "cause", ctx.Err())
 		return

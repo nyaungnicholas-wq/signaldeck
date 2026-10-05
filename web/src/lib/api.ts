@@ -589,6 +589,8 @@ export const api = {
     post<{ status: string }>("/api/auth/forgot", { email, turnstileToken }),
   resetPassword: (token: string, password: string) => post<Me>("/api/auth/reset", { token, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
+  /** Erase the signed-in member's account (AUD-05); the password confirms it. */
+  deleteAccount: (password: string) => post<{ status: string }>("/api/account/delete", { password }),
   me: () => get<Me>("/api/auth/me"),
 
   // Member alerts (daemon step 5). Daily email digest + optional Telegram link.

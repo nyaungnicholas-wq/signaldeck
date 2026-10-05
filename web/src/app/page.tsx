@@ -361,7 +361,11 @@ function LiveRecord({ live }: { live: Live }) {
     );
   }
 
+  // A retirement the daemon serves from the record with no rows in the current
+  // window (AUD-12) is shown by the panel below, not as a row of dashes that
+  // would push live predictors out of the eight.
   const rows = [...live.rows]
+    .filter((r) => !(r.retired && r.live_n === 0))
     .sort(
       (a, b) =>
         Number(CONDEMNED.has(b.publication_status)) - Number(CONDEMNED.has(a.publication_status)),
@@ -395,6 +399,10 @@ function LiveRecord({ live }: { live: Live }) {
             {retired.figures_withheld ? (
               <span className="text-sm" style={{ color: "var(--dim)" }}>
                 current figures {retired.figures_withheld}
+              </span>
+            ) : retired.live_n === 0 ? (
+              <span className="text-sm" style={{ color: "var(--dim)" }}>
+                no forecasts in the current graded window
               </span>
             ) : (
             <span className="text-sm" style={{ color: "var(--dim)" }}>

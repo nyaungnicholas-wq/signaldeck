@@ -51,6 +51,15 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
 			return
 		}
+		// 1b. The ngrok tunnel serves this daemon's port directly, bypassing
+		// the web tier, and exists only to carry TradingView alerts. Through
+		// it, every route answered, so the operator's bearer token worked from
+		// the internet on weekdays (2026-10-05 security review). An ngrok Host
+		// now reaches the webhook and nothing else.
+		if webhookOnlyHost(r.Host) && (r.Method != http.MethodPost || r.URL.Path != "/api/tv-webhook") {
+			httpErr(w, http.StatusForbidden, "this host serves only the TradingView webhook")
+			return
+		}
 
 		// 2. CORS: echo the Origin only if it is explicitly allowlisted.
 		origin := r.Header.Get("Origin")
@@ -96,7 +105,16 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			strings.HasPrefix(r.URL.Path, "/api/ai/")
 		// acctKey folds an IPv6 client to its /64: one subscriber line holds
 		// 2^64 addresses, so a per-address bucket was no limit at all there.
-		if !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
+		// The local hang probe (ops/daemon-guard.ps1) must reach the handler:
+		// with TRUST_PROXY off every proxied visitor shares the loopback bucket,
+		// so a 429 here hid a wedged daemon from it (2026-10-05 review). Only a
+		// direct loopback GET of /api/health, with no forwarded hop and no
+		// web-proxy key, skips the limiter. Web-tier requests always carry the
+		// hop (Next fills X-Forwarded-For when a client sent none) and, under
+		// SIGNALDECK_LOCAL_ONLY_PROXY, the key; an ngrok Host is refused above.
+		localProbe := r.Method == http.MethodGet && r.URL.Path == "/api/health" && remoteAddrIsLoopback(r) &&
+			r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("X-Signaldeck-Local") == ""
+		if !localProbe && !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
 			w.Header().Set("Retry-After", "1")
 			httpErr(w, http.StatusTooManyRequests, "rate limit exceeded — retry in a second")
 			return
@@ -511,6 +529,20 @@ func (d Deps) requiresAuth(path string) bool {
 		return true
 	}
 	return !d.Cfg.PublicReads
+}
+
+// webhookOnlyHost reports a Host that arrives through an ngrok tunnel.
+func webhookOnlyHost(host string) bool {
+	h := strings.ToLower(host)
+	if i := strings.LastIndex(h, ":"); i > strings.LastIndex(h, "]") {
+		h = h[:i]
+	}
+	for _, suffix := range []string{".ngrok-free.dev", ".ngrok-free.app", ".ngrok.app", ".ngrok.dev", ".ngrok.io", ".ngrok.pizza"} {
+		if strings.HasSuffix(h, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hostAllowed(host string, allowed []string) bool {
