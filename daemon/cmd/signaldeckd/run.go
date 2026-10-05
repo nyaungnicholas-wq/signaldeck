@@ -698,7 +698,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// A stop the OPERATOR asked for must not come back as a restart just because
 	// a worker took longer than ShutdownGrace (75s) to drain — minRunTimeout is
 	// 15 minutes, so that is ordinary, not a fault. See Runner.OperatorStop.
-	runner.OperatorStop = func() bool { return signalCtx.Err() != nil }
+	// The posture watcher (posture.go) is not an operator: its stop must stay
+	// non-zero even when a worker outlives the grace (2026-10-05 review).
+	runner.OperatorStop = func() bool { return signalCtx.Err() != nil && !postureStopped(signalCtx) }
 
 	runner.Start(ctx)
 

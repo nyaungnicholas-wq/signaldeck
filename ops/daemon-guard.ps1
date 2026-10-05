@@ -191,7 +191,11 @@ if (-not (Test-Path $refresh)) {
 # recovery (measured up to ~7 min); three consecutive strikes (about 15 min
 # unanswered) restart it. Any answer clears the strikes.
 $strikeFile = Join-Path $root 'logs\daemon-guard.strikes'
-$running = Get-Process -Name signaldeckd -ErrorAction SilentlyContinue | Select-Object -First 1
+# Only the live binary: e2e, drill and audit copies run under the same name
+# on other ports (2026-10-05 review). A path this account cannot read (the
+# Services session) keeps the old behaviour rather than hiding the daemon.
+$running = Get-Process -Name signaldeckd -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.Path -or $_.Path -eq $exe } | Select-Object -First 1
 if ($running) {
     $code = Get-HttpCode 'http://127.0.0.1:8322/api/health'
     if ($code -eq 'nocurl') {

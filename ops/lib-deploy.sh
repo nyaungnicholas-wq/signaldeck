@@ -29,8 +29,7 @@ sd_install_binary() {
 sd_tunnel_running() {
   if command -v tasklist >/dev/null 2>&1; then
     tasklist //FI "IMAGENAME eq cloudflared.exe" 2>/dev/null | grep -qi cloudflared && { echo yes; return; }
-  elif command -v pgrep >/dev/null 2>&1; then
-    pgrep -x cloudflared >/dev/null 2>&1 && { echo yes; return; }
+  elif command -v pgrep >/dev/null 2>&1; then pgrep -x cloudflared >/dev/null 2>&1 && { echo yes; return; }
   else
     echo "WARNING: neither tasklist nor pgrep exists; assuming no tunnel (the daemon still checks at startup)" >&2
   fi

@@ -43,6 +43,42 @@ func TestUnpublishedDaemonRefusesBehindATunnel(t *testing.T) {
 	}
 }
 
+// The daemon's own wiring: an unpublished daemon's context is cancelled with
+// the refusal when a tunnel appears; a published one is never touched, and an
+// operator stop is not mistaken for a posture stop (2026-10-05 review).
+func TestPostureWatchWiring(t *testing.T) {
+	var appeared atomic.Bool
+	tunnel := func() (bool, bool) { return appeared.Load(), true }
+	appeared.Store(true)
+
+	pub, stopPub := startPostureWatch(context.Background(), true, "127.0.0.1:8322", time.Millisecond, tunnel)
+	defer stopPub(nil)
+	time.Sleep(30 * time.Millisecond)
+	if pub.Err() != nil || postureStopped(pub) {
+		t.Fatal("a published daemon was stopped by the posture watcher")
+	}
+
+	unpub, stopUnpub := startPostureWatch(context.Background(), false, "127.0.0.1:8322", time.Millisecond, tunnel)
+	defer stopUnpub(nil)
+	select {
+	case <-unpub.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("an unpublished daemon behind a tunnel was not stopped")
+	}
+	if !postureStopped(unpub) {
+		t.Fatalf("stopped for %v, not the posture refusal", context.Cause(unpub))
+	}
+
+	parent, cancel := context.WithCancel(context.Background())
+	op, stopOp := startPostureWatch(parent, false, "127.0.0.1:18322", time.Millisecond, tunnel)
+	defer stopOp(nil)
+	cancel()
+	<-op.Done()
+	if postureStopped(op) {
+		t.Fatal("an operator stop was read as a posture stop")
+	}
+}
+
 // A tunnel that comes up after the daemon (logon order, a tunnel restart, the
 // first go-live) stops it; before round 7 only the start was checked.
 func TestWatchPostureStopsWhenATunnelAppears(t *testing.T) {

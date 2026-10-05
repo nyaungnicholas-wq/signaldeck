@@ -148,6 +148,19 @@ No must-fix. Two should-fix and the notes, each with a test that fails on the ol
 | S2 `tasklist` is a WMI client with no timeout on the startup path; "cannot tell" was silent | Toolhelp snapshot on Windows (no WMI, ms instead of 0.8 s), `pgrep` with a 10 s timeout elsewhere; "cannot tell" is logged | TestUnpublishedDaemonRefusesBehindATunnel requires the process list to be readable on the test host and the unknown case to be reported |
 | Notes | Port compared as a number (`:08322`); the check runs before the database opens; delete matches the verified username as well as the id (a reused id is never erased); `prioritized` helper for both priority holds; the limiter comment says why web requests always carry the hop; runbook's Host-refusal answer is a 403 `forbidden host`; AUD-09 and AUD-13 list their residuals | Leading-zero case fails on a string compare; the store test fails (`delete under another name: <nil>`) without the username match; real binary on 8322: exit 3, no database or data directory created, live daemon unaffected |
 
+## Round 8 (the pre-deploy review of the whole branch)
+
+Verdict DEPLOY: GO, no must-fix. It ran the full gate set CI and ctl deploy run (go vet, golangci-lint on Windows and Linux, `go test ./...` 133 packages, web tests, tsc, eslint, 481 Python tool tests, the docs and deck gates, the controls table) and measured this branch's binary reading production as published.
+
+| Review item | Fix | Proof |
+|---|---|---|
+| S1 a bare `pgrep` in lib-deploy.sh turned CI's ops step red (test-no-bare-pkill) before the posture self-test ran | The call sits on its `command -v` line | `ops/test-no-bare-pkill.sh`: all checks passed; posture self-test 6 cases |
+| S2 the waitlist limiter keys on the client key, which is site-wide when TRUST_PROXY is off | Live has TRUST_PROXY on (the one boolean was read, nothing else), so the key is the visitor's address; recorded on AUD-32 | |
+| N1 a posture stop exited 0 (read as an operator stop) when a worker outlived the 75 s drain | OperatorStop excludes the posture cause | TestPostureWatchWiring (an operator cancel is not a posture stop); the run.go line is code-reviewed |
+| N2 the main.go watcher wiring had no test | `startPostureWatch` and `postureStopped`, used by main and run | TestPostureWatchWiring fails when the watcher is not started |
+| N3 the guard's hang check took any `signaldeckd` copy | It takes the live binary only; an unreadable path keeps the old behaviour | selfcheck OK, PS 5.1 parse 0 errors; from this session the Services-session daemon's path is unreadable, so the fallback is what runs there |
+| N4 AUD-09 residuals | Image-name and Docker clauses added | |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).

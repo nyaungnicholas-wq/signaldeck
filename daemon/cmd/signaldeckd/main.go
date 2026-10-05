@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -182,11 +181,8 @@ func main() {
 	// after the -sic-bulk one-shot returns, so a one-shot never consumes a stop
 	// meant for the running daemon.
 	ctx = stopOnFile(ctx, filepath.Join(filepath.Dir(cfg.DBPath), ".stop-request"), processStart, time.Second)
-	ctx, stopForPosture := context.WithCancelCause(ctx)
+	ctx, stopForPosture := startPostureWatch(ctx, cfg.Published(), cfg.HTTPAddr, time.Minute, cloudflaredRunning)
 	defer stopForPosture(nil)
-	if !cfg.Published() {
-		go watchPosture(ctx, false, cfg.HTTPAddr, time.Minute, cloudflaredRunning, stopForPosture)
-	}
 
 	slog.Info("signaldeckd started", "db", cfg.DBPath, "http", cfg.HTTPAddr,
 		"alpaca", cfg.HasAlpaca(), "hud", cfg.HudURL)
@@ -208,7 +204,7 @@ func main() {
 	//     restart-on-failure policy (RestartCount=999) had never once fired.
 	//
 	// Exiting non-zero on case 2 is what makes that existing policy work.
-	if errors.Is(context.Cause(ctx), errTunnelBehindUnpublished) {
+	if postureStopped(ctx) {
 		slog.Error("signaldeckd stopped: a tunnel came up in front of this unpublished daemon", "why", context.Cause(ctx))
 		os.Exit(3)
 	}

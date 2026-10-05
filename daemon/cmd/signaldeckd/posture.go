@@ -43,6 +43,23 @@ func startupPosture(published bool, httpAddr string, tunnel func() (running, kno
 	return !known, nil
 }
 
+// startPostureWatch derives the daemon's context: for an unpublished daemon
+// it runs watchPosture, which cancels the context with the refusal. A
+// published daemon gets a plain cancellable context and is never scanned.
+func startPostureWatch(ctx context.Context, published bool, httpAddr string, every time.Duration,
+	tunnel func() (bool, bool)) (context.Context, context.CancelCauseFunc) {
+	ctx, stop := context.WithCancelCause(ctx)
+	if !published {
+		go watchPosture(ctx, false, httpAddr, every, tunnel, stop)
+	}
+	return ctx, stop
+}
+
+// postureStopped is true when the watcher, not an operator, stopped the daemon.
+func postureStopped(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errTunnelBehindUnpublished)
+}
+
 // watchPosture repeats the check every interval: a tunnel that came up after
 // the daemon (logon order, a tunnel restart, the first go-live) was never
 // caught (2026-10-05 review of round 6). It cancels ctx with the refusal, so
