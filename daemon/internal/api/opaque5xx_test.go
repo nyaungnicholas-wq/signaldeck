@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,5 +39,14 @@ func TestNoRawErrorsIn5xxBodies(t *testing.T) {
 	}
 	if scanned < 20 {
 		t.Fatalf("scanned only %d files; the glob is not seeing the package", scanned)
+	}
+}
+
+// TestAIErrorsAreNotEchoed: aiErr fed the 502 bodies of the AI routes and
+// returned err.Error() for anything it did not recognise, so store and
+// provider errors reached members verbatim (2026-10-05 review).
+func TestAIErrorsAreNotEchoed(t *testing.T) {
+	if got := aiErr(errors.New("SQL logic error: no such table: insights")); strings.Contains(got, "SQL") {
+		t.Fatalf("aiErr echoed the raw error: %q", got)
 	}
 }

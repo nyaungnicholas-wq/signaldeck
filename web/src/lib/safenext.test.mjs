@@ -15,6 +15,14 @@ test("anything that leaves the origin is refused", () => {
   }
 });
 
+test("dot segments cannot climb to a second slash", () => {
+  for (const bad of ["/..//evil.example", "/%2e%2e//evil.example", "/x/..\\/evil.example", "/./..//evil.example"]) {
+    const got = safeNext(bad);
+    assert.ok(got === null || (!got.startsWith("//") && !got.startsWith("/\\")), `${bad} -> ${got}`);
+  }
+  assert.equal(safeNext("/a/../watchlist"), "/watchlist");
+});
+
 test("the sign-in page never resumes to itself", () => {
   assert.equal(safeNext("/login"), null);
   assert.equal(safeNext("/login?next=/x"), null);

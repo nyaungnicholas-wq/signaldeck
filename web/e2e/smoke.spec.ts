@@ -112,11 +112,15 @@ test.describe("navigation (unauthenticated)", () => {
       expect(res, `no response for ${path}`).toBeTruthy();
       expect(res!.status()).toBe(200);
       if (gated) {
-        // Gated route → the anonymous visitor is redirected to /login.
-        await page.waitForURL("**/login", { timeout: 15000 });
+        // Gated route → the anonymous visitor is redirected to /login, carrying
+        // the page asked for in ?next= so sign-in can resume it (lib/safenext).
+        await page.waitForURL(/\/login\?next=[^&#]*$/, { timeout: 15000 });
+        expect(new URL(page.url()).searchParams.get("next")).toBe(path);
       }
       // "/" is the PUBLIC landing page: it stays put and never redirects.
-      await expect(page).toHaveURL(gated || path === "/login" ? /\/login$/ : /\/$/);
+      await expect(page).toHaveURL(
+        gated ? /\/login\?next=[^&#]*$/ : path === "/login" ? /\/login$/ : /\/$/,
+      );
       if (gated || path === "/login") {
         await expect(page.getByRole("heading", { name: "SIGN IN" })).toBeVisible();
       }

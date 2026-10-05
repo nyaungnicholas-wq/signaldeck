@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
+import { safeNext } from "@/lib/safenext";
 
 declare global {
   interface Window {
@@ -117,7 +118,10 @@ export default function GoogleButton({
       setBusy(true);
       try {
         const me = await api.googleSignIn(credential);
-        router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
+        router.replace(
+          safeNext(new URLSearchParams(window.location.search).get("next")) ??
+            ((me.member ?? !me.isAdmin) ? "/today" : "/dashboard"),
+        );
       } catch (err) {
         busyRef.current = false;
         setBusy(false);

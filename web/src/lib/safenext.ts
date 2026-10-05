@@ -8,6 +8,20 @@ export function safeNext(next: string | null | undefined): string | null {
   if (!next || next.length > 512) return null;
   if (!next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return null;
   if (/[\u0000-\u001f\u007f]/.test(next)) return null;
-  if (next === "/login" || next.startsWith("/login?") || next.startsWith("/login/")) return null;
-  return next;
+  // Resolve it the way a browser would: dot segments and backslashes can turn
+  // "/..//evil" into a path that starts "//", which a later
+  // location.replace() reads as another host (2026-10-05 review). Judge the
+  // RESOLVED path and return that, never the raw input.
+  const base = "https://same-origin.invalid";
+  let u: URL;
+  try {
+    u = new URL(next, base);
+  } catch {
+    return null;
+  }
+  if (u.origin !== base) return null;
+  const path = u.pathname + u.search + u.hash;
+  if (path.startsWith("//") || path.startsWith("/\\")) return null;
+  if (u.pathname === "/login" || u.pathname.startsWith("/login/")) return null;
+  return path;
 }

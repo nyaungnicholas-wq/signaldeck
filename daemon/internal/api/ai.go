@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/analyst"
@@ -130,7 +131,10 @@ func aiErr(err error) string {
 	case llm.ErrDisabled:
 		return "AI is disabled (no key)"
 	default:
-		return err.Error()
+		// Was err.Error(): store and provider errors reached members in 502
+		// bodies (2026-10-05 review). Log it; answer generically.
+		slog.Warn("ai request failed", "err", err)
+		return "the AI request failed — try again in a minute"
 	}
 }
 
