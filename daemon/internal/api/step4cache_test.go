@@ -881,7 +881,12 @@ func TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly(t *testing.T) {
 	val := func(v string) func(context.Context) (map[string]any, error) {
 		return func(context.Context) (map[string]any, error) { return map[string]any{"v": v}, nil }
 	}
-	waitPersisted := func(file, want string) {
+	// Wait the way production is served: every stale hit re-kicks the refresh
+	// if the last one gave up. A refresh that gets no cold-build slot within
+	// coldBuildWait returns without a word and leaves it to the next hit; with
+	// one hit and a 30 s wait, earlier tests' detached builds holding both
+	// slots under load failed this test (2026-10-05, twice, never alone).
+	waitPersisted := func(c *swrCache, file, want string) {
 		t.Helper()
 		deadline := time.Now().Add(eventuallyWait) // the refresh behind a served body lands in the temp dir
 		for {
@@ -892,6 +897,7 @@ func TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly(t *testing.T) {
 				t.Fatalf("the refresh behind the served body never landed (%s)", want)
 			}
 			time.Sleep(5 * time.Millisecond)
+			_, _ = c.getAt(ctx, file, "st2|1d", val(want))
 		}
 	}
 
@@ -900,10 +906,11 @@ func TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly(t *testing.T) {
 		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)+`","body":{"v":"a"}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := newSWRCache(time.Minute).getAt(ctx, f1, "st2|1d", val("b")); err != nil || got["v"] != "a" {
+	deployed := newSWRCache(time.Minute)
+	if got, err := deployed.getAt(ctx, f1, "st2|1d", val("b")); err != nil || got["v"] != "a" {
 		t.Fatalf("after a deploy, same format: got %v (err %v), want the previous build's body served", got, err)
 	}
-	waitPersisted(f1, "b")
+	waitPersisted(deployed, f1, "b")
 
 	// The same cache at another format reads nothing of it.
 	if f1 == f2 {
@@ -918,10 +925,11 @@ func TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly(t *testing.T) {
 		t.Fatalf("a 25h-old body: got %v (err %v), want a cold build", got, err)
 	}
 	persistBody(f1, "st2|1d", time.Now().Add(-23*time.Hour), []byte(`{"v":"old"}`))
-	if got, err := newSWRCache(time.Minute).getAt(ctx, f1, "st2|1d", val("rebuilt")); err != nil || got["v"] != "old" {
+	young := newSWRCache(time.Minute)
+	if got, err := young.getAt(ctx, f1, "st2|1d", val("rebuilt")); err != nil || got["v"] != "old" {
 		t.Fatalf("a 23h-old body: got %v (err %v), want it served", got, err)
 	}
-	waitPersisted(f1, "rebuilt")
+	waitPersisted(young, f1, "rebuilt")
 }
 
 // F (3): a body a previous process persisted stands in while its refreshes fail

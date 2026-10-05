@@ -161,6 +161,17 @@ Verdict DEPLOY: GO, no must-fix. It ran the full gate set CI and ctl deploy run 
 | N3 the guard's hang check took any `signaldeckd` copy | It takes the live binary only; an unreadable path keeps the old behaviour | selfcheck OK, PS 5.1 parse 0 errors; from this session the Services-session daemon's path is unreadable, so the fallback is what runs there |
 | N4 AUD-09 residuals | Image-name and Docker clauses added | |
 
+## Round 9 (the load-sensitive test flake)
+
+TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly failed twice on 10-05, each time at its 30 s wait with "the refresh behind the served body never landed (b)", each time while the machine was heavily loaded, never alone.
+
+| Step | Result |
+|---|---|
+| Rule out | A failed refresh build and a failed persist both log a warning; the failing run logged neither. The one silent path: a refresh that gets no cold-build slot (2 slots, 5 s wait) returns and leaves the retry to the next stale hit, and this test made one hit |
+| Reproduce | Holding both slots for 7 s at the test's start gives the exact failure: 30.03 s, "never landed (b)" |
+| Fix (test only; production already retries on the next hit) | The wait re-requests on each poll, as a visitor's next hit would. With both slots held 7 s the test passes in 7.11 s |
+| Re-run | Full api package ok (47.7 s); 8 concurrent runs on 1 CPU each, all ok; golangci-lint 0 issues. Twelve loaded runs before the fix did not reproduce it, and slots were free at the test's start in an instrumented run, so the trigger is rare load timing; the mechanism is the one reproduced above |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
