@@ -103,7 +103,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !d.isOperator(r) {
-		resp = withoutThinReturnMeans(resp)
+		resp = publicTrackRecord(resp)
 	}
 	writeJSON(w, resp)
 }
@@ -124,7 +124,7 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !d.isOperator(r) {
-		resp = withoutThinReturnMeans(resp)
+		resp = publicTrackRecord(resp)
 	}
 	writeJSON(w, resp)
 }
@@ -133,6 +133,26 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 // over before anyone but the operator is served it (the licence line in
 // datalicense.go): a mean over one row is that row's return.
 const minPublicReturnN = 10
+
+// publicTrackRecord is what a non-operator receives. Two blocks stay
+// operator-only (2026-10-05 release audit). `regimes` published structural
+// intervals the registry withholds: all-time rows clustered by call day, with
+// no non-overlapping 21-day blocks and no persistence null (PREREGISTRATION
+// section 9), so it disagreed with /accuracy on n, days and the claim itself.
+// `paper` is a return figure for the retired 1d model, where the README says
+// no return figure exists in this product. The only UI for either is the
+// operator's /lab/track-record. Copies; never mutates the shared payload.
+func publicTrackRecord(resp map[string]any) map[string]any {
+	src := withoutThinReturnMeans(resp)
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		if k == "regimes" || k == "paper" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
 
 // withoutThinReturnMeans is the non-operator view of a track-record payload:
 // every byMarket row keeps its n and rates and loses meanFwd when that mean

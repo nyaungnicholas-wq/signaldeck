@@ -62,7 +62,7 @@ func TestSurvivorshipLabelOnAllSurfaces(t *testing.T) {
 
 	// /api/track-record: top-level (predictions) + regimes section.
 	rec = httptest.NewRecorder()
-	d.trackRecord(rec, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
+	d.trackRecord(rec, asOperator(httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil)))
 	tr := decodeBody(t, rec.Body.Bytes())
 	assertSurvivorship(t, tr, "track-record")
 	regimes, ok := tr["regimes"].(map[string]any)

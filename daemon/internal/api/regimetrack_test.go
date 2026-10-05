@@ -107,7 +107,7 @@ func TestRegimeTrackRecordUngatedAt30(t *testing.T) {
 
 	// full handler carries the section
 	rec := httptest.NewRecorder()
-	d.trackRecord(rec, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
+	d.trackRecord(rec, asOperator(httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil)))
 	if rec.Code != 200 {
 		t.Fatalf("track-record status %d: %s", rec.Code, rec.Body.String())
 	}
