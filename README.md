@@ -174,13 +174,13 @@ calling web work done.
   profitability figure exists in this product and none may be quoted from it.
 - **Congress trade feeds** depend on volunteer mirrors and a daily JSON fallback; the stored
   history is served when both are down.
-- **The anchors repository is still private.** Since 2026-09-30 each publish commits a
-  statement of the current ledger head, timestamped by two RFC 3161 authorities (FreeTSA,
-  DigiCert) and OpenTimestamps, and `tools/verify_public_record.py` (published there as
-  `verify.py`) checks all of it offline, recomputing the chain through the public
-  `/api/ledger/range`. Until the owner makes that repository public it is a durable,
-  timestamped off-machine record, not yet public verification. Forecasts from before the
-  first statement carry no external timestamp.
+- **External timestamps start on 2026-09-30.** The anchors repository,
+  [github.com/nyaungnicholas-wq/signaldeck-anchors](https://github.com/nyaungnicholas-wq/signaldeck-anchors),
+  is public since 2026-10-04. Since 2026-09-30 each publish commits a statement of the
+  current ledger head, timestamped by two RFC 3161 authorities (FreeTSA, DigiCert) and
+  OpenTimestamps, and `tools/verify_public_record.py` (published there as `verify.py`)
+  checks all of it offline, recomputing the chain through the public `/api/ledger/range`.
+  Forecasts from before the first statement carry no external timestamp.
 
 ## Data sources and licensing
 
