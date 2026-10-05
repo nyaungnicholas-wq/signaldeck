@@ -102,11 +102,22 @@ func (s *Store) DeleteAccount(ctx context.Context, uid int64) error {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
-	var admin int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_admin,0) FROM users WHERE id=?`, uid).Scan(&admin); err != nil {
+	// Write first: aw is deferred, and a transaction that reads before it
+	// writes gets SQLITE_BUSY at once on the upgrade (no busy wait) whenever a
+	// worker holds the lock, so members got a 500 (2026-10-05 review). The
+	// no-op UPDATE takes the write lock, waits like any write, and doubles as
+	// the admin guard.
+	res, err := tx.ExecContext(ctx, `UPDATE users SET id=id WHERE id=? AND COALESCE(is_admin,0)=0`, uid)
+	if err != nil {
 		return err
 	}
-	if admin != 0 {
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		var admin int64
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_admin,0) FROM users WHERE id=?`, uid).Scan(&admin); err != nil {
+			return err
+		}
 		return ErrAdminAccount
 	}
 	for _, t := range append([]string{"auth_tokens", "sessions"}, accountTables...) {
@@ -115,6 +126,11 @@ func (s *Store) DeleteAccount(ctx context.Context, uid int64) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id=?`, uid); err != nil {
+		return err
+	}
+	// users.id is reused (no AUTOINCREMENT), so the next account must not
+	// inherit today's copilot quota (copilot_ask:<day>:<uid>; 2026-10-05 review).
+	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE k LIKE 'copilot_ask:%:' || ?`, uid); err != nil {
 		return err
 	}
 	return tx.Commit()

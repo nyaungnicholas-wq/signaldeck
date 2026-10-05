@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -16,6 +18,9 @@ import (
 // the account with their password; the operator account cannot be erased this
 // way, and a wrong password erases nothing.
 func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
+	old := loginFailures
+	loginFailures = &failCounter{fails: map[string]*failState{}}
+	t.Cleanup(func() { loginFailures = old })
 	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
 		mux := http.NewServeMux()
 		d.registerAuth(mux)
@@ -68,8 +73,25 @@ func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
 	if _, ok, _ := st.GetUserByName(ctx, "dora"); !ok {
 		t.Fatal("a wrong password erased the account")
 	}
-	if code, body := acctPostWith(t, member, srv.URL+"/api/account/delete", map[string]string{"password": "correcthorse1"}); code != 200 {
-		t.Fatalf("delete: %d %s", code, body)
+	// An internet attacker keeps the name locked (the AUD-35 attack); the
+	// member's session still reaches deletion on its own ladder (review S2).
+	for i := 0; i < 50 && loginFailures.retryAfter("dora", time.Now()) == 0; i++ {
+		loginFailures.fail("dora", time.Now())
+	}
+	if loginFailures.retryAfter("dora", time.Now()) == 0 {
+		t.Fatal("setup: the name never locked")
+	}
+	b, _ := json.Marshal(map[string]string{"password": "correcthorse1"})
+	req, _ := http.NewRequest("POST", srv.URL+"/api/account/delete", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeader, "1")
+	req.Header.Set("X-Forwarded-For", "203.0.113.9") // the member, through the tunnel
+	resp, err = member.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := drain(t, resp); resp.StatusCode != 200 {
+		t.Fatalf("delete while the name is locked: %d %s, want 200", resp.StatusCode, body)
 	}
 	if _, ok, _ := st.GetUserByName(ctx, "dora"); ok {
 		t.Fatal("the account survived its deletion")

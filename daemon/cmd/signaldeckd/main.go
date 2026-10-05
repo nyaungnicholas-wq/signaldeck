@@ -28,6 +28,8 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	sicBulk := flag.Bool("sic-bulk-sync", false,
 		"run ONE forced SIC bulk sync (SEC EDGAR bulk submissions.zip, ~1.5 GB streamed to SIGNALDECK_TMP) against the configured DB, print the result, and exit — stop the daemon first")
+	posture := flag.Bool("publication-posture", false,
+		"load the config exactly as the daemon would, print whether it is published (strangers can reach it), and exit: 0 published, 3 not (ops/lib-deploy.sh)")
 	flag.Parse()
 	fmt.Printf("signaldeckd v%s\n", version)
 	if *showVersion {
@@ -35,6 +37,15 @@ func main() {
 	}
 
 	cfg := config.Load()
+	if *posture {
+		if cfg.Published() {
+			fmt.Println("publication posture: published")
+			return
+		}
+		fmt.Println("publication posture: NOT published (no SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG, " +
+			"SIGNALDECK_PUBLIC_SURFACE=1 or non-loopback SIGNALDECK_ALLOWED_HOSTS)")
+		os.Exit(3)
+	}
 
 	// Log slog to BOTH stderr and a size-capped rotating file (20 MB x 3).
 	// SIGNALDECK_LOG_FILE overrides the path; set it to "" to disable file

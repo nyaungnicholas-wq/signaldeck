@@ -174,10 +174,11 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GraderStaleReason: graderStaleReason,
-			Reason:            "accuracy registry unavailable: " + err.Error(),
+			Reason:            "accuracy registry unavailable",
 		})
 		return
 	}
@@ -250,6 +251,8 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// pointed the other way.
 	reason, collapsed, err := d.collapsedGradingWindowCached(ctx, reg, now)
 	if err != nil {
+		// The gate's own errors are composed to be read ("graded window is
+		// unmeasured"; collapsecache_test pins it), so this one keeps its text.
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED_UNAVAILABLE", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
@@ -276,10 +279,11 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// as live, with HTTP 200 and nothing in the payload saying the read failed.
 	claims, err := d.St.EvidenceClaims(ctx, "", "")
 	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
-			Reason:   "evidence claims unreadable: " + err.Error(),
+			Reason:   "evidence claims unreadable",
 		})
 		return
 	}
@@ -291,9 +295,10 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		priorRetired, priorReason, priorSource, err := d.St.RetirementHistory(ctx, predictor, horizon, variant)
 		if err != nil {
 			// An unreadable history must not read as "never retired".
+			slog.Warn("accuracy refused: a read failed", "err", err)
 			writeAccuracyRefusal(w, accuracyResponse{
 				Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
-				Reason: "retirement history unreadable: " + err.Error(),
+				Reason: "retirement history unreadable",
 			})
 			return
 		}
@@ -390,9 +395,10 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// recorded reason and no figures: the current window holds none for it.
 	retired, err := d.St.RetiredVerdicts(ctx)
 	if err != nil {
+		slog.Warn("accuracy refused: a read failed", "err", err)
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
-			Reason: "retirement history unreadable: " + err.Error(),
+			Reason: "retirement history unreadable",
 		})
 		return
 	}

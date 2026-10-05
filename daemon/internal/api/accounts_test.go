@@ -437,8 +437,21 @@ func TestSignupDoesNotRevealTakenUsernames(t *testing.T) {
 		t.Fatalf("taken username: %d %s, want the same answer as success", code, body)
 	}
 	waitMail(t, mb, before+1)
+	if m := mb.last(); m.to != "someoneelse@gmail.com" || !strings.Contains(m.body, "already taken") { // Gmail-folded
+		t.Fatalf("taken username mailed %s: %q; want the requester told the name is taken", m.to, m.body)
+	}
 	if n, err := st.CountUsers(context.Background()); err != nil || n != 2 {
 		t.Fatalf("users = %d (err %v), want 2: owner and carol only", n, err)
+	}
+	// A member signing up again with their own name and address is sent to
+	// sign in or reset, not told to pick another name (2026-10-05 review).
+	before = mb.count()
+	if code, body := signup(t, newClient(t), srv.URL, "carol", "carol@gmail.com"); code != 200 || !strings.Contains(body, verifySent) {
+		t.Fatalf("returning member: %d %s, want the same answer as success", code, body)
+	}
+	waitMail(t, mb, before+1)
+	if m := mb.last(); m.to != "carol@gmail.com" || !strings.Contains(m.body, "/forgot") || strings.Contains(m.body, "already taken") {
+		t.Fatalf("returning member mailed %s: %q; want the sign-in/reset mail", m.to, m.body)
 	}
 }
 

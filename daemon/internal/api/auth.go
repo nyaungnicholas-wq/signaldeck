@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // tokenEqual compares a presented credential to the configured one in constant
@@ -284,35 +286,54 @@ const (
 	deviceTTL     = 180 * 24 * time.Hour
 )
 
-// deviceKeyMemo holds the known-device HMAC key, read from meta once per
-// process and created on first use. Losing it only resets every browser to the
-// shared ladder until its next sign-in.
+// deviceKeyMemo holds the known-device HMAC key per store, read from meta once
+// and created on first use. Losing it only resets every browser to the shared
+// ladder until its next sign-in.
 var deviceKeyMemo struct {
 	sync.Mutex
+	st  *store.Store
 	key []byte
 }
 
+// deviceKey returns the known-device key, or nil (callers fall back to the
+// shared ladder). A failed read never creates a key: overwriting the stored one
+// voided every device cookie. Creation is insert-if-absent then re-read, and no
+// lock is held across database I/O (2026-10-05 review S3).
 func (d Deps) deviceKey(ctx context.Context) []byte {
-	deviceKeyMemo.Lock()
-	defer deviceKeyMemo.Unlock()
-	if deviceKeyMemo.key != nil || d.St == nil {
-		return deviceKeyMemo.key
+	if d.St == nil {
+		return nil
 	}
-	if v, err := d.St.GetMeta(ctx, metaDeviceKey); err == nil && len(v) == 64 {
-		if b, err := hex.DecodeString(v); err == nil {
-			deviceKeyMemo.key = b
-			return b
+	deviceKeyMemo.Lock()
+	if deviceKeyMemo.st == d.St && deviceKeyMemo.key != nil {
+		k := deviceKeyMemo.key
+		deviceKeyMemo.Unlock()
+		return k
+	}
+	deviceKeyMemo.Unlock()
+	v, err := d.St.GetMeta(ctx, metaDeviceKey)
+	if err != nil {
+		return nil
+	}
+	if v == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return nil
+		}
+		if err := d.St.SetMetaIfAbsent(ctx, metaDeviceKey, hex.EncodeToString(b)); err != nil {
+			return nil
+		}
+		if v, err = d.St.GetMeta(ctx, metaDeviceKey); err != nil {
+			return nil
 		}
 	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	key, err := hex.DecodeString(v)
+	if err != nil || len(key) != 32 {
 		return nil
 	}
-	if err := d.St.SetMeta(ctx, metaDeviceKey, hex.EncodeToString(b)); err != nil {
-		return nil
-	}
-	deviceKeyMemo.key = b
-	return b
+	deviceKeyMemo.Lock()
+	deviceKeyMemo.st, deviceKeyMemo.key = d.St, key
+	deviceKeyMemo.Unlock()
+	return key
 }
 
 func deviceMAC(key []byte, name string) string {

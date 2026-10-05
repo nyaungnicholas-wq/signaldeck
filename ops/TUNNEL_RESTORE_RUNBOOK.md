@@ -105,13 +105,17 @@ bash ops/signaldeck-ctl.sh status
 ```
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" https://spearfish-dwindle-module.ngrok-free.dev/api/health
+curl -sS -X POST -H 'Content-Type: application/json' -d '{}' https://spearfish-dwindle-module.ngrok-free.dev/api/tv-webhook
 ```
 
-The third is the one that matters: `200` means the tunnel is up AND the Host
-allowlist accepts it. A `404`/`421`/connection error means the tunnel is running
-but the daemon is refusing the Host — fix `SIGNALDECK_ALLOWED_HOSTS`, not the
-tunnel.
+The third is the one that matters. Since 2026-10-05 (audit AUD-08) an ngrok
+Host reaches only `POST /api/tv-webhook`; every other path, `/api/health`
+included, answers `403 this host serves only the TradingView webhook`. So the
+healthy answer here is the webhook's own refusal of the missing secret,
+`{"error":"invalid secret"}` (403), which proves the tunnel is up AND the Host
+allowlist accepts it. A `404`/`421`/connection error means the tunnel is
+running but the daemon is refusing the Host: fix `SIGNALDECK_ALLOWED_HOSTS`,
+not the tunnel.
 
 ## DONE - the tunnel is live (2026-09-19)
 
@@ -139,8 +143,9 @@ grok.yml` for whichever profile invoked it; from
 an admin shell the S4U task finds no token and reproduces the original
 ERR_NGROK_105 with a perfectly valid credential.
 
-Verified 2026-09-19: task kick -> Running -> `https://spearfish-dwindle-module.ngrok-free.dev/api/health`
-returns the daemon's health JSON (not an ngrok interstitial, which is why the
+Verified 2026-09-19 (before AUD-08 limited the ngrok Host to the webhook;
+`/api/health` there now answers 403, see the check above): task kick -> Running -> `https://spearfish-dwindle-module.ngrok-free.dev/api/health`
+returned the daemon's health JSON (not an ngrok interstitial, which is why the
 assertion is the BODY and not a 200); stop -> Ready -> 404; and
 `ops/tunnel-guard.ps1` on a Saturday reports "outside the collection window" and
 leaves it down.

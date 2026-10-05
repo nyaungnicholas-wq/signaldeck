@@ -25,22 +25,31 @@ sd_install_binary() {
   fi
 }
 
-# sd_check_publication_posture ENVFILE TUNNEL_RUNNING: refuse a restart that
-# would leave a running tunnel in front of a daemon with no publication
-# evidence (2026-10-05 audit, AUD-09). The public web tier forwards every
-# visitor with the local-proxy key, so published() is the only thing keeping
-# operator authority and raw data closed, and it rests on daemon/.env naming a
-# public URL, the quick-tunnel log, or a public surface. TUNNEL_RUNNING is
-# "yes" or "no" (the caller decides how to detect it). Prints why on refusal.
+# sd_tunnel_running: prints "yes" when a cloudflared process runs on this host.
+sd_tunnel_running() {
+  if command -v tasklist >/dev/null 2>&1; then
+    tasklist //FI "IMAGENAME eq cloudflared.exe" 2>/dev/null | grep -qi cloudflared && { echo yes; return; }
+  elif command -v pgrep >/dev/null 2>&1; then
+    pgrep -x cloudflared >/dev/null 2>&1 && { echo yes; return; }
+  fi
+  echo no
+}
+
+# sd_check_publication_posture BIN DAEMON_DIR TUNNEL_RUNNING: refuse to put a
+# binary in front of a running tunnel when it would read this daemon as
+# unpublished (2026-10-05 audit, AUD-09). The public web tier forwards every
+# visitor with the local-proxy key, so published() is all that keeps operator
+# authority and raw data closed. BIN answers itself (-publication-posture: 0
+# published, 3 not), run from DAEMON_DIR so it finds the same daemon/.env the
+# installed binary will: a grep here was a second .env parser and disagreed
+# with the daemon (2026-10-05 review). Callers run this BEFORE stopping
+# anything. TUNNEL_RUNNING is "yes" or "no". Prints why on refusal.
 sd_check_publication_posture() {
-  local env="$1" tunnel="$2"
+  local bin="$1" dir="$2" tunnel="$3" out rc
   [ "$tunnel" = "yes" ] || return 0
-  if grep -qE '^(SIGNALDECK_PUBLIC_URL|SIGNALDECK_TUNNEL_LOG)=.+' "$env" 2>/dev/null; then
-    return 0
-  fi
-  if grep -qiE '^SIGNALDECK_PUBLIC_SURFACE=(1|true|yes)' "$env" 2>/dev/null; then
-    return 0
-  fi
-  echo "deploy REFUSED: a tunnel is running but $env names no SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG or SIGNALDECK_PUBLIC_SURFACE=1, so the daemon would treat every tunnel visitor as local (ops/CLOUDFLARE_TUNNEL.md section 3). Set one first."
+  out="$(cd "$dir" && env -u SIGNALDECK_ROOT "$bin" -publication-posture 2>&1)"
+  rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  echo "REFUSED: a tunnel is running but this build reads the daemon as unpublished (rc $rc), so it would treat every tunnel visitor as local (ops/CLOUDFLARE_TUNNEL.md section 3). Set SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG or SIGNALDECK_PUBLIC_SURFACE=1 in daemon/.env first. Nothing was stopped. The binary said: $(printf '%s' "$out" | tail -1)"
   return 1
 }

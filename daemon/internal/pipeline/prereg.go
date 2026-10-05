@@ -630,28 +630,28 @@ func (w *PreregRegistrar) chargeLook(ctx context.Context, now int64) (int, error
 }
 
 // RegistryCandidates lists where the graded registry may be, most specific
-// first: beside the running binary (<repo>/daemon/signaldeckd.exe reads
-// <repo>/data), then the working-directory forms the daemon and tools always
-// used. Every reader shares this one list. Anchored only on the working
-// directory, a daemon started from anywhere else refused publication as
-// "registry unavailable" (2026-10-05 audit, AUD-27).
+// first: beside the running binary (<repo>/bin/signaldeckd.exe reads
+// <repo>/data), then the working-directory forms the daemon (<repo>/daemon)
+// and tools (<repo>) always used. Every reader shares this one list. Anchored
+// only on the working directory, a daemon started from anywhere else refused
+// publication as "registry unavailable" (2026-10-05 audit, AUD-27). No
+// package-directory form: a test without an override must not reach the live
+// checkout's registry (go test runs in daemon/internal/<pkg>).
 func RegistryCandidates() []string {
 	var out []string
 	if exe, err := os.Executable(); err == nil {
 		out = append(out, filepath.Join(filepath.Dir(exe), "..", prereg.RegistryRel))
 	}
-	return append(out,
-		filepath.Join("..", prereg.RegistryRel),
-		prereg.RegistryRel,
-		filepath.Join("..", "..", "..", prereg.RegistryRel),
-	)
+	return append(out, filepath.Join("..", prereg.RegistryRel), prereg.RegistryRel)
 }
 
 // registryGradedAt reads the graded_at stamp out of the graded registry
 // artifact. A refusal envelope carries the STALE graded_at forward, so a run
 // the grader refused is correctly not charged as a look.
 func (w *PreregRegistrar) registryGradedAt() (string, int, error) {
-	candidates := RegistryCandidates()
+	// The package-directory form is this reader's own, as it was before the
+	// shared list (go test runs in daemon/internal/pipeline).
+	candidates := append(RegistryCandidates(), filepath.Join("..", "..", "..", prereg.RegistryRel))
 	if w.RegistryPath != "" {
 		candidates = []string{w.RegistryPath}
 	}

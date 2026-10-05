@@ -1920,6 +1920,15 @@ func (s *Store) SetMeta(ctx context.Context, k, v string) error {
 	return err
 }
 
+// SetMetaIfAbsent stores v under k only when k is unset, on the account writer
+// (a sign-in must not queue behind the worker fleet). Read k back afterwards:
+// a concurrent first writer wins and everyone uses its value.
+func (s *Store) SetMetaIfAbsent(ctx context.Context, k, v string) error {
+	_, err := s.authW().ExecContext(ctx,
+		`INSERT INTO meta (k, v) VALUES (?,?) ON CONFLICT(k) DO NOTHING`, k, v)
+	return err
+}
+
 // SetJSON stores a JSON-marshaled value under a meta key (small blobs only).
 func (s *Store) SetJSON(ctx context.Context, k string, v any) error {
 	b, err := json.Marshal(v)

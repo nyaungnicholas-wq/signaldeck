@@ -65,7 +65,11 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusForbidden, store.ErrAdminAccount.Error())
 		return
 	}
-	lockKey := d.lockoutKey(r, u.Username)
+	// Its own ladder, reachable only with this account's session: on the name's
+	// ladder an internet attacker who kept the name locked also blocked the
+	// member's deletion (the device cookie is scoped to /api/auth; 2026-10-05
+	// review S2). '|' never appears in a username.
+	lockKey := u.Username + "|delete"
 	if wait := loginFailures.retryAfter(lockKey, time.Now()); wait > 0 {
 		httpErr(w, http.StatusTooManyRequests, "too many wrong passwords — try again later")
 		return
@@ -75,7 +79,10 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusForbidden, "that password is not right")
 		return
 	}
-	if err := d.St.DeleteAccount(ctx, uid); errors.Is(err, store.ErrAdminAccount) {
+	release := d.St.Priority() // a person is waiting: go ahead of the worker fleet
+	err = d.St.DeleteAccount(ctx, uid)
+	release()
+	if errors.Is(err, store.ErrAdminAccount) {
 		httpErr(w, http.StatusForbidden, err.Error())
 		return
 	} else if err != nil {

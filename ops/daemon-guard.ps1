@@ -29,8 +29,25 @@ $STRIKES_TO_RESTART = 3
 function Test-ShouldRestart([int]$strikes, [double]$uptimeMin) {
     return ($uptimeMin -ge $MIN_UPTIME_MIN -and $strikes -ge $STRIKES_TO_RESTART)
 }
+# Any HTTP status, 403/429/503 included, means the daemon is alive: this is a
+# hang check, not a health check. Invoke-WebRequest throws on every non-2xx in
+# PS 5.1, so a 429 from the shared loopback bucket counted as a strike and could
+# kill a healthy daemon (2026-10-05 review S1). curl.exe prints 000 when nothing
+# answered.
+function Test-Answered([string]$code) {
+    return ($code -match '^[1-5][0-9][0-9]$')
+}
+function Get-HttpCode([string]$url) {
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (-not (Test-Path $curl)) { return 'nocurl' }
+    try { return [string](& $curl -s -o NUL -w '%{http_code}' -m $HEALTH_TIMEOUT_SEC $url) } catch { return '000' }
+}
 if ($args.Count -gt 0 -and $args[0] -eq '__selfcheck') {
     $bad = 0
+    foreach ($c in @('200', '403', '429', '503')) { if (-not (Test-Answered $c)) { Write-Output "FAIL: HTTP $c counted as no answer"; $bad++ } }
+    foreach ($c in @('000', '', 'nocurl')) { if (Test-Answered $c) { Write-Output "FAIL: '$c' counted as an answer"; $bad++ } }
+    $dead = Get-HttpCode 'http://127.0.0.1:9/'
+    if (Test-Answered $dead) { Write-Output "FAIL: a closed port answered ($dead)"; $bad++ }
     if (Test-ShouldRestart 3 5)  { Write-Output 'FAIL: restarted a daemon still booting'; $bad++ }
     if (Test-ShouldRestart 2 60) { Write-Output 'FAIL: restarted on two strikes'; $bad++ }
     if (-not (Test-ShouldRestart 3 60)) { Write-Output 'FAIL: did not restart after three strikes'; $bad++ }
@@ -176,20 +193,18 @@ if (-not (Test-Path $refresh)) {
 $strikeFile = Join-Path $root 'logs\daemon-guard.strikes'
 $running = Get-Process -Name signaldeckd -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($running) {
-    $answered = $false
-    try {
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8322/api/health' -TimeoutSec $HEALTH_TIMEOUT_SEC
-        $answered = ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
-    } catch {
-        $answered = $false
+    $code = Get-HttpCode 'http://127.0.0.1:8322/api/health'
+    if ($code -eq 'nocurl') {
+        Write-Output "hang check SKIPPED: no curl.exe; a probe that cannot run never kills the daemon"
+        exit 0
     }
-    if ($answered) {
+    if (Test-Answered $code) {
         Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue
-        Write-Output "signaldeckd running and answering: nothing to do"
+        Write-Output "signaldeckd running and answering (HTTP $code): nothing to do"
         exit 0
     }
     $uptimeMin = 0
-    try { $uptimeMin = ((Get-Date) - $running.StartTime).TotalMinutes } catch { }
+    try { $uptimeMin = ((Get-Date) - $running.StartTime).TotalMinutes } catch { Write-Output "hang check: could not read the daemon's start time ($_); not counting this miss" }
     $strikes = 1
     if (Test-Path $strikeFile) {
         $prev = 0
@@ -264,6 +279,23 @@ if (Test-Path $prov) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
 } else {
     Write-Output "WARNING: provenance preflight NOT RUN - $prov is missing (a copy exists at round2-drafts\devops\). The daemon is starting WITHOUT a stale-binary check."
+}
+
+# Publication posture (AUD-09; 2026-10-05 review S4). This is the daemon's only
+# automatic start path, so it must not start a binary that reads daemon\.env as
+# unpublished while a tunnel runs: every tunnel visitor would be local, with
+# operator authority. Exit 3 is the binary's "not published"; any other code
+# (a binary built before the flag existed) starts as before.
+if (Get-Process -Name cloudflared -ErrorAction SilentlyContinue) {
+    $pc = 0
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    Push-Location (Join-Path $root 'daemon')
+    try { & $exe -publication-posture | Select-Object -Last 1 | ForEach-Object { Write-Output $_ }; $pc = $LASTEXITCODE } catch { $pc = 0 } finally { Pop-Location; $ErrorActionPreference = $eap }
+    if ($pc -eq 3) {
+        Write-Output "NOT starting signaldeckd: a tunnel is running and daemon\.env makes it unpublished. Set SIGNALDECK_PUBLIC_URL, SIGNALDECK_TUNNEL_LOG or SIGNALDECK_PUBLIC_SURFACE=1 first (ops/CLOUDFLARE_TUNNEL.md section 3)."
+        exit 1
+    }
 }
 
 $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'

@@ -327,6 +327,7 @@ func TestJournalFeedsNoForecast(t *testing.T) {
 	allowed := map[string]bool{
 		"internal/store/membercalls.go":           true, // the table's only reader/writer
 		"internal/store/accounts.go":              true, // purge with the account
+		"internal/store/accountdata.go":           true, // the member's own export (graded calls, no prices) and erase with the account (AUD-05)
 		"internal/memberjournal/memberjournal.go": true,
 		"internal/api/journal.go":                 true, // the member's own routes
 		"internal/api/accounts.go":                true, // memberRoutes entry

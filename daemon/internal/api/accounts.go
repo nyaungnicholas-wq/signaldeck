@@ -223,12 +223,7 @@ func (d Deps) isAdminUID(ctx context.Context, uid int64) bool {
 // published is true whenever strangers can reach the daemon: an explicit public
 // surface, or a tunnel/allowlisted host (reachablePrivately false).
 func (d Deps) published() bool {
-	// A configured public URL or quick-tunnel log is an explicit statement that
-	// strangers reach this daemon. Relying on ReachablePrivately() alone made
-	// the whole member tier hinge on a stale hostname left in ALLOWED_HOSTS:
-	// deleting it would have silently opened operator authority to sign-ups.
-	return d.Cfg.PublicSurface || d.Cfg.PublicURL != "" || d.Cfg.TunnelLog != "" ||
-		!d.Cfg.ReachablePrivately()
+	return d.Cfg.Published()
 }
 
 // isOperator is true for the admin (or API token) on a published deployment,
@@ -522,6 +517,23 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	if taken, err := d.St.EmailTaken(ctx, email); err != nil {
+		httpInternal(w, err)
+		return
+	} else if taken {
+		// Same answer as success; tell the real owner instead of the requester.
+		// Checked before the username, so a member who signs up again with
+		// their own name and address is sent to sign in, not told to pick
+		// another name (2026-10-05 review).
+		if mailLimiter.allow(email) {
+			d.sendAsync(email, "Your SignalDeck account",
+				"Someone (hopefully you) tried to create a SignalDeck account with this email, but one already exists.\n\n"+
+					"Sign in: "+base+"/login\nForgot your password? "+base+"/forgot\n\n"+
+					"If this wasn't you, you can ignore this email.")
+		}
+		writeJSON(w, map[string]string{"status": verifySent})
+		return
+	}
 	// A taken USERNAME used to answer 409 at once, before bcrypt: a fast,
 	// distinct reply that let anyone list account names to aim the sign-in
 	// lockout at (2026-10-05 review). It now answers exactly like success and
@@ -535,20 +547,6 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 				"Someone (hopefully you) tried to create a SignalDeck account with this email, but the username \""+
 					creds.Username+"\" is already taken, so no account was created.\n\n"+
 					"Choose another username: "+base+"/signup\n\n"+
-					"If this wasn't you, you can ignore this email.")
-		}
-		writeJSON(w, map[string]string{"status": verifySent})
-		return
-	}
-	if taken, err := d.St.EmailTaken(ctx, email); err != nil {
-		httpInternal(w, err)
-		return
-	} else if taken {
-		// Same answer as success; tell the real owner instead of the requester.
-		if mailLimiter.allow(email) {
-			d.sendAsync(email, "Your SignalDeck account",
-				"Someone (hopefully you) tried to create a SignalDeck account with this email, but one already exists.\n\n"+
-					"Sign in: "+base+"/login\nForgot your password? "+base+"/forgot\n\n"+
 					"If this wasn't you, you can ignore this email.")
 		}
 		writeJSON(w, map[string]string{"status": verifySent})

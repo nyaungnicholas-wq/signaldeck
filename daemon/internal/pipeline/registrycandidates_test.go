@@ -19,10 +19,17 @@ func TestRegistryCandidatesAnchorOnTheBinary(t *testing.T) {
 	}
 	got := RegistryCandidates()
 	want := filepath.Join(filepath.Dir(exe), "..", prereg.RegistryRel)
-	if len(got) < 4 || got[0] != want {
-		t.Fatalf("candidates = %v, want %q first and the three working-directory forms after it", got, want)
+	if len(got) != 3 || got[0] != want {
+		t.Fatalf("candidates = %v, want %q first and the two working-directory forms after it", got, want)
 	}
 	if got[2] != prereg.RegistryRel {
 		t.Fatalf("the repo-root form moved: %v", got)
+	}
+	// The shared list must not reach the live registry from a package directory
+	// (a test without an override, run in the live checkout).
+	for _, p := range got[1:] {
+		if p == filepath.Join("..", "..", "..", prereg.RegistryRel) {
+			t.Fatalf("the shared list carries the package-directory form: %v", got)
+		}
 	}
 }

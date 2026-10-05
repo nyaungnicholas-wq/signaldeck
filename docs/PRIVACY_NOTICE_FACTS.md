@@ -11,7 +11,7 @@
 | Password, as a bcrypt hash (cost 10) | `users.pass_hash` | Sign-in | Until the account is deleted |
 | Account created time, email-confirmed flag | `users` | Account state | Until the account is deleted |
 | Session token | `sessions`, cookie `signaldeck_session` (HttpOnly, SameSite=Lax, Secure over HTTPS) | Keeping you signed in | 30 days, or until sign-out, password reset or deletion |
-| Known-browser marker | cookie `signaldeck_device` (HttpOnly, path `/api/auth`, 180 days); an HMAC of the username, no personal data stored server-side | Lets a browser that signed in before keep signing in while someone else's failed guesses lock the name | 180 days in the browser |
+| Known-browser marker | cookie `signaldeck_device` (HttpOnly, path `/api/auth`, 180 days); an HMAC of the username, no personal data stored server-side | Lets a browser that signed in before keep signing in while someone else's failed guesses lock the name. It is per name, so it outlives a password reset; it grants a separate rate-limited ladder, never access | 180 days in the browser |
 | Emailed link tokens, stored only as hashes | `auth_tokens` | Confirmation (24 h) and reset (1 h) links | Until used or expired; deleted with the account |
 | Watchlist | `member_symbols` | Your list | Until you remove a symbol or delete the account |
 | Your calls and their notes | `member_calls` | Your journal, graded | Until the account is deleted; a call cannot be edited once made |
@@ -26,7 +26,7 @@ Unverified sign-ups older than 24 hours are deleted the next time anyone signs u
 
 - **Download:** Account → "Download my data": a JSON file of the rows above, without the password hash or any token.
 - **Delete:** Account → "Delete my account", confirmed with your password. Every row above that is keyed to the account is erased in one transaction.
-- **Waitlist removal:** **OPEN**. Needs a contact address or an unsubscribe link in the one email it sends.
+- **Waitlist removal:** **OPEN**. Needs a contact address now, and an unsubscribe link in the one email when that send is built (nothing sends it yet). Deleting an account does not remove a notification-list row for the same address: the list stores the address as typed, the account stores it folded.
 
 ## Who else handles the data
 

@@ -147,6 +147,12 @@ build_from_head() {
     echo "REFUSED: build from the extracted commit failed." >&2
     rm -rf "$tmp"; return 1
   fi
+  # Publication posture (AUD-09), asked of the NEW binary and before the stop
+  # below: refusing after the swap left the guard to restart the new binary on
+  # the same .env within 5 minutes (2026-10-05 review M2).
+  if ! sd_check_publication_posture "$tmp/signaldeckd$exe" "$REPO/daemon" "$(sd_tunnel_running)" >&2; then
+    rm -rf "$tmp"; return 1
+  fi
   mkdir -p "$REPO/bin"
   # A running daemon holds its own image open on Windows, so install(1) fails
   # with "File exists" (Unix silently replaces the inode instead). Stop first,
@@ -255,13 +261,6 @@ case "${1:-status}" in
     BUILT_REV=""
     build_from_head || { echo "deploy REFUSED (see above)."; exit 1; }
     rev="$BUILT_REV"
-    # Publication posture before the restart that would apply daemon/.env
-    # (AUD-09): a running tunnel needs published() evidence in the env file.
-    tunnel_running=no
-    if command -v tasklist >/dev/null 2>&1 && tasklist //FI "IMAGENAME eq cloudflared.exe" 2>/dev/null | grep -qi cloudflared; then
-      tunnel_running=yes
-    fi
-    sd_check_publication_posture "$REPO/daemon/.env" "$tunnel_running" || exit 1
     # -k means "kill first": deploy must land on the NEW binary, so restart
     # rather than merely start an already-running daemon.
     sd_svc_restart "$DAEMON"

@@ -400,6 +400,10 @@ function LiveRecord({ live }: { live: Live }) {
               <span className="text-sm" style={{ color: "var(--dim)" }}>
                 current figures {retired.figures_withheld}
               </span>
+            ) : retired.live_n === 0 ? (
+              <span className="text-sm" style={{ color: "var(--dim)" }}>
+                no forecasts in the current graded window
+              </span>
             ) : (
             <span className="text-sm" style={{ color: "var(--dim)" }}>
               <span className="tnum">{pct(retired.live_acc)}</span> correct against a{" "}
