@@ -177,18 +177,35 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("create backup dir: %w", err)
 	}
 	target := filepath.Join(w.Dir, fmt.Sprintf("signaldeck-%s.db", time.Now().Format("20060102-150405")))
+	// The copy is written under a .partial name and renamed to target only
+	// after every check below passes. A run cut off mid-copy (shutdown, kill)
+	// used to leave signaldeck-<ts>.db behind, 0 bytes or torn, under the exact
+	// name of a good backup. On 2026-10-04 ops/signaldeck-cleanup.sh kept that
+	// 0-byte file as one of its "2 newest" and moved the newest verified backup
+	// to the Trash. prune() and the cleanup script only count *.db, so a
+	// .partial can never be mistaken for a generation.
+	partial := target + ".partial"
+	// A hard kill mid-copy leaves a .partial behind that nothing else removes,
+	// up to the full database size. Only this worker writes them, one run at a
+	// time, so any that exist now are debris.
+	stale, _ := filepath.Glob(filepath.Join(w.Dir, "signaldeck-*.db.partial"))
+	for _, p := range stale {
+		os.Remove(p) //nolint:errcheck
+	}
 	// VACUUM INTO refuses to overwrite; a leftover from a crashed run would
-	// block forever, so clear the exact target first.
-	os.Remove(target) //nolint:errcheck
+	// block forever, so clear the exact path first.
+	os.Remove(partial) //nolint:errcheck
 	// Run on the READ pool: VACUUM INTO only reads the source database, and
 	// keeping it off the single write connection means writers aren't queued
 	// behind a potentially long copy.
-	if _, err := w.St.DB().ExecContext(ctx, `VACUUM INTO ?`, target); err != nil {
+	if _, err := w.St.DB().ExecContext(ctx, `VACUUM INTO ?`, partial); err != nil {
+		os.Remove(partial) //nolint:errcheck
 		w.page(ctx, "SignalDeck backup FAILED", fmt.Sprintf("VACUUM INTO %s: %v", filepath.Base(target), err))
 		return "", fmt.Errorf("vacuum into %s: %w", target, err)
 	}
-	st, err := os.Stat(target)
+	st, err := os.Stat(partial)
 	if err != nil {
+		os.Remove(partial) //nolint:errcheck
 		return "", fmt.Errorf("backup written but unstattable: %w", err)
 	}
 	// H8: verify BEFORE pruning or recording success. A failed check removes
@@ -196,8 +213,8 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// prune() below is never reached, so the existing (good) generations in
 	// w.Dir are never rotated away behind a bad one, and meta's
 	// backup_last_ts is never advanced past the last KNOWN-GOOD backup.
-	if verr := w.verify(ctx, target); verr != nil {
-		os.Remove(target) //nolint:errcheck
+	if verr := w.verify(ctx, partial); verr != nil {
+		os.Remove(partial) //nolint:errcheck
 		_ = w.St.InsertDQ(ctx, md.DQEvent{
 			Ts:     time.Now().Unix(),
 			Kind:   "backup_corrupt",
@@ -236,6 +253,7 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	var liveLedger int64
 	if cntErr := w.St.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger); cntErr != nil {
+		os.Remove(partial) //nolint:errcheck
 		_ = w.St.InsertDQ(ctx, md.DQEvent{
 			Ts:   time.Now().Unix(),
 			Kind: "backup_uncertifiable",
@@ -247,7 +265,7 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("backup content unverifiable: live ledger count failed, "+
 			"no rotation and no meta advance: %w", cntErr)
 	}
-	if cerr := verifyContent(ctx, target, liveLedger); cerr != nil {
+	if cerr := verifyContent(ctx, partial, liveLedger); cerr != nil {
 		// Quarantine rather than delete: a backup that failed verification is
 		// the evidence for WHY it failed, and it is the only artifact of that
 		// run. Kept outside w.Dir so prune() never sees it.
@@ -255,13 +273,13 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 		moved := "removed"
 		if mkErr := os.MkdirAll(qdir, 0o755); mkErr == nil {
 			dest := filepath.Join(qdir, filepath.Base(target))
-			if os.Rename(target, dest) == nil {
+			if os.Rename(partial, dest) == nil {
 				moved = "quarantined in " + qdir
 			} else {
-				os.Remove(target) //nolint:errcheck
+				os.Remove(partial) //nolint:errcheck
 			}
 		} else {
-			os.Remove(target) //nolint:errcheck
+			os.Remove(partial) //nolint:errcheck
 		}
 		_ = w.St.InsertDQ(ctx, md.DQEvent{
 			Ts:     time.Now().Unix(),
@@ -271,6 +289,10 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 		w.page(ctx, "SignalDeck backup FAILED — accountability record missing",
 			fmt.Sprintf("%s is structurally valid but substantively empty (%s): %v", filepath.Base(target), moved, cerr))
 		return "", fmt.Errorf("backup content verification failed, copy %s, no rotation: %w", moved, cerr)
+	}
+	if rerr := os.Rename(partial, target); rerr != nil {
+		os.Remove(partial) //nolint:errcheck
+		return "", fmt.Errorf("backup verified but not renamed into place, no rotation: %w", rerr)
 	}
 	pruned, perr := w.prune(w.Dir)
 	detail := fmt.Sprintf("backup %s (%.1f MB), pruned %d old", filepath.Base(target), float64(st.Size())/(1024*1024), pruned)

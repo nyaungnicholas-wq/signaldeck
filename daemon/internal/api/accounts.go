@@ -138,10 +138,11 @@ var (
 // ── limiter ────────────────────────────────────────────────────────────────
 
 type windowLimiter struct {
-	mu     sync.Mutex
-	max    int
-	window time.Duration
-	hits   map[string][]time.Time
+	mu       sync.Mutex
+	max      int
+	window   time.Duration
+	hits     map[string][]time.Time
+	lastShed time.Time
 }
 
 func newWindowLimiter(max int, window time.Duration) *windowLimiter {
@@ -164,18 +165,32 @@ func (l *windowLimiter) allow(key string) bool {
 		return false
 	}
 	l.hits[key] = append(kept, now)
-	if len(l.hits) > 50000 { // bound memory under a spray of distinct keys
+	// Bound memory under a spray of distinct keys. The pass walks the whole
+	// table, so it runs at most once a second: a table held over the cap by
+	// exhausted keys would otherwise cost a full walk on every call.
+	if len(l.hits) > 50000 && now.Sub(l.lastShed) >= time.Second {
+		l.lastShed = now
 		for k, v := range l.hits {
 			if len(v) == 0 || v[len(v)-1].Before(cut) {
 				delete(l.hits, k)
 			}
 		}
-		// Still over after the sweep means a live spray of fresh keys. Drop
-		// the table rather than grow without bound: briefly forgetting budgets
-		// is the lesser harm, and the other limiters still apply.
+		// Still over after the sweep means a live spray of fresh keys. Shed
+		// the keys with budget left first: they are the spray. Dropping the
+		// whole table (the old answer) also forgot every EXHAUSTED budget, so
+		// filling it reset a victim address's mail limit (2026-10-05 review).
 		if len(l.hits) > 50000 {
-			l.hits = map[string][]time.Time{key: {now}}
+			for k, v := range l.hits {
+				if len(v) < l.max && k != key {
+					delete(l.hits, k)
+				}
+			}
 		}
+	}
+	// Only a spray that exhausts budgets on purpose gets here; bound memory
+	// anyway, as before.
+	if len(l.hits) > 200000 {
+		l.hits = map[string][]time.Time{key: l.hits[key]}
 	}
 	return true
 }
@@ -398,12 +413,34 @@ type signupBody struct {
 
 const verifySent = "verify-sent"
 
+// signupPaused is the answer a published daemon gives while it has no
+// Turnstile secret. The sign-up page reads signupPaused from /api/health and
+// shows the same sentence instead of a form that can only fail.
+const signupPaused = "sign-ups are paused until the site's bot check is set up; the public record needs no account"
+
+// signupOpen is whether a stranger can create a password account right now.
+// A published daemon with no Turnstile secret refuses: on 2026-10-05 the live
+// site took sign-ups behind only a honeypot and per-IP limits, and each one
+// sends a mail from the operator's own mailbox, so a botnet could spend that
+// mailbox's daily quota and its sender reputation. Setting
+// SIGNALDECK_TURNSTILE_SECRET (and the site key) reopens it with no other
+// change. Both keys are needed: without the site key the page renders no
+// widget, so every token is empty and every submit would fail the check. The
+// private loopback flow keeps its old behaviour.
+func (d Deps) signupOpen() bool {
+	return d.Cfg.OpenSignup && ((d.Cfg.TurnstileSecret != "" && d.Cfg.TurnstileSiteKey != "") || !d.published())
+}
+
 // authRegister creates an account. The FIRST account ever created becomes the
 // admin with no email step (bootstrapping a fresh install). Every account after
 // that is a member: it needs a verified email before it can sign in.
 func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	if !d.Cfg.OpenSignup {
 		httpErr(w, 403, "registration is closed")
+		return
+	}
+	if !d.signupOpen() {
+		httpErr(w, http.StatusServiceUnavailable, signupPaused)
 		return
 	}
 	var body signupBody

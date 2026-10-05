@@ -18,6 +18,23 @@ export default function SignupPage() {
   const [done, setDone] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const [resendMessage, setResendMessage] = useState<string | null>(null);
+  // Sign-up can be configured open yet held shut for want of a bot check
+  // (signupPaused on /api/health, accounts.go signupOpen). Say so up front
+  // instead of showing a form whose every submit can only be refused.
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => {
+        if (live) setPaused(h?.signupPaused === true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const errorBoxRef = useRef<HTMLDivElement>(null);
 
@@ -134,6 +151,19 @@ export default function SignupPage() {
                 Didn&apos;t get it? Resend
                 {resendIn > 0 && ` (${resendIn}s)`}
               </button>
+            </>
+          ) : paused ? (
+            <>
+              <h1 className="mb-6 text-lg font-bold tracking-widest text-[var(--text)]">
+                SIGN-UPS PAUSED
+              </h1>
+              <p role="status" className="mb-4 text-xs leading-relaxed text-[var(--dim)]">
+                New accounts are paused until the site&apos;s bot check is set up. Everything
+                public needs no account: the{" "}
+                <Link href="/accuracy" className="text-[var(--accent)]">live grades</Link>, the{" "}
+                <Link href="/volatility" className="text-[var(--accent)]">volatility record</Link>{" "}
+                and the <Link href="/proof" className="text-[var(--accent)]">receipts</Link>.
+              </p>
             </>
           ) : (
             <>

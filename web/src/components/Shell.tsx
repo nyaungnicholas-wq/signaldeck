@@ -112,6 +112,8 @@ const MEMBER_NAV: NavItem[] = [
   { href: "/journal", label: "MY CALLS", match: ["/journal"] },
   { href: "/ask", label: "ASK", match: ["/ask"] }, // shown only while the daemon offers it to members
   { href: "/accuracy", label: "RECORD", match: ["/accuracy", "/proof", "/volatility"] },
+  // The member settings page (digest, sign-out) was linked from nowhere.
+  { href: "/account", label: "ACCOUNT", match: ["/account"] },
 ];
 
 const READING_KEY = "sd-reading-mode";

@@ -270,6 +270,23 @@ func TestGoogleSignUpObeysClosedRegistration(t *testing.T) {
 	}
 }
 
+// TestGoogleSignUpObeysTheBotCheckPause: with sign-up held shut for want of a
+// bot check (signupOpen), a new Google account is refused like an email one,
+// so /signup's "paused" notice is true for every door. Existing accounts
+// still sign in.
+func TestGoogleSignUpObeysTheBotCheckPause(t *testing.T) {
+	srv, st, _ := newGoogleServer(t, func(c *config.Config) { c.TurnstileSecret = "" })
+	if code, body := googleSignIn(t, newClient(t), srv.URL, "newcomer@gmail.com"); code != http.StatusServiceUnavailable {
+		t.Fatalf("Google sign-up while paused: %d %s, want 503", code, body)
+	}
+	if _, err := st.CreateVerifiedUser(context.Background(), "existing", "existing@gmail.com", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := googleSignIn(t, newClient(t), srv.URL, "existing@gmail.com"); code != 200 {
+		t.Fatalf("existing member while paused: %d %s", code, body)
+	}
+}
+
 func TestGoogleRejectsAForgedToken(t *testing.T) {
 	srv, st, _ := newGoogleServer(t, nil)
 	other, err := rsa.GenerateKey(rand.Reader, 2048)

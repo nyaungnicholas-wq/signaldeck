@@ -451,3 +451,65 @@ func TestCorruptOffsiteRefusesRotation(t *testing.T) {
 		t.Errorf("want an offsite_backup_unavailable dq event citing the integrity failure, got %+v", events)
 	}
 }
+
+// TestInterruptedBackupNeverLooksLikeAGeneration is the regression proof for
+// 2026-10-04: a db-backup run cut off by a shutdown left a 0-byte
+// signaldeck-<ts>.db, and ops/signaldeck-cleanup.sh kept it as one of the "2
+// newest" while moving the newest verified backup to the Trash. While the copy
+// is unverified it must not exist under a generation's name, and a run that
+// stops before the checks pass must leave nothing behind.
+func TestInterruptedBackupNeverLooksLikeAGeneration(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck
+	bdir := filepath.Join(dir, "backups")
+	generations := func() []string {
+		var out []string
+		entries, _ := os.ReadDir(bdir)
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".db") || strings.HasSuffix(e.Name(), ".partial") {
+				out = append(out, e.Name())
+			}
+		}
+		return out
+	}
+	var duringVerify []string
+	w := &Worker{St: st, Dir: bdir, Keep: 7}
+	w.VerifyBackup = func(ctx context.Context, path string) error {
+		for _, n := range generations() {
+			if strings.HasSuffix(n, ".db") {
+				duringVerify = append(duringVerify, n)
+			}
+		}
+		if !strings.HasSuffix(path, ".partial") {
+			t.Errorf("verify ran on %q; the unverified copy must carry the .partial name", path)
+		}
+		return context.Canceled // the daemon shutting down mid-run
+	}
+	if _, err := w.Run(context.Background()); err == nil {
+		t.Fatal("Run must fail when the run is cut off before its checks pass")
+	}
+	if len(duringVerify) != 0 {
+		t.Errorf("an unverified copy was visible as a generation while verifying: %v", duringVerify)
+	}
+	if left := generations(); len(left) != 0 {
+		t.Errorf("an interrupted run left %v behind", left)
+	}
+
+	// A hard kill cannot run any cleanup, so its .partial survives; the next
+	// run must clear it rather than let debris the size of the database pile up.
+	stale := filepath.Join(bdir, "signaldeck-20261003-200108.db.partial")
+	if err := os.WriteFile(stale, []byte("torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.VerifyBackup = nil
+	if _, err := w.Run(context.Background()); err != nil {
+		t.Fatalf("clean run after a hard kill: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("a stale .partial from a killed run survived the next run (stat err %v)", err)
+	}
+}

@@ -27,11 +27,39 @@ echo "== DB backups: keeping $KEEP newest, moving older to $TRASH =="
 if [ ! -d "$TRASH" ]; then
   echo "  SKIP: cannot create $TRASH — refusing to hard-delete a backup instead"
 elif cd "$SD/data/backups" 2>/dev/null; then
+  # 2026-10-04 14:05 this loop kept a 0-byte signaldeck-20261003-200108.db (a
+  # db-backup run cut off by a shutdown) as one of the "2 newest" and moved the
+  # newest sha256-recorded, offsite-verified backup to the Trash for it. Two
+  # rules close that: an empty .db is never a generation (retired, not
+  # counted), and the newest .db that carries a .sha256 sidecar is never
+  # retired, however many unverified copies are newer.
+  verified=""
+  for f in $(ls -t *.db 2>/dev/null); do
+    if [ -s "$f" ] && { [ -f "$f.sha256" ] || [ -f "${f%.db}.sha256" ]; }; then
+      verified="$f"
+      break
+    fi
+  done
   i=0
   for f in $(ls -t *.db 2>/dev/null); do
+    if [ ! -s "$f" ]; then
+      # Under an hour old it may be a backup that is still being written.
+      if [ -z "$(/usr/bin/find "$f" -mmin +60 2>/dev/null)" ]; then
+        echo "  skip   $f (0 bytes, under an hour old: may still be being written; not counted)"
+        continue
+      fi
+      if mv "$f" "$TRASH/"; then
+        echo "  trash  $f (0 bytes: an interrupted backup, not counted)"
+      else
+        echo "  FAILED to move empty $f to $TRASH — left in place"
+      fi
+      continue
+    fi
     i=$((i+1))
     if [ "$i" -le "$KEEP" ]; then
       echo "  keep   $f"
+    elif [ "$f" = "$verified" ]; then
+      echo "  keep   $f (newest with a sha256 record)"
     elif mv "$f" "$TRASH/"; then
       echo "  trash  $f"
       # The .sha256 sidecar goes with its artifact. Retiring the .db alone left

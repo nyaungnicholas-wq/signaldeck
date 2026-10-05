@@ -92,23 +92,16 @@ type Registry = {
   rows: RegistryRow[];
 };
 
-// SUPERSEDED-SNAPSHOT — the flagship's PRE-EPOCH full-record grade. It is a
-// permanent, dated fact, deliberately kept because the post-epoch registry rows
-// restart the count and without this block the page would quietly forget the one
-// verdict a visitor most needs to see. It is NOT the current record: the live
-// rows further down are, and they come from the registry. Do not refresh these
-// figures to match a later grade — that would erase the record being disclosed.
+// The flagship's retirement is a permanent, dated fact, kept because the
+// post-epoch registry rows restart the count and without this block the page
+// would forget the one verdict a visitor most needs to see. Its FIGURES are not
+// printed (2026-10-05 release audit): they were 1d/1w directional numbers
+// measured on the pre-SD-30 label, and SD-30 withholds every such figure
+// (PREREGISTRATION.md section 15). They sat here as a constant exempted from
+// the banned-figure scan while the refusal path below said they were "not
+// published here". The verdict and the date are all this block may show.
 const FLAGSHIP_RETIREMENT = {
   date: "2026-07-24",
-  // SD-30: the current directional figures on this page are withheld, so the
-  // dated ones beside them have to say what they are.
-  history:
-    "These figures are the dated retirement record, measured on the pre-SD-30 directional label (mostly realised at issue) and kept as history, not as a current measurement.",
-  rows: [
-    { name: "directional-ensemble (1d)", acc: "48.1%", baseline: "54.6%", n: "13,058", skill: "−6.5pp" },
-    { name: "directional-ensemble (1w)", acc: "46.2%", baseline: "54.4%", n: "9,164", skill: "−8.2pp" },
-    { name: "directional-ensemble (1d, high conviction)", acc: "48.6%", baseline: "56.2%", n: "8,272", skill: "−7.6pp" },
-  ],
 };
 
 async function loadRegistry(): Promise<Registry | null> {
@@ -606,41 +599,18 @@ export default async function AccuracyPage() {
             FAILED — significantly worse than the naive baseline
           </span>
           <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-            {/* SUPERSEDED-SNAPSHOT: prose describing the dated pre-epoch grade above. */}
             On its full live record every directional row graded FAILED — the entire day-clustered
             confidence interval below the majority-class baseline — so the model was automatically
-            retired and stopped emitting. Inverting or relabeling it is not a rescue: the competing
-            model is the constant majority guess, whose rate is above 50%, so flipping the sign
-            relabels the call without creating an edge. The directional rows below are its
-            post-retirement shadow record, graded from the start of the current grading window.{" "}
-            <strong>{FLAGSHIP_RETIREMENT.history}</strong>
+            retired and stopped emitting, and retirement does not lapse. Inverting or relabeling it
+            is not a rescue: the competing model is the constant majority guess, whose rate is above
+            50%, so flipping the sign relabels the call without creating an edge.{" "}
+            <strong>
+              The figures of that grade are not shown. They were measured on the pre-SD-30
+              directional label, which was mostly already realised when each call was made, and every
+              1d and 1w directional figure is withheld until the current grading window has enough
+              credible days. The retirement stands either way.
+            </strong>
           </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[0.78rem]">
-              <thead>
-                <tr style={{ color: "var(--faint)" }}>
-                  <th className="pr-4 font-medium">predictor</th>
-                  <th className="pr-4 font-medium">live acc</th>
-                  <th className="pr-4 font-medium">baseline</th>
-                  <th className="pr-4 font-medium">independent n</th>
-                  <th className="font-medium">skill</th>
-                </tr>
-              </thead>
-              <tbody className="tnum">
-                {FLAGSHIP_RETIREMENT.rows.map((f) => (
-                  <tr key={f.name}>
-                    <td className="pr-4 py-1">{f.name}</td>
-                    <td className="pr-4">{f.acc}</td>
-                    <td className="pr-4">{f.baseline}</td>
-                    <td className="pr-4">{f.n}</td>
-                    <td style={{ color: "var(--bad)" }} className="font-bold">
-                      {f.skill}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       </section>
 
@@ -725,8 +695,9 @@ export default async function AccuracyPage() {
       {reg && (
         <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           Regenerated {reg.generated} · minimum {reg.min_independent_n} independent observations
-          for any verdict · directional window starts {reg.grading_epoch ?? reg.survivorship_epoch}
-          (re-registered 2026-09-20 past the 2026-07-27..08-06 collapsed cross-sections) ·
+          for any verdict · directional window starts {reg.grading_epoch ?? reg.survivorship_epoch}{" "}
+          (re-registered on the publication chain, past the 2026-07-27..08-06 collapsed
+          cross-sections and the SD-30 label leak) ·
           survivorship epoch {reg.survivorship_epoch} (earlier rows were graded against a
           survivor-seeded universe and are excluded) · intervals resample days, not rows.
         </p>

@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,6 +113,12 @@ func startPublished(t *testing.T, mutate func(*config.Config), seedAdmin bool, b
 	cfg.PublicSurface = true
 	cfg.OpenSignup = true
 	cfg.PublicURL = "https://sd.example"
+	// A published daemon takes sign-ups only behind a server-side bot check
+	// (signupOpen). The stub below plays Cloudflare's siteverify: any non-empty
+	// token except "bot" passes. A mutate may clear the secret to test the
+	// paused posture.
+	cfg.TurnstileSecret = "test-turnstile-secret"
+	cfg.TurnstileSiteKey = "test-turnstile-site-key"
 	// Raise the per-client request limiter so these tests exercise the ACCOUNT
 	// limiters, not the generic 2 writes/sec tier every POST shares.
 	cfg.RateRPS, cfg.RateBurst = 1000, 6000
@@ -132,6 +140,16 @@ func startPublished(t *testing.T, mutate func(*config.Config), seedAdmin bool, b
 			t.Fatal(err)
 		}
 	}
+
+	verifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		ok := r.PostForm.Get("secret") == "test-turnstile-secret" && r.PostForm.Get("response") != "" && r.PostForm.Get("response") != "bot"
+		_, _ = fmt.Fprintf(w, `{"success":%v}`, ok)
+	}))
+	t.Cleanup(verifier.Close)
+	oldVerify := turnstileVerifyURL
+	turnstileVerifyURL = verifier.URL
+	t.Cleanup(func() { turnstileVerifyURL = oldVerify })
 
 	mb := &mailbox{}
 	oldSend, oldReady := sendAccountEmail, mailReady
@@ -156,7 +174,7 @@ func signup(t *testing.T, c *http.Client, base, user, email string) (int, string
 	t.Helper()
 	resp := postJSON(t, c, base+"/api/auth/register", map[string]string{
 		"username": user, "email": email, "password": "correcthorse1",
-		"turnstileToken": "", "website": "",
+		"turnstileToken": "human", "website": "",
 	})
 	return resp.StatusCode, drain(t, resp)
 }
@@ -292,7 +310,7 @@ func TestForgotAndResetPassword(t *testing.T) {
 	signupVerified(t, srv, mb, "dave", "dave@gmail.com")
 	before := mb.count()
 	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot",
-		map[string]string{"email": "dave@gmail.com"}); code != 200 || !strings.Contains(body, sentIfExists) {
+		map[string]string{"email": "dave@gmail.com", "turnstileToken": "human"}); code != 200 || !strings.Contains(body, sentIfExists) {
 		t.Fatalf("forgot: %d %s", code, body)
 	}
 	waitMail(t, mb, before+1)
@@ -317,7 +335,7 @@ func TestForgotAndResetPassword(t *testing.T) {
 
 func TestForgotUnknownEmailLooksIdentical(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "nobody@gmail.com"})
+	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "nobody@gmail.com", "turnstileToken": "human"})
 	if code != 200 || !strings.Contains(body, sentIfExists) {
 		t.Fatalf("unknown email: %d %s", code, body)
 	}
@@ -367,7 +385,7 @@ func TestUnverifiedAccountCanBeReset(t *testing.T) {
 		t.Fatalf("signup: %d %s", code, body)
 	}
 	waitMail(t, mb, 1)
-	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "owner2@gmail.com"}); code != 200 {
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "owner2@gmail.com", "turnstileToken": "human"}); code != 200 {
 		t.Fatalf("forgot: %d %s", code, body)
 	}
 	waitMail(t, mb, 2)
@@ -404,5 +422,71 @@ func TestTunnelURLReadsOnlyTheBanner(t *testing.T) {
 	}
 	if got := lastTunnelURL(path); got != "https://good-one.trycloudflare.com" {
 		t.Fatalf("lastTunnelURL = %q", got)
+	}
+}
+
+// TestPublishedSignupPausedWithoutBotCheck pins the 2026-10-05 release-audit
+// rule: a published daemon with no Turnstile secret takes no sign-ups, says
+// why, and tells the sign-up page through /api/health instead of showing a
+// form that can only fail. Before it, the live site took sign-ups behind only
+// a honeypot and per-IP limits, each one mailing from the operator's mailbox.
+func TestPublishedSignupPausedWithoutBotCheck(t *testing.T) {
+	srv, st, mb := startPublished(t, func(c *config.Config) { c.TurnstileSecret = "" }, true, func(d Deps) http.Handler {
+		mux := http.NewServeMux()
+		d.registerAuth(mux)
+		mux.HandleFunc("GET /api/health", d.health)
+		return d.secure(mux)
+	})
+	code, body := signup(t, newClient(t), srv.URL, "paused1", "paused.one@gmail.com")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "paused") {
+		t.Fatalf("sign-up with no bot check: %d %s, want 503 naming the pause", code, body)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if mb.count() != 0 {
+		t.Fatalf("a paused sign-up sent %d mail(s)", mb.count())
+	}
+	if _, found, err := st.GetUserByName(context.Background(), "paused1"); err != nil || found {
+		t.Fatalf("a paused sign-up created an account (found=%v err=%v)", found, err)
+	}
+	resp, err := newClient(t).Get(srv.URL + "/api/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h struct {
+		OpenSignup   bool `json:"openSignup"`
+		SignupPaused bool `json:"signupPaused"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close() //nolint:errcheck
+	if h.OpenSignup || !h.SignupPaused {
+		t.Fatalf("health = %+v, want openSignup false and signupPaused true", h)
+	}
+}
+
+// TestPublishedSignupNeedsAPassingBotCheck: with a secret configured, a
+// missing token and a token siteverify rejects both create nothing. Until
+// 2026-10-05 no test configured a secret at all, so this path never ran.
+func TestPublishedSignupNeedsAPassingBotCheck(t *testing.T) {
+	srv, st, mb := newPublishedServer(t)
+	for _, tok := range []string{"", "bot"} {
+		code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/register", map[string]string{
+			"username": "nocheck", "email": "no.check@gmail.com", "password": "correcthorse1",
+			"turnstileToken": tok, "website": "",
+		})
+		if code != http.StatusForbidden {
+			t.Fatalf("token %q: %d %s, want 403", tok, code, body)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if mb.count() != 0 {
+		t.Fatalf("a failed bot check sent %d mail(s)", mb.count())
+	}
+	if _, found, err := st.GetUserByName(context.Background(), "nocheck"); err != nil || found {
+		t.Fatalf("a failed bot check created an account (found=%v err=%v)", found, err)
+	}
+	if code, body := signup(t, newClient(t), srv.URL, "withcheck", "with.check@gmail.com"); code != 200 {
+		t.Fatalf("a passing bot check must sign up: %d %s", code, body)
 	}
 }
