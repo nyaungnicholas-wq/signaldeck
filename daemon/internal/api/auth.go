@@ -319,7 +319,10 @@ func (d Deps) deviceKey(ctx context.Context) []byte {
 		if _, err := rand.Read(b); err != nil {
 			return nil
 		}
-		if err := d.St.SetMetaIfAbsent(ctx, metaDeviceKey, hex.EncodeToString(b)); err != nil {
+		release := d.St.Priority() // runs inside a sign-in: go ahead of the worker fleet
+		err := d.St.SetMetaIfAbsent(ctx, metaDeviceKey, hex.EncodeToString(b))
+		release()
+		if err != nil {
 			return nil
 		}
 		if v, err = d.St.GetMeta(ctx, metaDeviceKey); err != nil {

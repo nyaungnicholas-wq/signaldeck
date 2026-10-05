@@ -40,7 +40,7 @@ function Test-Answered([string]$code) {
 function Get-HttpCode([string]$url) {
     $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
     if (-not (Test-Path $curl)) { return 'nocurl' }
-    try { return [string](& $curl -s -o NUL -w '%{http_code}' -m $HEALTH_TIMEOUT_SEC $url) } catch { return '000' }
+    try { return [string](& $curl -s --noproxy '*' -o NUL -w '%{http_code}' -m $HEALTH_TIMEOUT_SEC $url) } catch { return '000' }
 }
 if ($args.Count -gt 0 -and $args[0] -eq '__selfcheck') {
     $bad = 0
@@ -281,11 +281,13 @@ if (Test-Path $prov) {
     Write-Output "WARNING: provenance preflight NOT RUN - $prov is missing (a copy exists at round2-drafts\devops\). The daemon is starting WITHOUT a stale-binary check."
 }
 
-# Publication posture (AUD-09; 2026-10-05 review S4). This is the daemon's only
-# automatic start path, so it must not start a binary that reads daemon\.env as
-# unpublished while a tunnel runs: every tunnel visitor would be local, with
-# operator authority. Exit 3 is the binary's "not published"; any other code
-# (a binary built before the flag existed) starts as before.
+# Publication posture (AUD-09; 2026-10-05 review S4). An early warning: do not
+# start a binary that reads daemon\.env as unpublished while a tunnel runs
+# (every tunnel visitor would be local, with operator authority). The daemon
+# refuses that itself at startup (cmd/signaldeckd/posture.go), which also
+# covers the starts that bypass this script (market-close, refresh, collect,
+# the task's restart-on-failure). Exit 3 is the binary's "not published"; any
+# other code (a binary built before the flag existed) starts as before.
 if (Get-Process -Name cloudflared -ErrorAction SilentlyContinue) {
     $pc = 0
     $eap = $ErrorActionPreference

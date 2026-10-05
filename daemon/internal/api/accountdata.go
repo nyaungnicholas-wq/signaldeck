@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -36,8 +37,8 @@ func (d Deps) accountExport(w http.ResponseWriter, r *http.Request) {
 }
 
 // accountDelete erases the signed-in account after the password confirms it.
-// Wrong passwords count on the same lockout as sign-in, so this cannot be used
-// to guess a password around that lockout.
+// Wrong passwords count on a lockout ladder of their own, reachable only with
+// this account's session (see lockKey below).
 func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	if uid == 0 {
@@ -79,11 +80,15 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusForbidden, "that password is not right")
 		return
 	}
-	release := d.St.Priority() // a person is waiting: go ahead of the worker fleet
-	err = d.St.DeleteAccount(ctx, uid)
-	release()
+	func() {
+		defer d.St.Priority()() // a person is waiting: go ahead of the worker fleet
+		err = d.St.DeleteAccount(ctx, uid)
+	}()
 	if errors.Is(err, store.ErrAdminAccount) {
 		httpErr(w, http.StatusForbidden, err.Error())
+		return
+	} else if errors.Is(err, sql.ErrNoRows) { // a concurrent second submit: already gone
+		httpErr(w, http.StatusUnauthorized, "sign in first")
 		return
 	} else if err != nil {
 		httpInternal(w, err)

@@ -300,7 +300,7 @@ case "${1:-status}" in
     # when any step refuses. The daemon's own startup check is the last line of
     # defence; this one stops an unattributable binary from ever being written.
     BUILT_REV=""
-    build_from_head || { echo "launch REFUSED: not starting an unattributable build." >&2; exit 1; }
+    build_from_head || { echo "launch REFUSED (see above): not starting." >&2; exit 1; }
     echo "launch: exec signaldeckd built from commit $BUILT_REV" >&2
     exe=""
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac

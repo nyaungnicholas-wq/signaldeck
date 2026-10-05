@@ -105,7 +105,14 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			strings.HasPrefix(r.URL.Path, "/api/ai/")
 		// acctKey folds an IPv6 client to its /64: one subscriber line holds
 		// 2^64 addresses, so a per-address bucket was no limit at all there.
-		if !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
+		// The local hang probe (ops/daemon-guard.ps1) must reach the handler:
+		// with TRUST_PROXY off every proxied visitor shares the loopback bucket,
+		// so a 429 here hid a wedged daemon from it (2026-10-05 review). Only a
+		// direct loopback GET of /api/health, with no forwarded hop and no
+		// web-proxy key (both always set by the web tier), skips the limiter.
+		localProbe := r.Method == http.MethodGet && r.URL.Path == "/api/health" && remoteAddrIsLoopback(r) &&
+			r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("X-Signaldeck-Local") == ""
+		if !localProbe && !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
 			w.Header().Set("Retry-After", "1")
 			httpErr(w, http.StatusTooManyRequests, "rate limit exceeded — retry in a second")
 			return

@@ -164,6 +164,11 @@ func main() {
 		return
 	}
 
+	if err := startupPosture(cfg.Published(), cfg.HTTPAddr, cloudflaredRunning); err != nil {
+		slog.Error("refusing to start", "why", err)
+		os.Exit(3)
+	}
+
 	// Windows maintenance stops arrive as `schtasks /End`, which terminates the
 	// process without reaching the signal handler; see stopfile.go. Armed here,
 	// after the -sic-bulk one-shot returns, so a one-shot never consumes a stop

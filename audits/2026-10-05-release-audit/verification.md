@@ -128,6 +128,16 @@ The review (scratch report, not committed) found 2 must-fix and 4 should-fix. Ea
 
 The first load run opened a new connection per request and exhausted the machine's ephemeral ports (the daemon's own probe logged it); the tool now keeps connections alive and counts every status. That run is discarded.
 
+## Round 6 (the fresh-context review of round 5)
+
+The review confirmed every round-4 item closed (it measured the delete waiting 1.84 s for the lock, and the guard's exit-3 refusal coming through the PowerShell pipeline) and found one overclaim and one masking path.
+
+| Review item | Fix | Proof |
+|---|---|---|
+| M1 AUD-09 claimed every automatic start was checked; market-close, refresh, collect and restart-on-failure start the Daemon task directly | The daemon on the web tier's port (8322) refuses at startup (exit 3) when unpublished while cloudflared runs; copies on other ports start normally | TestUnpublishedDaemonRefusesBehindATunnel (6 cases). Real binary on this host with the tunnel up, configured for 8322 against a scratch root: exits 3 with the reason (live daemon unaffected). The e2e test's scratch daemon (another port) starts; it failed while the first draft refused on every port |
+| S1 a 429 from the shared loopback bucket answered the guard's probe, so a wedged daemon under traffic was never restarted | A direct loopback GET of /api/health with no forwarded hop and no proxy key skips the limiter | TestLocalHealthProbeSkipsTheLimiter: with the bucket empty the direct probe gets 200, a proxy-keyed request still 429; the old rule fails it (429) |
+| Notes | Priority released by defer; stale lockout comment; a concurrent second delete answers 401, not 500; device-key creation goes ahead of the fleet; curl `--noproxy '*'`; launch names the real refusal; a warning when no process tool exists; runbook names the 503 "webhook disabled" answer; AUD-22 states what the collapse-gate reason can carry | guard selfcheck OK, PS 5.1 parse 0 errors, the guard's exact curl call returns 200 from the live daemon |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
