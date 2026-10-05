@@ -125,6 +125,12 @@ Do not assert that all code was personally reviewed or tested, or that AI did no
 | Data ingestion: Alpaca IEX, Kraken/TickStream, FRED VIX, SEC EDGAR, FINRA short volume | | |
 | Windows Task Scheduler deployment | | |
 
+### Commit authorship
+
+The first 51 commits (2026-07-01 to 2026-07-06) carry the git identity `Natalie Nyaung <natalienyaung@Natalies-MacBook-Pro.local>`. They were made on a family Mac whose git name was set to Natalie, and the work in them was partly Natalie's and partly Nicholas's. Every later commit is under Nicholas's own identity. The history is deliberately not rewritten: the grader verifies each graded build against these commit IDs, and this project's claim is that its record is not retouched.
+
+[NICHOLAS TO CONFIRM: what Natalie contributed. If she contributed to the app being submitted, the Congressional App Challenge rules may require listing her as a teammate (teams of up to four, at least half living or attending school in the district) or crediting her.]
+
 ## FirstCommit (separate)
 
 **Rules summary**  
