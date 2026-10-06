@@ -54,13 +54,13 @@ Verified for members (isolated copy): sign-in, sign-out, password reset, email v
 
 ## Exact next actions
 
-Owner:
+Owner (everything that could be prepared without you is in the owner kit, `signaldeck-owner-kit/` beside the repo, 2026-10-05):
 1. **Turnstile** (re-opens sign-up). In the Cloudflare dashboard, create a free Turnstile widget for the site hostname. Put its two values in `daemon/.env` as `SIGNALDECK_TURNSTILE_SITE_KEY` and `SIGNALDECK_TURNSTILE_SECRET` through your usual secret handling, never in chat. Restart with `bash ops/signaldeck-ctl.sh deploy`. Check that `/api/health` shows `openSignup:true` and `signupPaused:false`. Turnstile hostnames cannot follow a rotating quick-tunnel URL, so do this after step 2 or together with it.
-2. **Stable hostname** (`signaldeck.nicholasnyaung.com`). Finish the zone move to a free Cloudflare account. Send the two assigned nameservers so the zone can be checked before you switch GoDaddy's nameservers. Then run `cloudflared tunnel login`. The cutover itself is ops/CLOUDFLARE_TUNNEL.md section 3, which also closes AUD-09.
+2. **Stable hostname** (`signaldeck.nicholasnyaung.com`). The domain's DNS is on Vercel today (registrar GoDaddy) and your Vercel site lives on it, so the zone move must copy its records first: the owner kit has the zone file and the steps. Send the two Cloudflare nameservers so the zone can be checked before the nameservers change at GoDaddy. The cutover itself is ops/CLOUDFLARE_TUNNEL.md section 3, which also closes AUD-09.
 3. **Privacy notice, terms, contact address** (AUD-05). Counsel drafts from docs/PRIVACY_NOTICE_FACTS.md, which lists the open decisions (contact, jurisdiction, backup encryption and retention, waitlist removal, third-party script consent). Account export and deletion are built and live.
 4. **Elevated shell, once.** Re-register the Quick Tunnel task with its BootTrigger (ops/CLOUDFLARE_TUNNEL.md section 4) (AUD-15).
 5. The weekday ngrok tunnel now reaches only the TradingView webhook (AUD-08, fixed). Retire it if TradingView alerts are no longer used.
-6. Delete or move `daemon/.env.bak-*` (AUD-26). Answer the Kraken derived-works question with counsel (AUD-17). (The unused AGPL dependencies were removed, AUD-31.)
+6. Answer the Kraken derived-works question with counsel (AUD-17); the kit has a brief and a draft permission email. (Done without you: the `daemon/.env.bak-*` copies went to the Recycle Bin, AUD-26; the unused AGPL dependencies were removed, AUD-31.)
 7. A second machine for disaster recovery and an offline copy of the ledger anchor key (AUD-18).
 
 Engineering: none open. AUD-08 (ngrok webhook-only) and AUD-20 (offsite prune) were verified in production on 10-05. The load-sensitive test flake is fixed (verification.md round 9).
