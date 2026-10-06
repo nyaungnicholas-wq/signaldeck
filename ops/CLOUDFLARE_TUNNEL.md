@@ -34,6 +34,8 @@ Ruled out (one bullet each):
 
 ## 3 Cutover - in this exact order
 
+Before any of this for nicholasnyaung.com: its DNS is on Vercel today (ns1/ns2.vercel-dns.com; registrar GoDaddy) and the apex and www serve a live Vercel site, so moving the zone to Cloudflare must first copy those records (DNS only). Checked 2026-10-05; the owner kit has the zone file.
+
 Do steps 1-3 only once `https://<host>` is already serving the site. From the step-2 restart on, the daemon allows only `SIGNALDECK_PUBLIC_URL` and `SIGNALDECK_WEB_ORIGINS` as origins and stops reading the trycloudflare URL, so every sign-in, sign-up or other POST through the old trycloudflare URL gets 403, and emailed links point at `<host>`.
 
 1. In `daemon/.env` FIRST: set `SIGNALDECK_PUBLIC_URL=https://<host>` and add `https://<host>` to `SIGNALDECK_WEB_ORIGINS`, keeping the localhost entries: `SIGNALDECK_WEB_ORIGINS=https://<host>,http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000`. `SIGNALDECK_ALLOWED_HOSTS` needs no new entry: the web proxy calls the daemon as `127.0.0.1:8322`.
