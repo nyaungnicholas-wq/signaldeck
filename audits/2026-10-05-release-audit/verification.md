@@ -181,6 +181,18 @@ TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly failed twice on 10-05, each 
 | Missed schedules | Market-Close, Daily-Refresh and Accuracy each missed one run while the PC was off and caught up at 17:03 (StartWhenAvailable). Until then /api/accuracy answered 503 REFUSED_STALE ("last successful grade was 26h55m0s ago, max 26h"); after it, OK with graded_at 17:03:35. No grade was triggered by hand |
 | AUD-20 offsite prune, first real run | offsite OK: backup-20261005-170323, 1,182,594,885 bytes verified by the release API; prune deleted backup-20260923-141100, -20260922-185910, -20260921-183828, -20260918-131009, -20260916-164540 and kept backup-20261001-131127 (no .db.gz). `gh release list`: 8 releases, 7 with a .db.gz |
 
+## Round 11 (stable hostname cutover, 10-06 03:01-03:05 PT)
+
+| Check | Result |
+|---|---|
+| Zone before the nameserver change | Both assigned Cloudflare nameservers, asked directly (through an outside resolver; this network intercepts port 53): apex A 216.198.79.65 and 64.29.17.1, www CNAME cname.vercel-dns.com, the site-verification TXT, all DNS only. Each Vercel address served apex and www 200. No DS record at the registry |
+| After the change | Public NS jason/mckinley.ns.cloudflare.com (Cloudflare and Google resolvers); apex and www 200 |
+| Tunnel | `cloudflared` Windows service Running, Automatic; the dashboard shows the connector Connected; route signaldeck -> http://127.0.0.1:8323 |
+| Daemon deploy | `.env` gained SIGNALDECK_PUBLIC_URL and SIGNALDECK_WEB_ORIGINS (backup kept outside the repo until verified). ctl deploy: "VERIFIED: daemon is running commit ea1b17d5" |
+| published() kept | `bin/signaldeckd.exe -publication-posture`: `publication posture: published`, exit 0. Signed out /api/export/bars.csv 401 on the new host, the old host and loopback |
+| Origins | POST /api/auth/login (unknown user) from the new origin: 401 invalid credentials (origin accepted); from the old trycloudflare origin and from https://evil.example: 403 origin not allowed |
+| Web rebuild | web-release with NEXT_PUBLIC_SITE_URL: browser gate 7/7, build kQ1Zsvv4BE6kyIMTvnEhV; sitemap and og:image use the new host; /, /accuracy, /proof, /signup, /login 200; /login renders in a real browser |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
