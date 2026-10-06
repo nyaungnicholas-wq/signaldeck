@@ -63,4 +63,4 @@ Owner:
 6. Delete or move `daemon/.env.bak-*` (AUD-26). Answer the Kraken derived-works question with counsel (AUD-17). (The unused AGPL dependencies were removed, AUD-31.)
 7. A second machine for disaster recovery and an offline copy of the ledger anchor key (AUD-18).
 
-Engineering: none open. Watch AUD-20 (the offsite prune, Mon 13:10). Check the ngrok webhook-only answer the next time the weekday tunnel is up. The load-sensitive test flake is fixed (verification.md round 9).
+Engineering: none open. AUD-08 (ngrok webhook-only) and AUD-20 (offsite prune) were verified in production on 10-05. The load-sensitive test flake is fixed (verification.md round 9).
