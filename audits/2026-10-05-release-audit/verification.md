@@ -172,6 +172,15 @@ TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly failed twice on 10-05, each 
 | Fix (test only; production already retries on the next hit) | The wait re-requests on each poll, as a visitor's next hit would. With both slots held 7 s the test passes in 7.11 s |
 | Re-run | Full api package ok (47.7 s); 8 concurrent runs on 1 CPU each, all ok; golangci-lint 0 issues. Twelve loaded runs before the fix did not reproduce it, and slots were free at the test's start in an instrumented run, so the trigger is rare load timing; the mechanism is the one reproduced above |
 
+## Round 10 (production, 10-05 evening, after an unplanned PC shutdown)
+
+| Check | Result |
+|---|---|
+| Startup posture, real boot | The PC came back about 16:53. daemon-guard found the daemon down, asked the binary (`publication posture: published`), then started it (16:54:03). Two later starts (17:09 after the backup's DB phase, 17:20 after the refresh) were clean. No refusal anywhere, as expected for a published daemon |
+| AUD-08 live | TradingView POSTs through ngrok 06:26-06:29: 200 x3. Live daemon with the ngrok Host: GET /api/health and /api/accuracy 403 "this host serves only the TradingView webhook"; unsigned POST /api/tv-webhook 403 "invalid secret" (handler reached); loopback control 200 |
+| Missed schedules | Market-Close, Daily-Refresh and Accuracy each missed one run while the PC was off and caught up at 17:03 (StartWhenAvailable). Until then /api/accuracy answered 503 REFUSED_STALE ("last successful grade was 26h55m0s ago, max 26h"); after it, OK with graded_at 17:03:35. No grade was triggered by hand |
+| AUD-20 offsite prune, first real run | offsite OK: backup-20261005-170323, 1,182,594,885 bytes verified by the release API; prune deleted backup-20260923-141100, -20260922-185910, -20260921-183828, -20260918-131009, -20260916-164540 and kept backup-20261001-131127 (no .db.gz). `gh release list`: 8 releases, 7 with a .db.gz |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
