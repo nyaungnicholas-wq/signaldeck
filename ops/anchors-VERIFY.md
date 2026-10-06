@@ -13,7 +13,7 @@ python verify.py .
 Add `--site <SignalDeck address>` to also download the forecast ledger and recompute it, from the very first entry, against every published head. It pages through the whole chain (over 600,000 forecasts), so it takes several minutes:
 
 ```bash
-python verify.py . --site https://<current SignalDeck address>
+python verify.py . --site https://signaldeck.nicholasnyaung.com
 ```
 
 For a quick check of only the newest interval, add `--statements 2`. That does not re-check older forecasts, and the checker says so.
