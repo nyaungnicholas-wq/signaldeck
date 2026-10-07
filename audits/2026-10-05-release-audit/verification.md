@@ -191,6 +191,7 @@ TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly failed twice on 10-05, each 
 | Daemon deploy | `.env` gained SIGNALDECK_PUBLIC_URL and SIGNALDECK_WEB_ORIGINS (backup kept outside the repo until verified). ctl deploy: "VERIFIED: daemon is running commit ea1b17d5" |
 | published() kept | `bin/signaldeckd.exe -publication-posture`: `publication posture: published`, exit 0. Signed out /api/export/bars.csv 401 on the new host, the old host and loopback |
 | Origins | POST /api/auth/login (unknown user) from the new origin: 401 invalid credentials (origin accepted); from the old trycloudflare origin and from https://evil.example: 403 origin not allowed |
+| Quick tunnel retired (10-06 19:00) | Task disabled by the owner; its cloudflared outlived `Stop-ScheduledTask` (the action is a wrapper), so it was stopped by command line (runbook step 4 now says so). Afterwards only the service cloudflared runs, the last trycloudflare URL answers 530, the new host 200 |
 | Web rebuild | web-release with NEXT_PUBLIC_SITE_URL: browser gate 7/7, build kQ1Zsvv4BE6kyIMTvnEhV; sitemap and og:image use the new host; /, /accuracy, /proof, /signup, /login 200; /login renders in a real browser |
 
 ## Not verified
