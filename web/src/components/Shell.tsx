@@ -515,7 +515,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           className="px-2 pb-2 text-[0.75rem] leading-relaxed"
           style={{ color: "var(--faint)" }}
         >
-          SignalDeck measures and stores; it does not advise. Not financial advice.
+          SignalDeck measures and stores; it does not advise. Not financial advice.{" "}
+          <Link href="/privacy" className="hover:underline" style={{ color: "var(--dim)" }}>Privacy</Link>
+          {" · "}
+          <Link href="/terms" className="hover:underline" style={{ color: "var(--dim)" }}>Terms</Link>
         </footer>
       </div>
     );
@@ -661,7 +664,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         scores against what actually happened. Not financial advice.{" "}
         <Link href="/health" className="hover:underline" style={{ color: "var(--dim)" }}>
           We grade how usable this is, too &rarr;
-        </Link>
+        </Link>{" · "}
+        <Link href="/privacy" className="hover:underline" style={{ color: "var(--dim)" }}>Privacy</Link>
+        {" · "}
+        <Link href="/terms" className="hover:underline" style={{ color: "var(--dim)" }}>Terms</Link>
       </footer>
     </div>
   );

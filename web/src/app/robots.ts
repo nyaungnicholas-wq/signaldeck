@@ -55,7 +55,7 @@ export default function robots(): MetadataRoute.Robots {
       },
       {
         userAgent: "*",
-        allow: ["/$", "/accuracy", "/proof", "/glossary", "/volatility", "/signup", "/login"],
+        allow: ["/$", "/accuracy", "/proof", "/glossary", "/volatility", "/privacy", "/terms", "/signup", "/login"],
         disallow: ["/"],
       },
     ],
