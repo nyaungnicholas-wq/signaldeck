@@ -194,6 +194,17 @@ TestPersistedBody_ServedAcrossBuildsOfOneFormatOnly failed twice on 10-05, each 
 | Quick tunnel retired (10-06 19:00) | Task disabled by the owner; its cloudflared outlived `Stop-ScheduledTask` (the action is a wrapper), so it was stopped by command line (runbook step 4 now says so). Afterwards only the service cloudflared runs, the last trycloudflare URL answers 530, the new host 200 |
 | Web rebuild | web-release with NEXT_PUBLIC_SITE_URL: browser gate 7/7, build kQ1Zsvv4BE6kyIMTvnEhV; sitemap and og:image use the new host; /, /accuracy, /proof, /signup, /login 200; /login renders in a real browser |
 
+## Round 12 (Turnstile live, 10-11 03:00-03:10 PT)
+
+| Check | Result |
+|---|---|
+| Keys | The owner's two keys were in `daemon/.env` but commented out (`#`); the two `#` were removed, nothing else changed (key names diffed, CRLF kept). Neither is a Cloudflare test key |
+| Restart | ctl deploy refused: another session's uncommitted daemon changes were in the tree. The daemon alone was restarted (lib-portable sd_svc_stop/start) on the same committed binary, which reads `.env` at start |
+| Live | /api/health (local and public): openSignup true, signupPaused false, real site key; posture still published |
+| Enforcement | POST /api/auth/register with a forged token through the public host: 403 "the human check failed"; no users row written |
+| Browser | /signup renders the Turnstile widget and it passes ("Success!") |
+| Found | Cloudflare injects its Web Analytics beacon (static.cloudflareinsights.com) into browser HTML on this zone. The site CSP blocks it: 0 bytes, no `__cfBeacon`, no /cdn-cgi/rum posts. Not in our code (the local :8323 HTML has none). Turning it off is a dashboard setting for the owner |
+
 ## Not verified
 
 - Email delivery through the production SMTP account: not sent (no mail to real people).
