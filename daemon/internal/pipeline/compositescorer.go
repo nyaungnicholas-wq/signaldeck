@@ -51,6 +51,36 @@ const compositeBreakoutWindow = 7 * 86400
 type CompositeScorer struct {
 	St      *store.Store
 	Horizon md.Horizon // "" -> md.H1d
+
+	// tvSkill memoizes TVRatingSkill for tvSkillTTL. The measurement rescans the
+	// whole tv_ratings history (2.1M rows, ~8-16 s live, minutes under a
+	// maintenance burst) while its inputs move about once a day; recomputing it
+	// every 10 minutes pushed a run past its 30m deadline on 2026-10-11.
+	tvSkill   store.TVSkill
+	tvSkillAt time.Time
+	// Now is a test hook; nil = time.Now.
+	Now func() time.Time
+}
+
+// tvSkillTTL bounds how stale the pooled TradingView-rating skill may be. The
+// skill is pooled over ~16k (symbol, day) observations that grow by one day of
+// bars at a time, so six hours cannot move it materially.
+const tvSkillTTL = 6 * time.Hour
+
+func (w *CompositeScorer) tvRatingSkill(ctx context.Context) (store.TVSkill, error) {
+	now := time.Now()
+	if w.Now != nil {
+		now = w.Now()
+	}
+	if !w.tvSkillAt.IsZero() && now.Sub(w.tvSkillAt) < tvSkillTTL {
+		return w.tvSkill, nil
+	}
+	sk, err := w.St.TVRatingSkill(ctx)
+	if err != nil {
+		return store.TVSkill{}, err // never cache a failed read
+	}
+	w.tvSkill, w.tvSkillAt = sk, now
+	return sk, nil
 }
 
 func (w *CompositeScorer) horizon() md.Horizon {
@@ -162,7 +192,7 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 	// symbols): the tvrating factor stays context-only until this IC/N clears
 	// the gate. Best-effort — a read error just leaves the factor gated as
 	// unmeasured, never fabricates skill.
-	tvSkill, err := w.St.TVRatingSkill(ctx)
+	tvSkill, err := w.tvRatingSkill(ctx)
 	if err != nil {
 		tvSkill = store.TVSkill{}
 	}

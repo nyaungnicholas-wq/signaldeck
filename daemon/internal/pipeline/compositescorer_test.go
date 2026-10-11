@@ -214,3 +214,48 @@ func TestCompositeScorerSkipsStaleAndUnusable(t *testing.T) {
 		t.Fatalf("detail = %q — a stale prediction must not prop up the cross-section", detail)
 	}
 }
+
+// The pooled TradingView skill rescans the whole tv_ratings history, so the
+// scorer memoizes it for tvSkillTTL: within the TTL new evidence is NOT
+// re-read; past it, it is.
+func TestCompositeScorerMemoizesTVSkill(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "composite_tvskill.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	clock := time.Unix(1_700_000_000, 0)
+	w := &CompositeScorer{St: st, Now: func() time.Time { return clock }}
+	if sk, err := w.tvRatingSkill(ctx); err != nil || sk.N != 0 {
+		t.Fatalf("empty skill = %+v err=%v", sk, err)
+	}
+
+	// Three resolvable (symbol, day) observations.
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "S&P 500 ETF")
+	const day = 86400
+	base := int64(1_600_000_000)/day*day + 5*3600
+	var bars []md.Bar
+	for i := 0; i < 4; i++ {
+		c := 100 + float64(i)
+		bars = append(bars, md.Bar{SymbolID: sym.ID, TF: md.TF1d, Ts: base + int64(i)*day, Open: c, High: c, Low: c, Close: c})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := st.UpsertTVRating(ctx, store.TVRatingRow{SymbolID: sym.ID, Ts: base + int64(i)*day + 100, RecoAll: 0.5, Label: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	clock = clock.Add(tvSkillTTL - time.Minute)
+	if sk, _ := w.tvRatingSkill(ctx); sk.N != 0 {
+		t.Fatalf("inside the TTL the skill was recomputed: N=%d", sk.N)
+	}
+	clock = clock.Add(2 * time.Minute)
+	if sk, _ := w.tvRatingSkill(ctx); sk.N != 3 {
+		t.Fatalf("past the TTL N=%d, want 3", sk.N)
+	}
+}
