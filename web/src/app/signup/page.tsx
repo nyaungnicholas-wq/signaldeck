@@ -295,6 +295,12 @@ export default function SignupPage() {
               >
                 {busy ? "CREATING…" : "CREATE ACCOUNT"}
               </button>
+              <p className="mt-3 text-center text-[11px] leading-relaxed text-[var(--dim)]">
+                By creating an account you agree to the{" "}
+                <Link href="/terms" className="underline hover:text-[var(--accent)]">Terms of Use</Link>{" "}
+                and acknowledge the{" "}
+                <Link href="/privacy" className="underline hover:text-[var(--accent)]">Privacy Notice</Link>.
+              </p>
             </>
           )}
         </div>

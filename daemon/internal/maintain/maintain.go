@@ -1625,6 +1625,15 @@ func (d *DerivedRetention) retentionFilings() time.Duration {
 	if d.KeepFilings > 0 {
 		return d.KeepFilings
 	}
+	return FilingsRetention()
+}
+
+// FilingsRetention is the filings-feed horizon (env SIGNALDECK_FILINGS_RETENTION_D,
+// default 180d). Exported so the filings poller refuses to ingest what this
+// pass would delete: without that, every EDGAR sweep re-inserted years of old
+// filings, retention archived and deleted them again, and each pass wrote a
+// fresh duplicate archive file.
+func FilingsRetention() time.Duration {
 	return time.Duration(envIntOr("SIGNALDECK_FILINGS_RETENTION_D", 180)) * 24 * time.Hour
 }
 

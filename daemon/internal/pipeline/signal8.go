@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
@@ -109,6 +110,11 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 	window := rotateWindow(ctx, w.St, stocks, batch, filingsCursorKey)
 
 	now := w.now()
+	// Filings older than the retention horizon are never ingested: derived-
+	// retention deletes them within the hour, so inserting them only churned
+	// the writer, re-archived duplicates, and spent the Form 4 budget
+	// re-parsing old documents while recent ones sat in the backlog.
+	cutoff := now.Add(-maintain.FilingsRetention()).Unix()
 	inserted, form4Fetched, swept := 0, 0, 0
 	for _, s := range window {
 		cik, ok := cikMap[strings.ToUpper(s.Symbol)]
@@ -135,7 +141,7 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			w.storeSIC(ctx, cik, s, prof, now.Unix())
 		}
 		for _, f := range subs {
-			if !edgar.InterestingForm(f.Form) {
+			if !edgar.InterestingForm(f.Form) || f.FiledTs < cutoff {
 				continue
 			}
 			row := store.FilingRow{

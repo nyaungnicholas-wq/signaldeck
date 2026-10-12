@@ -12,6 +12,7 @@
   <Settings>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <Enabled>false</Enabled>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <RestartOnFailure>

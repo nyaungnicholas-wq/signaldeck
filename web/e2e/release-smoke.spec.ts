@@ -20,7 +20,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 
-const PUBLIC_PATHS = ["/", "/accuracy", "/proof", "/volatility", "/glossary"];
+const PUBLIC_PATHS = ["/", "/accuracy", "/proof", "/volatility", "/glossary", "/privacy", "/terms"];
 
 const BOUNDARY_HEADING = "This page could not be loaded.";
 

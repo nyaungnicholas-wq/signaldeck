@@ -22,6 +22,8 @@ export const PUBLIC_ROUTES = [
   // bookmarks, so a page there would be unreachable. Same trap as /deck.
   "/volatility", // the volatility estimates and their live record
   "/glossary", // plain-English terms; static, no daemon call
+  "/privacy", // privacy notice; static, no daemon call
+  "/terms", // terms of use; static, no daemon call
   "/health", // reads the static ux-score.json + localStorage only; needs no session
   "/login",
   // Account flows: reachable before a session exists (daemon: /api/auth/* is alwaysOpen).

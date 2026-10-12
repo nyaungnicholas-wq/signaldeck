@@ -567,3 +567,28 @@ func TestFilingsPoller_AttemptCapAbandonsAfterThree(t *testing.T) {
 		t.Fatalf("sentinel leaked into InsiderTrades: %+v", trades)
 	}
 }
+
+// Filings older than the retention horizon must never be ingested: retention
+// deletes them within the hour, so a poller that stored them churned the writer,
+// re-archived duplicates every pass and spent the Form 4 budget on old documents.
+func TestFilingsPoller_SkipsFilingsPastRetention(t *testing.T) {
+	_, client := newFilingsServer(t)
+	st := openS8Store(t)
+	ctx := context.Background()
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple Inc.")
+
+	// Every fixture filing (2026-06-10 .. 2026-07-01) is past the 180d horizon.
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	w := &FilingsPoller{St: st, Client: client, Now: func() time.Time { return now }}
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v (%s)", err, detail)
+	}
+	if !strings.Contains(detail, "filings: 0 new rows") || !strings.Contains(detail, "form4 parsed 0") {
+		t.Errorf("detail = %q, want 0 new rows and 0 Form 4 parses", detail)
+	}
+	filings, err := st.Filings(ctx, aapl.ID, "", 10)
+	if err != nil || len(filings) != 0 {
+		t.Fatalf("stale filings ingested: %+v err=%v", filings, err)
+	}
+}
