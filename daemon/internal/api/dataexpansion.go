@@ -99,7 +99,7 @@ func (d Deps) cryptoPerp(w http.ResponseWriter, r *http.Request) {
 		out["latest"] = series[len(series)-1]
 	} else {
 		out["latest"] = nil
-		out["emptyNote"] = "no perp snapshots stored — crypto is paused (2026-10-21), so the crypto-perp worker is not wired"
+		out["emptyNote"] = "no perp snapshots stored — crypto is paused (2026-10-22), so the crypto-perp worker is not wired"
 	}
 	writeJSON(w, out)
 }

@@ -8,7 +8,7 @@ test.describe("manual paper book", () => {
     // The first-run tour is a modal that swallows clicks; mark it seen like the other specs do.
     await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
     await loginAsSmokeUser(context);
-    // Crypto is paused (2026-10-21, no licensed crypto data source): the server refuses it outright.
+    // Crypto is paused (2026-10-22, no licensed crypto data source): the server refuses it outright.
     const crypto = await context.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "BTC/USD", market: "crypto", side: "buy", qty: 0.001 } });
     expect(crypto.status()).toBe(422);
     expect(await crypto.text()).toContain("crypto is paused");

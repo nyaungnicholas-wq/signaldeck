@@ -133,11 +133,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		return
 	}
 
-	// ── symbols: crypto is PAUSED (2026-10-21, no Kraken); seed stocks on first boot ──
+	// ── symbols: crypto is PAUSED (2026-10-22, no Kraken); seed stocks on first boot ──
 	// Every crypto symbol is set inactive on each boot, so no producer (predict,
 	// regime, composite, signals, dq-auditor) mints anything new for it. Nothing
-	// is deleted: the published history stays verifiable on /proof and open
-	// forecasts still grade from bars already stored.
+	// is deleted: the published history stays verifiable on /proof. Open crypto
+	// forecasts the resolver can still settle from stored bars grade; the rest
+	// are voided by `sdmaint void-retired-crypto` (reason source_retired).
 	if err := pauseCrypto(ctx, st); err != nil {
 		// Fatal on purpose: only predict has a stale-bar backstop, so regime,
 		// composite and other producers would keep minting crypto rows from
@@ -260,7 +261,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		// product's own surface going unreachable. See internal/pipeline/apiprobe.go.
 		&pipeline.APIProbe{Addr: cfg.HTTPAddr},
 		// cryptolive (TickStream merges Coinbase + Kraken) and CryptoBars (Kraken
-		// OHLC) are not wired while crypto is paused (2026-10-21).
+		// OHLC) are not wired while crypto is paused (2026-10-22).
 		backfiller,
 		&pipeline.BackfillReconciler{St: st, BF: backfiller},
 		&pipeline.SignalRunner{St: st},
@@ -1571,7 +1572,7 @@ func dataExpansionWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		// ShortInterestPoller (finra-shortint) removed 22 Oct 2026: FINRA's
 		// terms, as for finra-shorts above.
-		// CryptoPerpPoller is not wired while crypto is paused (2026-10-21).
+		// CryptoPerpPoller is not wired while crypto is paused (2026-10-22).
 		&pipeline.COTPoller{St: st, Client: cftc.New()},
 		// StocktwitsFetcher removed 2026-10-21: StockTwits' terms bar automated
 		// extraction without written authorization.

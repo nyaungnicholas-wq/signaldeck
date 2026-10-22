@@ -438,7 +438,7 @@ func vrcRun(ctx context.Context, dbPath string, apply bool, logPath string, now 
 	for i, s := range plan.stamps {
 		stampDays[i] = s.symb + "=" + time.Unix(s.ts, 0).UTC().Format(time.DateOnly)
 	}
-	detail := fmt.Sprintf("source_retired: crypto pause decided %s (no licensed crypto data source). Voided %d open crypto forecast outcome(s) the prediction resolver can never settle from stored daily bars (%s); %d settleable left open for the resolver; %d open crypto regime_outcomes untouched; delisted_at stamped on %d crypto symbol(s) at the UTC day of their last stored daily bar (%s). Old values: %s", vrcPauseDecided, voidCount, vrcByHorizon(plan.byHorizon), plan.settleable, plan.regimeOpen, stampedCount, strings.Join(stampDays, ", "), logPath)
+	detail := fmt.Sprintf("source_retired: crypto pause decided %s (no licensed crypto data source). Voided %d open crypto forecast outcome(s) the prediction resolver can never settle from stored daily bars (%s); %d settleable left open for the resolver; %d open crypto regime_outcomes untouched; delisted_at stamped on %d crypto symbol(s) at the UTC day of their last stored daily bar (%s); because of that stamp, maintain's OutcomeResolver voids open crypto score_outcomes past their target with no forward bar on its next pass (those voids are not in the -log CSV). Old values: %s", vrcPauseDecided, voidCount, vrcByHorizon(plan.byHorizon), plan.settleable, plan.regimeOpen, stampedCount, strings.Join(stampDays, ", "), logPath)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO dq_events (ts, kind, detail) VALUES (?, ?, ?)`, now, vrcDQKind, detail); err != nil {
 		return plan, 0, err
 	}

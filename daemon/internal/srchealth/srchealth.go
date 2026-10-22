@@ -54,7 +54,7 @@ type spec struct {
 // only makes the reported age SMALLER (more conservative), never larger.
 const (
 	pausedTradingView = "TradingView's terms bar non-display use of scanner data (2026-10-21)"
-	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-21)"
+	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-22)"
 	pausedLicence     = "retired 22 Oct 2026: licence terms do not permit this use"
 )
 

@@ -695,7 +695,34 @@ func (d Deps) failingWorkers(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return failingFromRuns(runs, time.Now().Unix()), nil
+	return failingFromRuns(currentFleetRuns(runs, d.declaredIntervals()), time.Now().Unix()), nil
+}
+
+// declaredIntervals is the registered fleet's declared cadence by name; nil when
+// the fleet is not wired (tests, minimal wirings).
+func (d Deps) declaredIntervals() map[string]time.Duration {
+	if d.WorkerIntervals == nil {
+		return nil
+	}
+	return d.WorkerIntervals()
+}
+
+// currentFleetRuns keeps only rows of workers in the registered fleet. A retired
+// worker keeps its pruned rows in worker_runs forever (crypto-live's last run is
+// marked "orphaned" at the boot that stops wiring it), so judging every name with
+// rows left health red with nothing anyone could fix. An empty registry (unwired,
+// or the startup window before runner.Add) filters nothing.
+func currentFleetRuns(runs []md.WorkerRun, declared map[string]time.Duration) []md.WorkerRun {
+	if len(declared) == 0 {
+		return runs
+	}
+	out := make([]md.WorkerRun, 0, len(runs))
+	for _, r := range runs {
+		if _, ok := declared[r.Worker]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // failingFromRuns is the decision itself, split out so the rule can be tested
