@@ -143,6 +143,19 @@ test("the old pattern is the bug this guards against", () => {
   assert.throws(() => tradingViewRuns(s), /reading 'querySelector'/);
 });
 
+test("TradingView's default attribution sits directly after the widget, inside the container", async () => {
+  const container = el("div");
+  const cleanup = mountTradingViewWidget(container, { symbol: "AAPL" }, fakeDoc);
+  await tick();
+  const [wrapper] = container.children;
+  assert.strictEqual(wrapper.className, "tradingview-widget-container");
+  assert.deepEqual(wrapper.children.map((c) => c.className), ["tradingview-widget-container__widget", "tradingview-widget-copyright", ""]);
+  const [link] = wrapper.children[1].children;
+  assert.deepEqual([link.tagName, link.href, link.rel, link.target], ["A", "https://www.tradingview.com/", "noopener nofollow", "_blank"]);
+  assert.deepEqual([link.children[0].tagName, link.children[0].className, link.children[0].textContent], ["SPAN", "blue-text", "Track all markets on TradingView"]);
+  cleanup();
+});
+
 test("the component mounts through the helper and never detaches the script itself", () => {
   const src = readFileSync(new URL("../components/TradingViewChart.tsx", import.meta.url), "utf8");
   assert.match(src, /mountTradingViewWidget\(/);

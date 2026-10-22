@@ -353,6 +353,8 @@ func horizonSecs(h md.Horizon) int64 {
 // daemon). Sparse + weak (public technical crossings), so absence is the norm
 // and the OOS-lift gate will almost certainly find it immaterial — it earns its
 // way in or it doesn't, same contract as every other external source.
+// Retired 2026-10-22: TradingView ToS s.3 bars non-display use of alerts, so
+// tv_webhook_signal is no longer built (webhook still stored for history).
 // v11 (macro-breadth wave): + the REST of the free FRED panel, which had been
 // ingested (~104k observations across twelve series) with exactly one series
 // (VIXCLS) ever reaching the model. Adds macro_<key>_pct / macro_<key>_chg for

@@ -302,7 +302,7 @@ export default function PrivacyPage() {
                   Your browser loads its chart widget; TradingView receives your IP address, browser details and the symbol you view, and may set its own cookies. Separately, the operator sends alerts from his own TradingView account to SignalDeck by webhook; nothing about you is sent to TradingView for this
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Price charts, so SignalDeck shows no price data itself; the operator&rsquo;s alerts are one input to the forecasts
+                  Price charts, so SignalDeck shows no price data itself; the operator&rsquo;s alerts are stored for the record but are no longer used as a model input since 22 October 2026 (licence review)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Chart widget: member symbol pages only

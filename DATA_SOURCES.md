@@ -44,6 +44,8 @@ mirrored in `datalicense.go`, which still lists every source below. The `fred`,
 | `congress` | Public | STOCK Act disclosures, via third-party datasets (Kadoa's congress-trades file; older rows House/Senate Stock Watcher) | Unclear (counsel): Kadoa's permission pending | In use. Open question: the Ethics in Government Act commercial-use restriction (SignalDeck is free and non-commercial) |
 | `wikimedia` | Public | Wikimedia | Yes — page-view counts are CC0 | In use |
 
+The operator's own TradingView webhook alerts (`tv_signals`, received at `/api/tv-webhook`) are stored for the record but are no longer used as a model input since 2026-10-22 (licence review: TradingView's terms bar non-display use of alerts).
+
 ## What the guard does
 
 `GET /api/bars` returns **HTTP 451** with an actionable notice when all three

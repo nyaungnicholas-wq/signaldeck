@@ -93,10 +93,13 @@ const PresenceSuffix = "__has"
 // (short_vol_z, short_int_dtc), Cboe put/call (pc_total) and FRED (vix_level,
 // vix_regime, vix_high_vol, and every macro_<series>_pct / macro_<series>_chg
 // key macrofeat.FromSeries builds).
+//
+// Retired 2026-10-22: tv_webhook_signal. TradingView ToS s.3 bars non-display
+// use of alerts; the webhook is still stored for history, not as a model input.
 func RetiredSourceKey(k string) bool {
 	base := strings.TrimSuffix(k, PresenceSuffix)
 	switch base {
-	case "tv_reco", "stocktwits_bull_ratio",
+	case "tv_reco", "stocktwits_bull_ratio", "tv_webhook_signal",
 		"short_vol_z", "short_int_dtc", "pc_total",
 		"vix_level", "vix_regime", "vix_high_vol":
 		return true
