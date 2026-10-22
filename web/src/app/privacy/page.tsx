@@ -146,7 +146,7 @@ export default function PrivacyPage() {
                   To send one email when the volatility record can be judged (nothing sends it yet)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until you ask us to remove it
+                  Up to 12 months, or sooner if you ask us to remove it (email the contact address)
                 </td>
               </tr>
               <tr>
@@ -157,7 +157,7 @@ export default function PrivacyPage() {
                   To spot a name under attack
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until the log rotates
+                  Up to 30 days (it is a log entry)
                 </td>
               </tr>
               <tr>
@@ -168,7 +168,18 @@ export default function PrivacyPage() {
                   To run and fix the service
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until the log rotates
+                  Up to 30 days
+                </td>
+              </tr>
+              <tr>
+                <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
+                  Deletion record: the account number and a one-way (SHA-256) hash of the email address of a deleted account, and nothing else
+                </td>
+                <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
+                  So that restoring an older backup cannot bring a deleted account back
+                </td>
+                <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
+                  Indefinitely, in a separate file outside the database
                 </td>
               </tr>
             </tbody>
@@ -184,7 +195,7 @@ export default function PrivacyPage() {
           - Your browser&rsquo;s user agent. Read to block AI crawlers; not stored.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. How long that takes depends on traffic; we have not yet set a fixed maximum.
+          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. Logs are kept for up to 30 days. Retention limits are listed under Backups and deletion.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Stored in your browser">
@@ -274,10 +285,10 @@ export default function PrivacyPage() {
                   GitHub (a private repository)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  A compressed copy of the whole database, made each weekday after the US market close, including every database row above, password hashes and the waitlist (not the logs). It is not encrypted today
+                  A compressed copy of the whole database, made each weekday after the US market close, including every database row above, password hashes and the waitlist (not the logs). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key the operator keeps offline. Copies made before that date were not encrypted; they leave the rotation as newer copies replace them
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Off-site backup; the 7 newest are kept (about 1.5 weeks)
+                  Off-site backup; the 7 newest are kept (about a week and a half)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Always
@@ -288,13 +299,13 @@ export default function PrivacyPage() {
                   TradingView
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Your browser loads its chart widget; TradingView receives your IP address, browser details and the symbol you view, and may set its own cookies
+                  Your browser loads its chart widget; TradingView receives your IP address, browser details and the symbol you view, and may set its own cookies. Separately, the operator sends alerts from his own TradingView account to SignalDeck by webhook; nothing about you is sent to TradingView for this
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Price charts, so SignalDeck shows no price data itself
+                  Price charts, so SignalDeck shows no price data itself; the operator&rsquo;s alerts are one input to the forecasts
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Member symbol pages only
+                  Chart widget: member symbol pages only
                 </td>
               </tr>
               <tr>
@@ -336,7 +347,7 @@ export default function PrivacyPage() {
                   AI answers
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Not switched on for members today
+                  Switched off for member accounts
                 </td>
               </tr>
             </tbody>
@@ -346,10 +357,19 @@ export default function PrivacyPage() {
       <section className="panel px-5 py-4" aria-label="Backups and deletion">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Backups and deletion</h2>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          On this machine, the newest backup is kept uncompressed (at most two), and the five newest compressed backups are kept; older compressed backups are deleted. Uncompressed copies beyond the two newest move to a local holding folder that is emptied by hand. Off-site, the 7 newest backups are kept.
+          On the operator&rsquo;s computer, the newest backup is kept uncompressed (at most two), and the five newest compressed backups are kept; older compressed backups are deleted. Uncompressed copies beyond the two newest move to a local holding folder, where they are kept for up to 30 days. Local backup copies are not encrypted.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          When you delete your account, its data is erased from the live database at once. Copies stay in backups until they age out (about 1.5 weeks off-site) and in logs until they rotate.
+          Off-site, one compressed copy of the database is uploaded each weekday to a private GitHub repository, and the 7 newest copies are kept (about a week and a half). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key the operator keeps offline. Copies made before 22 October 2026 were not encrypted; they leave the rotation as newer copies replace them.
+        </p>
+        <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
+          Retention limits: logs up to 30 days; the local holding folder up to 30 days; waitlist entries up to 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand.
+        </p>
+        <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
+          When you delete your account, its data is erased from the live database at once. It can remain in logs for up to 30 days, and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days).
+        </p>
+        <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
+          When an account is deleted, SignalDeck records the account number and a one-way (SHA-256) hash of the account&rsquo;s email address, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back. This record is kept indefinitely.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Your choices">
@@ -369,7 +389,7 @@ export default function PrivacyPage() {
       <section className="panel px-5 py-4" aria-label="Security">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Security</h2>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Passwords and tokens are stored only as one-way hashes. The site is served over HTTPS. The off-site backup is not encrypted today. If a breach affects your personal information, we will notify you as the law requires.
+          Passwords and tokens are stored only as one-way hashes. The site is served over HTTPS. Off-site backups made since 22 October 2026 are encrypted (AES-256-GCM) before upload; older off-site copies and the local backup copies are not encrypted. Encryption can reduce breach risk and may affect notification obligations; each incident requires assessment under applicable law. If a breach affects your personal information, we will notify you as the law requires.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Children">
