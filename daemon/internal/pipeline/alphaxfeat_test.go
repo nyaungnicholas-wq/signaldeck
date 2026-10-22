@@ -42,8 +42,9 @@ func seedPredictable(t *testing.T, st *store.Store, symbol string, market md.Mar
 }
 
 // FEATURE-VECTOR integration (featureVersion 5): fresh, gate-clearing
-// new-source data must ride the persisted vector as short_int_dtc,
-// stocktwits_bull_ratio, wiki_z, tv_reco, pc_total and cot_spx_net.
+// new-source data must ride the persisted vector as short_int_dtc, wiki_z,
+// pc_total and cot_spx_net. StockTwits and TradingView data are still seeded
+// below and must NOT appear: both sources were retired on 2026-10-21.
 func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
@@ -108,14 +109,17 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	}
 	vec := feats[0].Vec
 	for k, want := range map[string]float64{
-		"short_int_dtc":         3.5,
-		"stocktwits_bull_ratio": 0.75,
-		"tv_reco":               0.4,
-		"pc_total":              0.91,
-		"cot_spx_net":           (100.0 - 40.0) / 200.0,
+		"short_int_dtc": 3.5,
+		"pc_total":      0.91,
+		"cot_spx_net":   (100.0 - 40.0) / 200.0,
 	} {
 		if got := vec[k]; got != want {
 			t.Fatalf("vec[%q] = %v, want %v (vec %+v)", k, got, want, vec)
+		}
+	}
+	for _, k := range []string{"stocktwits_bull_ratio", "tv_reco"} {
+		if v, ok := vec[k]; ok {
+			t.Fatalf("retired source %q must not be built, got %v", k, v)
 		}
 	}
 	if z, ok := vec["wiki_z"]; !ok || z <= 0 {

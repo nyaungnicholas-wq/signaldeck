@@ -30,13 +30,18 @@ func fixtureStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { _ = st.Close() })
 	ctx := context.Background()
 
-	// A crypto pair (24/7 source) with a 3h-old perp snapshot: budget 2h ⇒ stale.
+	// Crypto sources are PAUSED (2026-10-21): a 3h-old perp snapshot (budget 2h)
+	// would be stale if judged, so it proves the pause suppresses the check.
 	btc, _ := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
 	if err := st.InsertCryptoPerp(ctx, store.CryptoPerpRow{SymbolID: btc.ID, Ts: openNow.Unix() - 3*3600, MarkPx: 1}); err != nil {
 		t.Fatal(err)
 	}
-	// A 1s snapshot 1min old: budget 10m ⇒ fresh (ungated, always checked).
-	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: btc.ID, Ts: openNow.Unix() - 60, Mid: 1}); err != nil {
+	// An ungated, always-checked source: Wikipedia views 5 days old (budget 3d) ⇒
+	// stale whether or not the stock market is open.
+	aaplWiki, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "")
+	if err := st.UpsertWikiViews(ctx, []store.WikiViewRow{{
+		SymbolID: aaplWiki.ID, Day: openNow.UTC().AddDate(0, 0, -5).Format("2006-01-02"), Views: 1,
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	// A streamed stock with a 2h-old 1m bar: budget 30m, gated ⇒ stale only when
@@ -142,18 +147,21 @@ func TestEvaluateMarketOpenClassifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := bySource(t, reports, "crypto_perp"); !got.Stale {
-		t.Errorf("crypto_perp 3h old (budget 2h) should be stale: %+v", got)
+	if got := bySource(t, reports, "wiki_views"); !got.Stale {
+		t.Errorf("wiki_views 5d old (budget 3d) should be stale: %+v", got)
 	}
-	if got := bySource(t, reports, "snapshots_1s"); got.Stale {
-		t.Errorf("snapshots_1s 1min old should be fresh: %+v", got)
+	// Paused sources are reported but never judged stale, even when they would be.
+	for _, src := range []string{"crypto_perp", "snapshots_1s", "tv_quotes", "tv_ratings", "stocktwits_sentiment"} {
+		if got := bySource(t, reports, src); got.Stale || !strings.Contains(got.Note, "paused:") {
+			t.Errorf("%s is paused and must not be judged: %+v", src, got)
+		}
 	}
 	if got := bySource(t, reports, "bars_1m_hot"); !got.Stale {
 		t.Errorf("bars_1m_hot 2h old (budget 30m, market open) should be stale: %+v", got)
 	}
 	// No rows at all + gated source + market open ⇒ stale, honestly labeled.
-	if got := bySource(t, reports, "tv_quotes"); !got.Stale || !strings.Contains(got.Note, "no rows yet") {
-		t.Errorf("tv_quotes (no rows, market open) should be stale w/ note: %+v", got)
+	if got := bySource(t, reports, "news"); !got.Stale || !strings.Contains(got.Note, "no rows yet") {
+		t.Errorf("news (no rows, market open) should be stale w/ note: %+v", got)
 	}
 	// Webhook with no secret configured is not checked.
 	if got := bySource(t, reports, "tv_signals"); got.Stale || !strings.Contains(got.Note, "webhook disabled") {
@@ -174,9 +182,9 @@ func TestEvaluateMarketClosedSuppressesStockStaleness(t *testing.T) {
 	if got := bySource(t, reports, "tv_signals"); got.Stale || !strings.Contains(got.Note, "market closed") {
 		t.Errorf("tv_signals should be suppressed when market closed even w/ secret: %+v", got)
 	}
-	// Crypto / 24-7 sources are still checked when the stock market is closed.
-	if got := bySource(t, reports, "crypto_perp"); !got.Stale {
-		t.Errorf("crypto_perp must still be checked when market closed: %+v", got)
+	// Ungated sources are still checked when the stock market is closed.
+	if got := bySource(t, reports, "wiki_views"); !got.Stale {
+		t.Errorf("wiki_views must still be checked when market closed: %+v", got)
 	}
 }
 

@@ -1,6 +1,7 @@
 package alphax
 
 import (
+	"strings"
 	"fmt"
 	"math"
 	"testing"
@@ -378,7 +379,7 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 	for i := 0; i < MinCrossSection; i++ {
 		vec := map[string]float64{"x": float64(i)}
 		if i%2 == 0 {
-			vec["stocktwits_bull_ratio"] = 0 // measured 100%-bearish crowd
+			vec["short_int_dtc"] = 0 // measured zero days-to-cover
 		} // odd rows: source absent — NOT the same thing
 		rows = append(rows, LabeledRow{
 			SymbolID: int64(i + 1), Ts: dayTs(0, int64(i)),
@@ -390,9 +391,9 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 	hasIdx, valIdx := -1, -1
 	for i, k := range ds.Keys {
 		switch k {
-		case "stocktwits_bull_ratio":
+		case "short_int_dtc":
 			valIdx = i
-		case "stocktwits_bull_ratio__has":
+		case "short_int_dtc__has":
 			hasIdx = i
 		}
 	}
@@ -400,7 +401,7 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 		t.Fatalf("key union must carry the feature AND its __has indicator, got %v", ds.Keys)
 	}
 
-	present := Flatten(map[string]float64{"x": 1, "stocktwits_bull_ratio": 0}, ds.Keys)
+	present := Flatten(map[string]float64{"x": 1, "short_int_dtc": 0}, ds.Keys)
 	absent := Flatten(map[string]float64{"x": 1}, ds.Keys)
 	if present[valIdx] != 0 || absent[valIdx] != 0 {
 		t.Fatalf("base value flattening changed: present=%v absent=%v", present[valIdx], absent[valIdx])
@@ -437,6 +438,24 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 		}
 		if s.Feat[hasIdx] != want {
 			t.Fatalf("sample sym=%d __has=%v want %v", s.SymbolID, s.Feat[hasIdx], want)
+		}
+	}
+}
+
+// Retired sources (gbm.RetiredSourceKey) must never enter the key union, even
+// though labeled rows written before 2026-10-21 still carry them.
+func TestBuildDataset_DropsRetiredSourceKeys(t *testing.T) {
+	var rows []LabeledRow
+	for i := 0; i < MinCrossSection; i++ {
+		rows = append(rows, LabeledRow{
+			SymbolID: int64(i + 1), Ts: dayTs(0, int64(i)),
+			Features:  map[string]float64{"x": float64(i), "tv_reco": 0.5, "stocktwits_bull_ratio": 0.7},
+			FwdReturn: float64(i),
+		})
+	}
+	for _, k := range BuildDataset(rows).Keys {
+		if strings.HasPrefix(k, "tv_reco") || strings.HasPrefix(k, "stocktwits_bull_ratio") {
+			t.Fatalf("retired key %q in the alphax layout: %v", k, BuildDataset(rows).Keys)
 		}
 	}
 }

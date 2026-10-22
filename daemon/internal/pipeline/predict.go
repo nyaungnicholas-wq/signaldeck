@@ -845,6 +845,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			staleFeed++
 			continue
 		}
+		// Crypto trades every day, so the session calendar does not apply. A
+		// crypto series whose newest settled daily bar is older than
+		// cryptoStaleAfter has stopped updating (crypto ingestion was paused on
+		// 2026-10-21); forecasting it would mint fresh-looking rows on frozen data.
+		if s.Market == md.Crypto && (len(daily) == 0 || cryptoBarStale(daily[len(daily)-1].Ts, time.Now())) {
+			staleFeed++
+			continue
+		}
 		states := expectancy.CurrentStateKeys(daily, minute)
 		forecasts, err := w.St.Forecasts(ctx, s.ID)
 		if err != nil {
@@ -1719,4 +1727,15 @@ func (w *PredictionRunner) gateReadFailed(ctx context.Context, h md.Horizon, wha
 		Detail: "horizon " + string(h) + " published without the collapse gate: " + what +
 			": " + err.Error(),
 	})
+}
+
+// cryptoStaleAfter bounds the age of a crypto series' newest SETTLED daily bar
+// (its open time). With the forming bar trimmed, a healthy series reads up to
+// ~48h old late in the UTC day, so the bound sits a full day above that.
+const cryptoStaleAfter = 72 * time.Hour
+
+// cryptoBarStale reports whether a crypto daily bar opening at barTs (unix
+// seconds) is too old to forecast from at now.
+func cryptoBarStale(barTs int64, now time.Time) bool {
+	return now.Sub(time.Unix(barTs, 0)) > cryptoStaleAfter
 }

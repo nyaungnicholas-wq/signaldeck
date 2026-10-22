@@ -49,16 +49,10 @@ const (
 	shortIntMaxAgeDays = 20
 	// fundingMaxAgeSecs bounds the crypto perp snapshot (worker polls 15m).
 	fundingMaxAgeSecs = 24 * 3600
-	// stBullMaxAgeSecs / stBullMinTotal gate the StockTwits snapshot: ≤1 day
-	// old and resting on ≥10 tallied messages (a 3-message "crowd" is noise).
-	stBullMaxAgeSecs = 24 * 3600
-	stBullMinTotal   = 10
 	// wikiZMaxAgeDays / wikiZMinPrior mirror /api/wiki-attention's z gates:
 	// latest day ≤3 days old, ≥10 prior days, stddev floor.
 	wikiZMaxAgeDays = 3
 	wikiZMinPrior   = 10
-	// tvRecoMaxAgeSecs bounds the TradingView scanner rating (worker: 15m).
-	tvRecoMaxAgeSecs = 24 * 3600
 	// pcTotalMaxAgeDays bounds the CBOE put/call trade date (daily publish).
 	pcTotalMaxAgeDays = 3
 	// cotMaxAgeDays bounds the COT report date (Tuesday positions published
@@ -148,15 +142,13 @@ func alphaMarketFeatures(ctx context.Context, st *store.Store, now time.Time) ma
 //	                       stored OI baseline helper yet, and fabricating a
 //	                       z from an ad-hoc window here would not match any
 //	                       served number — funding alone carries the signal.
-//	stocktwits_bull_ratio — bullish/(bullish+bearish) from the latest page
-//	                       snapshot, total ≥10 and ≤1 day old.
 //	wiki_z               — latest day's Wikipedia views standardized vs the
 //	                       symbol's own trailing baseline (same gates as
 //	                       /api/wiki-attention: ≥10 prior days, stddev
 //	                       floor), latest day ≤3 days old.
-//	tv_reco              — TradingView's latest reco_all rating, ≤1 day old
-//	                       (an EXTERNAL descriptive rating — the model may
-//	                       learn from it; it is never OUR output).
+//
+// stocktwits_bull_ratio and tv_reco were removed on 2026-10-21: their sources'
+// terms do not clearly permit this use (gbm.RetiredSourceKey).
 //
 // Best-effort: any error or gate failure → that field is absent.
 func alphaSymbolFeatures(ctx context.Context, st *store.Store, s md.Symbol, now time.Time) map[string]float64 {
@@ -196,12 +188,6 @@ func alphaSymbolFeatures(ctx context.Context, st *store.Store, s md.Symbol, now 
 		}
 	}
 
-	if st2, ok, err := st.LatestStocktwits(ctx, s.ID); err == nil && ok &&
-		now.Unix()-st2.Ts <= stBullMaxAgeSecs && st2.Total >= stBullMinTotal &&
-		st2.Bullish+st2.Bearish > 0 {
-		out["stocktwits_bull_ratio"] = float64(st2.Bullish) / float64(st2.Bullish+st2.Bearish)
-	}
-
 	if series, err := st.WikiViewsSeries(ctx, s.ID, 40); err == nil && len(series) > 0 &&
 		dayWithinUTC(series[len(series)-1].Day, now, wikiZMaxAgeDays) {
 		views := make([]float64, len(series))
@@ -211,10 +197,6 @@ func alphaSymbolFeatures(ctx context.Context, st *store.Store, s md.Symbol, now 
 		if z, ok := trailingZ(views, wikiZMinPrior); ok {
 			out["wiki_z"] = z
 		}
-	}
-
-	if r, ok := st.LatestTVRating(ctx, s.ID); ok && now.Unix()-r.Ts <= tvRecoMaxAgeSecs {
-		out["tv_reco"] = r.RecoAll
 	}
 
 	// tv_webhook_signal — direction of the latest TradingView PINE ALERT this

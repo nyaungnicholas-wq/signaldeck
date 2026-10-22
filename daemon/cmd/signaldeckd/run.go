@@ -33,15 +33,10 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cboe"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/hyperliquid"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/stocktwits"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
@@ -100,8 +95,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	} else {
 		slog.Warn("no Alpaca keys found — stock ingestion disabled (set ALPACA_KEY/SECRET or keep them in stock-trader/.env)")
 	}
-	krakenClient := cryptohist.New()
-	backfiller := pipeline.NewBackfiller(st, alpacaClient, krakenClient)
+	// Kraken is not used (2026-10-21): its terms restrict automated use and
+	// derived works, so crypto ingestion is paused and the backfiller gets no
+	// Kraken client (crypto backfills return an error instead of calling it).
+	backfiller := pipeline.NewBackfiller(st, alpacaClient, nil)
 
 	// ONE EDGAR client for the WHOLE daemon. SEC's fair-access policy caps
 	// clients at 10 req/s; the limiter that enforces that lives INSIDE
@@ -139,15 +136,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		return
 	}
 
-	// ── symbols: consolidated crypto always; seed stocks on first boot ──
-	cryptoSym, err := st.UpsertSymbol(ctx, cfg.CryptoSymbol, md.Crypto,
-		"Bitcoin/USD (Coinbase+Kraken consolidated via TickStream)")
-	if err != nil {
-		slog.Error("seed crypto symbol", "err", err)
-		return
-	}
+	// ── symbols: crypto is PAUSED (2026-10-21, no Kraken); seed stocks on first boot ──
+	// Every crypto symbol is set inactive on each boot, so no producer (predict,
+	// regime, composite, signals, dq-auditor) mints anything new for it. Nothing
+	// is deleted: the published history stays verifiable on /proof and open
+	// forecasts still grade from bars already stored.
+	pauseCrypto(ctx, st)
 	if seeded, _ := st.GetMeta(ctx, "seeded_v1"); seeded == "" {
-		_ = backfiller.Enqueue(cryptoSym)
 		created, failedSeeds := 0, 0
 		if alpacaClient != nil {
 			for _, s := range seedStocks {
@@ -260,8 +255,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		// to see it. This is the only thing in the fleet that notices the
 		// product's own surface going unreachable. See internal/pipeline/apiprobe.go.
 		&pipeline.APIProbe{Addr: cfg.HTTPAddr},
-		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
-		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
+		// cryptolive (TickStream merges Coinbase + Kraken) and CryptoBars (Kraken
+		// OHLC) are not wired while crypto is paused (2026-10-21).
 		backfiller,
 		&pipeline.BackfillReconciler{St: st, BF: backfiller},
 		&pipeline.SignalRunner{St: st},
@@ -787,11 +782,7 @@ func registerSymbol(ctx context.Context, st *store.Store, ac *alpaca.Client,
 		}
 		name = n
 	case md.Crypto:
-		// Kraken pairs are BASE/QUOTE; a quick shape check — the backfill
-		// itself is the real validation (unknown pairs error visibly).
-		if !strings.Contains(symbol, "/") {
-			return md.Symbol{}, fmt.Errorf("crypto symbols are BASE/QUOTE, e.g. ETH/USD")
-		}
+		return md.Symbol{}, fmt.Errorf("crypto is paused: SignalDeck has no licensed crypto data source")
 	}
 
 	// MONITOR path (stock, stream=false): register as a broad-universe daily
@@ -888,10 +879,9 @@ func alertBriefingWorkers(st *store.Store, llmClient llm.Client, remote *notify.
 func discoveryWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 ) []workers.Worker {
-	// WHOLE-MARKET extension: TradingView's public scanner needs no keys, so
-	// the TV source is always wired — each sweep also screens the entire US
-	// market (top volume + top |change|) into the same candidates pipeline.
-	w := &discovery.Worker{St: st, TV: tvscanner.New()}
+	// TV is left nil (Alpaca-only discovery): TradingView's terms bar
+	// non-display use of its scanner data, so it was removed on 2026-10-21.
+	w := &discovery.Worker{St: st}
 	if cfg.HasAlpaca() {
 		w.Client = discovery.NewClient(cfg.AlpacaKey, cfg.AlpacaSecret)
 		w.Subscribe = func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
@@ -1478,9 +1468,10 @@ func compositeWorkers(st *store.Store) []workers.Worker {
 // an EXTERNAL, independent signal, NOT SignalDeck's model and NOT advice.
 // /api/tv-rating and the UI carry that caveat verbatim.
 func tvRatingWorkers(st *store.Store) []workers.Worker {
-	return []workers.Worker{
-		&pipeline.TVRatingPoller{St: st, TV: tvscanner.New()},
-	}
+	// The TradingView scanner poller was removed on 2026-10-21: TradingView's
+	// terms bar non-display use of its data. /api/tv-rating now serves only
+	// rows written before then.
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1570,9 +1561,10 @@ func selfAuditWorkers(st *store.Store) []workers.Worker {
 func dataExpansionWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.ShortInterestPoller{St: st, Client: finra.NewSI()},
-		&pipeline.CryptoPerpPoller{St: st, Client: hyperliquid.New()},
+		// CryptoPerpPoller is not wired while crypto is paused (2026-10-21).
 		&pipeline.COTPoller{St: st, Client: cftc.New()},
-		&pipeline.StocktwitsFetcher{St: st, Client: stocktwits.New()},
+		// StocktwitsFetcher removed 2026-10-21: StockTwits' terms bar automated
+		// extraction without written authorization.
 		&pipeline.WikiAttention{St: st, Client: wikimedia.New()},
 		&pipeline.CboePCPoller{St: st, Client: cboe.New()},
 		// tv-quotes (60s, market-hours gated; crypto 24/7): near-real-time
@@ -1581,7 +1573,7 @@ func dataExpansionWorkers(st *store.Store) []workers.Worker {
 		// flagged; full-market day volume. A TAPE (rows >2h pruned inline) —
 		// bars stay the durable record. CAVEAT: descriptive supplement to the
 		// bar record, not a replacement.
-		&pipeline.TVQuotesPoller{St: st, TV: tvscanner.New()},
+		// TVQuotesPoller removed 2026-10-21 (TradingView terms, see above).
 	}
 }
 
@@ -2139,4 +2131,26 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 		kept = append(kept, w)
 	}
 	return kept
+}
+
+// pauseCrypto sets every crypto symbol inactive. It runs on every boot because
+// earlier builds re-activated BTC/USD at startup; a symbol that is already
+// inactive is left alone. Errors are logged, never fatal: a failed pause leaves
+// the predict-time stale-bar gate (pipeline.cryptoBarStale) as the backstop.
+func pauseCrypto(ctx context.Context, st *store.Store) {
+	syms, err := st.ListSymbols(ctx, true)
+	if err != nil {
+		slog.Error("pause crypto: list symbols", "err", err)
+		return
+	}
+	for _, s := range syms {
+		if s.Market != md.Crypto {
+			continue
+		}
+		if err := st.SetSymbolActive(ctx, s.ID, false); err != nil {
+			slog.Error("pause crypto", "symbol", s.Symbol, "err", err)
+			continue
+		}
+		slog.Info("crypto paused", "symbol", s.Symbol)
+	}
 }

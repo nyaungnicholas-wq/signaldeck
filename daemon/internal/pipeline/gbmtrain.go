@@ -92,7 +92,7 @@ func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 // because the labeled sets this trainer reads reach back into pre-deletion
 // rows that carry them.
 func excludedGBMKey(k string) bool {
-	return gbm.SelfReferentialKey(k)
+	return gbm.ExcludedKey(k)
 }
 
 // modelFeatureKeys returns the MODEL INPUT layout: every base key from

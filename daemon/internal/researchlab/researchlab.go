@@ -103,7 +103,7 @@ func CanonicalKeys(rows []Row) []string {
 // grading hypotheses that were free to read forecast_prob and forecast_lift,
 // which is precisely the "edge" this package exists to refuse to believe in.
 func excludedKey(k string) bool {
-	return gbm.SelfReferentialKey(k)
+	return gbm.ExcludedKey(k)
 }
 
 // GenerateHypotheses produces a deterministic, BOUNDED candidate set over the

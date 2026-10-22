@@ -176,7 +176,6 @@ export default function WatchlistPanel({
           aria-label="market"
         >
           <option value="stocks">stocks</option>
-          <option value="crypto">crypto</option>
         </select>
         <button
           type="submit"

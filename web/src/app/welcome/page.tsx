@@ -28,7 +28,6 @@ const CURATED: { symbol: string; market: Market }[] = [
   { symbol: "AAPL", market: "stocks" },
   { symbol: "AMD", market: "stocks" },
   { symbol: "COIN", market: "stocks" },
-  { symbol: "BTC/USD", market: "crypto" },
 ];
 
 // The four automatic alert kinds, in the rulebook's display order.
@@ -337,7 +336,6 @@ export default function WelcomePage() {
                   className="min-h-[44px] cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-2 text-sm text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
                 >
                   <option value="stocks">stocks</option>
-                  <option value="crypto">crypto</option>
                 </select>
                 <button
                   type="submit"
