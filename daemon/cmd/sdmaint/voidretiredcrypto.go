@@ -43,7 +43,7 @@ const (
 	vrcLabelBaseSinceTs   = int64(1791072000) // pipeline.labelBaseSinceTs
 	vrcDSTSlackSecs       = int64(6 * 3600)   // pipeline.dstStampSlackSecs
 	vrcDQKind             = "predictions_voided_source_retired"
-	vrcPausedOn           = "2026-10-21"
+	vrcPauseDecided       = "2026-10-21" // the decision date; each exit is dated by its own last bar
 )
 
 type vrcBar struct {
@@ -432,7 +432,13 @@ func vrcRun(ctx context.Context, dbPath string, apply bool, logPath string, now 
 		}
 	}
 
-	detail := fmt.Sprintf("source_retired: crypto paused %s (no licensed crypto data source). Voided %d open crypto forecast outcome(s) the prediction resolver can never settle from stored daily bars (%s); %d settleable left open for the resolver; %d open crypto regime_outcomes untouched; delisted_at stamped on %d crypto symbol(s) at the UTC day of their last stored daily bar. Old values: %s", vrcPausedOn, voidCount, vrcByHorizon(plan.byHorizon), plan.settleable, plan.regimeOpen, stampedCount, logPath)
+	// The stamp dates come from the stamps themselves (the last stored bar's UTC
+	// day), so this permanent record cannot disagree with symbols.delisted_at.
+	stampDays := make([]string, len(plan.stamps))
+	for i, s := range plan.stamps {
+		stampDays[i] = s.symb + "=" + time.Unix(s.ts, 0).UTC().Format(time.DateOnly)
+	}
+	detail := fmt.Sprintf("source_retired: crypto pause decided %s (no licensed crypto data source). Voided %d open crypto forecast outcome(s) the prediction resolver can never settle from stored daily bars (%s); %d settleable left open for the resolver; %d open crypto regime_outcomes untouched; delisted_at stamped on %d crypto symbol(s) at the UTC day of their last stored daily bar (%s). Old values: %s", vrcPauseDecided, voidCount, vrcByHorizon(plan.byHorizon), plan.settleable, plan.regimeOpen, stampedCount, strings.Join(stampDays, ", "), logPath)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO dq_events (ts, kind, detail) VALUES (?, ?, ?)`, now, vrcDQKind, detail); err != nil {
 		return plan, 0, err
 	}

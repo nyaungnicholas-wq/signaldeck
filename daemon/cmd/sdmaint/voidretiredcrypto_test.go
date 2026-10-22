@@ -27,7 +27,7 @@ func vrcAt(m time.Month, d, hh, mm int) int64 {
 }
 func vrcKey(sym int64, h string, ts int64) string { return fmt.Sprintf("%d|%s|%d", sym, h, ts) }
 
-type vrcFixture struct{ btc, eth, sol, xrp, aapl int64 }
+type vrcFixture struct{ btc, eth, sol, xrp, aapl, ada int64 }
 
 type vrcCase struct {
 	name   string
@@ -40,6 +40,7 @@ type vrcCase struct {
 // The fixture's forecast groups, each hand-derived from the resolver's rules.
 // BTC bars: 08-25..10-12 daily, hole 09-14..09-18. ETH: 09-28..10-11, hole 10-06.
 // XRP: 09-01..09-15. SOL: no bars (nothing to date its exit from).
+// ADA: 09-01..09-20 with the 09-09 bar closed at 0 (a bad base).
 var vrcCases = []vrcCase{
 	{"R1 pre-settled-base rule", func(f vrcFixture) int64 { return f.btc }, vrcAt(time.September, 1, 12, 0), nil, []string{"1d", "1d#pm", "1w", "1w#pm"}},
 	{"R2 forming base steps back; 1w forward bar after the hole", func(f vrcFixture) int64 { return f.btc }, vrcAt(time.September, 10, 0, 30), nil, []string{"1d", "1d#pm", "1w", "1w#pm"}},
@@ -52,6 +53,7 @@ var vrcCases = []vrcCase{
 	{"R9 first bar unsettled at issue, nothing before it", func(f vrcFixture) int64 { return f.eth }, vrcAt(time.September, 28, 6, 0), []string{"1d", "1d#pm", "1w", "1w#pm"}, nil},
 	{"R12 1d has forward and successor bars but none at/after ts+1d (queue gate only)", func(f vrcFixture) int64 { return f.xrp }, vrcAt(time.September, 14, 12, 0), []string{"1d", "1d#pm", "1w", "1w#pm"}, nil},
 	{"R11 1d forward bar is the last bar, no successor (settlement guard only)", func(f vrcFixture) int64 { return f.btc }, vrcAt(time.October, 11, 0, 0), []string{"1d", "1d#pm", "1w", "1w#pm"}, nil},
+	{"R13 base bar closed at 0 (bad base): forward and successor bars stored", func(f vrcFixture) int64 { return f.ada }, vrcAt(time.September, 10, 0, 10), []string{"1d", "1d#pm", "1w", "1w#pm"}, nil},
 	{"R10 1d already graded; twin and 1w open", func(f vrcFixture) int64 { return f.btc }, vrcAt(time.September, 20, 12, 0), nil, []string{"1d#pm", "1w", "1w#pm"}},
 }
 
@@ -82,7 +84,7 @@ func vrcSeed(t *testing.T, path string) vrcFixture {
 		}
 		return v.ID
 	}
-	f := vrcFixture{btc: sym("BTC/USD", md.Crypto), eth: sym("ETH/USD", md.Crypto), sol: sym("SOL/USD", md.Crypto), xrp: sym("XRP/USD", md.Crypto), aapl: sym("AAPL", md.Stocks)}
+	f := vrcFixture{btc: sym("BTC/USD", md.Crypto), eth: sym("ETH/USD", md.Crypto), sol: sym("SOL/USD", md.Crypto), xrp: sym("XRP/USD", md.Crypto), aapl: sym("AAPL", md.Stocks), ada: sym("ADA/USD", md.Crypto)}
 	bars := func(id int64, from, to time.Time, hour int, skip func(time.Time) bool) {
 		var bs []md.Bar
 		for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
@@ -104,6 +106,7 @@ func vrcSeed(t *testing.T, path string) vrcFixture {
 	bars(f.eth, utc(time.September, 28), utc(time.October, 11), 0, func(d time.Time) bool {
 		return d.Month() == time.October && d.Day() == 6
 	})
+	bars(f.ada, utc(time.September, 1), utc(time.September, 20), 0, func(time.Time) bool { return false })
 	bars(f.aapl, utc(time.September, 1), utc(time.October, 9), 4, func(d time.Time) bool {
 		return d.Weekday() == time.Saturday || d.Weekday() == time.Sunday
 	})
@@ -137,10 +140,30 @@ func vrcSeed(t *testing.T, path string) vrcFixture {
 		VALUES (?, 'trend21-crypto', ?, ?, 21, 'up', 0.9, 0.9, 1, 'up')`, f.btc, vrcAt(time.October, 5, 0, 10), vrcDay(time.October, 5)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`UPDATE bars SET close = 0 WHERE symbol_id = ? AND tf = '1d' AND ts = ?`, f.ada, vrcDay(time.September, 9)); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// vrcPause sets the fixture's crypto symbols inactive the way cmd/signaldeckd pauseCrypto does.
+func vrcPause(t *testing.T, path string, f vrcFixture) {
+	t.Helper()
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{f.btc, f.eth, f.sol, f.xrp, f.ada} {
+		if err := st.SetSymbolActive(context.Background(), id, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func vrcOpenRaw(t *testing.T, path string) *sql.DB {
@@ -251,7 +274,7 @@ func TestVoidRetiredCryptoMirrorsResolver(t *testing.T) {
 	if plan.settleable != len(settle) {
 		t.Errorf("settleable = %d, want %d", plan.settleable, len(settle))
 	}
-	if s := vrcByHorizon(plan.byHorizon); s != "1d=6,1d#pm=6,1w=7,1w#pm=7" {
+	if s := vrcByHorizon(plan.byHorizon); s != "1d=7,1d#pm=7,1w=8,1w#pm=8" {
 		t.Errorf("by_horizon = %s", s)
 	}
 
@@ -312,7 +335,7 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 		t.Fatal("dry run changed the database file")
 	}
 	for _, want := range []string{
-		"VOID-RETIRED-CRYPTO dry_run=true voided=26 by_horizon=1d=6,1d#pm=6,1w=7,1w#pm=7 settleable_unresolved=21 regime_open=1 delisted_stamped=3 active_crypto=4",
+		"VOID-RETIRED-CRYPTO dry_run=true voided=30 by_horizon=1d=7,1d#pm=7,1w=8,1w#pm=8 settleable_unresolved=21 regime_open=1 delisted_stamped=4 active_crypto=5",
 		"DRY RUN: nothing written",
 	} {
 		if !strings.Contains(buf.String(), want) {
@@ -345,25 +368,14 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 	}
 
 	// (d) Pause crypto the way cmd/signaldeckd pauseCrypto does.
-	st, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []int64{f.btc, f.eth, f.sol, f.xrp} {
-		if err := st.SetSymbolActive(ctx, id, false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	vrcPause(t, path, f)
 
 	// (e) Apply.
 	buf.Reset()
-	if _, n, err := vrcRun(ctx, path, true, logPath, now, &buf); err != nil || n != 26 {
+	if _, n, err := vrcRun(ctx, path, true, logPath, now, &buf); err != nil || n != 30 {
 		t.Fatalf("apply: n=%d err=%v\n%s", n, err, buf.String())
 	}
-	for _, want := range []string{"VOID-RETIRED-CRYPTO dry_run=false voided=26", "delisted_stamped=3"} {
+	for _, want := range []string{"VOID-RETIRED-CRYPTO dry_run=false voided=30", "delisted_stamped=4"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("apply output lacks %q:\n%s", want, buf.String())
 		}
@@ -397,6 +409,7 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 		f.btc: {Int64: vrcDay(time.October, 12), Valid: true},
 		f.eth: {Int64: vrcDay(time.October, 11), Valid: true},
 		f.xrp: {Int64: vrcDay(time.September, 15), Valid: true},
+		f.ada: {Int64: vrcDay(time.September, 20), Valid: true},
 		f.sol: {},
 	} {
 		var got sql.NullInt64
@@ -415,7 +428,8 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 	if err := db2.QueryRow(`SELECT kind, detail FROM dq_events ORDER BY id DESC LIMIT 1`).Scan(&kind, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if n2 != dqCount+1 || kind != "predictions_voided_source_retired" || !strings.Contains(detail, "source_retired") || !strings.Contains(detail, logPath) {
+	if n2 != dqCount+1 || kind != "predictions_voided_source_retired" || !strings.Contains(detail, "source_retired") || !strings.Contains(detail, logPath) ||
+		!strings.Contains(detail, "pause decided 2026-10-21") || !strings.Contains(detail, "BTC/USD=2026-10-12") || !strings.Contains(detail, "XRP/USD=2026-09-15") {
 		t.Errorf("dq_events: count %d (want %d), last %q %q", n2, dqCount+1, kind, detail)
 	}
 	lf, err := os.Open(logPath)
@@ -431,10 +445,10 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 	for _, r := range recs[1:] {
 		tables[r[0]]++
 	}
-	if len(recs) != 1+26+3 || recs[0][0] != "table" || tables["prediction_outcomes"] != 26 || tables["symbols"] != 3 {
+	if len(recs) != 1+30+4 || recs[0][0] != "table" || tables["prediction_outcomes"] != 30 || tables["symbols"] != 4 {
 		t.Errorf("log: %d records, header %v, by table %v", len(recs), recs[0], tables)
 	}
-	st, err = store.Open(path)
+	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,4 +475,105 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 	if n2 != dqCount+1 {
 		t.Errorf("second apply wrote a dq_events row: %d, want %d", n2, dqCount+1)
 	}
+}
+
+// TestVoidRetiredCryptoRefusesAndRollsBack pins the O_EXCL refusal of an existing -log,
+// and the RowsAffected checks plus the rollback on both UPDATE loops: a planned row or
+// stamp that changes between plan and transaction must leave the database untouched.
+func TestVoidRetiredCryptoRefusesAndRollsBack(t *testing.T) {
+	const (
+		qOutcomes = "SELECT symbol_id, horizon, ts, prob, up, fwd_return, resolved_at, settle_ts FROM prediction_outcomes ORDER BY 1,2,3"
+		qSymbols  = "SELECT id, symbol, market, active, delisted_at FROM symbols ORDER BY id"
+	)
+	now := vrcAt(time.October, 21, 12, 0)
+	ctx := context.Background()
+
+	check := func(t *testing.T, path, dir string, db *sql.DB) {
+		t.Helper()
+		outBefore := vrcDump(t, db, qOutcomes)
+		symBefore := vrcDump(t, db, qSymbols)
+		var dqBefore int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dq_events").Scan(&dqBefore); err != nil {
+			t.Fatal(err)
+		}
+		logPath := filepath.Join(dir, "void.csv")
+		var buf bytes.Buffer
+		_, n, err := vrcRun(ctx, path, true, logPath, now, &buf)
+		if err == nil || n != 0 || !strings.Contains(err.Error(), "rolled back") {
+			t.Fatalf("n=%d err=%v\n%s", n, err, buf.String())
+		}
+		if vrcDump(t, db, qOutcomes) != outBefore {
+			t.Error("prediction_outcomes changed: the rollback did not undo the applied voids")
+		}
+		if vrcDump(t, db, qSymbols) != symBefore {
+			t.Error("symbols changed: the rollback did not undo the stamps")
+		}
+		var dqAfter int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dq_events").Scan(&dqAfter); err != nil {
+			t.Fatal(err)
+		}
+		if dqAfter != dqBefore {
+			t.Errorf("a failed apply wrote a dq_events row: %d, want %d", dqAfter, dqBefore)
+		}
+		if strings.Contains(buf.String(), "APPLIED") {
+			t.Error("a failed apply reported APPLIED")
+		}
+	}
+
+	t.Run("existing log", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "x.db")
+		f := vrcSeed(t, path)
+		vrcPause(t, path, f)
+		logPath := filepath.Join(dir, "void.csv")
+		if err := os.WriteFile(logPath, []byte("keep me\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		h0 := vrcFileHash(t, path)
+		_, n, err := vrcRun(ctx, path, true, logPath, now, io.Discard)
+		if err == nil || n != 0 || !strings.Contains(err.Error(), "log not written") {
+			t.Fatalf("n=%d err=%v", n, err)
+		}
+		if vrcFileHash(t, path) != h0 {
+			t.Fatal("database changed")
+		}
+		b, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != "keep me\n" {
+			t.Fatalf("existing log overwritten: %q", string(b))
+		}
+	})
+
+	t.Run("planned outcome changed underneath", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "x.db")
+		f := vrcSeed(t, path)
+		vrcPause(t, path, f)
+		plan, _, err := vrcRun(ctx, path, false, "", now, io.Discard)
+		if err != nil || len(plan.void) <= 1 {
+			t.Fatalf("plan: err=%v void=%d", err, len(plan.void))
+		}
+		last := plan.void[len(plan.void)-1]
+		db := vrcOpenRaw(t, path)
+		triggerSQL := fmt.Sprintf("CREATE TRIGGER vrc_ignore BEFORE UPDATE ON prediction_outcomes WHEN OLD.symbol_id = %d AND OLD.horizon = '%s' AND OLD.ts = %d BEGIN SELECT RAISE(IGNORE); END", last.sym, last.horizon, last.ts)
+		if _, err := db.Exec(triggerSQL); err != nil {
+			t.Fatal(err)
+		}
+		check(t, path, dir, db)
+	})
+
+	t.Run("planned stamp changed underneath", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "x.db")
+		f := vrcSeed(t, path)
+		vrcPause(t, path, f)
+		db := vrcOpenRaw(t, path)
+		triggerSQL := fmt.Sprintf("CREATE TRIGGER vrc_ignore BEFORE UPDATE ON symbols WHEN OLD.id = %d BEGIN SELECT RAISE(IGNORE); END", f.btc)
+		if _, err := db.Exec(triggerSQL); err != nil {
+			t.Fatal(err)
+		}
+		check(t, path, dir, db)
+	})
 }

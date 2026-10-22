@@ -29,6 +29,30 @@ better:
 returns is the exact string the process writes onto every ledger row, so a row
 can be tied to a commit without trusting the deployment.
 
+### One time, right after the crypto-pause deploy: `sdmaint void-retired-crypto`
+
+The first deployed build that pauses crypto (no licensed crypto data source,
+2026-10-21) sets every crypto symbol `active=0` at boot (`pauseCrypto`) and, on
+purpose, leaves `delisted_at` NULL. Until the step below has run, every
+`ops/accuracy-registry.sh` run counts those symbols as undated exits and
+publishes `survivorship_clean=false`. Run it from the repo root as soon as the
+deploy prints `deploy VERIFIED`, before the next registry run (the
+`SignalDeck Accuracy` task runs it daily at 14:05 local):
+
+```
+(cd daemon && go build -o ../bin/sdmaint.exe ./cmd/sdmaint)
+bin/sdmaint.exe void-retired-crypto      # dry run, read-only: must print active_crypto=0
+bin/sdmaint.exe void-retired-crypto -apply -log logs/void-retired-crypto-$(date -u +%Y%m%dT%H%M%SZ).csv
+bin/sdmaint.exe void-retired-crypto      # must now print voided=0 ... delisted_stamped=0
+```
+
+`-apply` voids the open crypto forecasts the resolver can never settle, stamps
+`delisted_at` at each crypto symbol's last stored daily bar, and records one
+`dq_events` row (`predictions_voided_source_retired`) naming the CSV of old
+values, all in one transaction. It refuses while any crypto symbol is still
+`active=1` (the paused build is not running) and refuses a `-log` file that
+already exists. Keep the CSV. A second run changes nothing.
+
 
 Everything below is prepared; the two ★ steps need YOUR accounts/credentials —
 Claude cannot (and should not) do them for you.
