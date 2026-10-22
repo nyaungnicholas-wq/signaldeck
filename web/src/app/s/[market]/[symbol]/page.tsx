@@ -70,6 +70,7 @@ import CoveragePanel from "@/components/symbol/CoveragePanel";
 import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 import WhyMovingPanel from "@/components/symbol/WhyMovingPanel";
 import ValidatedSignalsPanel from "@/components/symbol/ValidatedSignalsPanel";
 import SymbolNewsPanel from "@/components/symbol/SymbolNewsPanel";
@@ -116,7 +117,8 @@ export default function SymbolPage({
     if (p.market === "crypto") {
       return (
         <p className="panel m-0 px-4 py-3 text-[0.85rem]" style={{ color: "var(--dim)" }}>
-          Members get US stocks and ETFs. Crypto isn&rsquo;t covered.{" "}
+          Members get US stocks and ETFs. SignalDeck has no licensed crypto data source:{" "}
+          {CRYPTO_PAUSED_LABEL}.{" "}
           <Link href="/today" className="underline">
             Back to Today
           </Link>
