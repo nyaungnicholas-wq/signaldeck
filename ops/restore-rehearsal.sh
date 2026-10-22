@@ -106,9 +106,10 @@ pick_newest() {
   ls -t "$1"/signaldeck-*.db "$1"/signaldeck-*.db.zst "$1"/signaldeck-*.db.gz 2>/dev/null | head -n1
 }
 
+. "$SD/ops/lib-offsite-gh.sh" # gh_offsite_* helpers, including the sdmaint lookup below
 SRC=""; SRC_LABEL="local"
 if [ "${1:-}" = "--from-github" ]; then # rehearse from the OFF-MACHINE copy (GitHub release asset), not the local dir (2026-09-07)
-  . "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"; . "$SD/ops/lib-offsite-gh.sh"
+  . "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
   GHDL="$(mktemp -d "${TMPDIR:-/tmp}/signaldeck-ghdl-XXXXXX")"; trap 'rm -rf "$GHDL"' EXIT
   SRC="$(gh_offsite_download_newest "${SIGNALDECK_OFFSITE_GH_REPO:-}" "$GHDL")" || { log "FAIL: could not download the newest GitHub backup release"; exit 1; }
   SRC_LABEL="github"; log "restore rehearsal: downloaded and checksum-verified $(basename "$SRC") from github ${SIGNALDECK_OFFSITE_GH_REPO:-}"
@@ -225,25 +226,13 @@ fi
 # signature against the restored copy, through the daemon's own store code
 # (sdmaint ledger-verify). This is also the "can the daemon's store actually
 # open this restore" drill — schema + migrations run against the temp copy.
-# Windows needs the .exe suffix or the binary is neither -x nor runnable, and
-# the checked-in bin/sdmaint is a macOS build — so on this box the drill failed
-# at "missing and could not be rebuilt" and the backups went unverified. Same
-# suffix idiom ops/signaldeck-ctl.sh already uses.
-SDMAINT_EXE=""
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SDMAINT_EXE=".exe" ;; esac
-SDMAINT="$SD/bin/sdmaint$SDMAINT_EXE"
-if [ ! -x "$SDMAINT" ]; then
-  # launchd's PATH has no go, so the user-local SDK is the macOS fallback;
-  # on Windows go IS on PATH and that hardcoded path does not exist, which is
-  # why the rebuild never fired here.
-  GO="$HOME/.local/go-sdk/go/bin/go"
-  [ -x "$GO" ] || GO="$(command -v go || true)"
-  if [ -n "$GO" ] && [ -x "$GO" ]; then
-    (cd "$SD/daemon" && "$GO" build -o "$SDMAINT" ./cmd/sdmaint) >/dev/null 2>&1
-  fi
-fi
-if [ ! -x "$SDMAINT" ]; then
-  log "FAIL: $SDMAINT is missing and could not be rebuilt — cannot re-verify the ledger anchors on the restored copy"
+# gh_offsite_sdmaint (lib-offsite-gh.sh) resolves bin/sdmaint(.exe) and
+# rebuilds it with go when missing: Windows needs the .exe suffix or the binary
+# is neither -x nor runnable, and the checked-in bin/sdmaint is a macOS build —
+# so on this box the drill once failed at "missing and could not be rebuilt"
+# and the backups went unverified.
+if ! SDMAINT="$(gh_offsite_sdmaint)"; then
+  log "FAIL: bin/sdmaint is missing and could not be rebuilt — cannot re-verify the ledger anchors on the restored copy"
   exit 1
 fi
 if ! LEDGER_OUT="$("$SDMAINT" ledger-verify -db "$TARGET" $ANCHOR_FLAGS 2>&1)"; then
@@ -251,6 +240,22 @@ if ! LEDGER_OUT="$("$SDMAINT" ledger-verify -db "$TARGET" $ANCHOR_FLAGS 2>&1)"; 
   exit 1
 fi
 log "ledger-verify: $(echo "$LEDGER_OUT" | tr '\n' ' ')"
+
+# (4) Account deletions made after this backup was taken live only in the
+# tombstone log (internal/tombstone), outside the database. Replay it onto the
+# TEMP copy, so the drill proves a real restore can honour them: the release's
+# own sealed log when it came from GitHub, else this machine's log.
+TOMB="${SIGNALDECK_TOMBSTONE_LOG:-${USERPROFILE:-$HOME}/.signaldeck/deletions.jsonl}"
+[ -n "${GHDL:-}" ] && [ -f "$GHDL/deletions.jsonl" ] && TOMB="$GHDL/deletions.jsonl"
+if [ -f "$TOMB" ]; then
+  if ! REPLAY_OUT="$("$SDMAINT" replay-tombstones -db "$TARGET" -log "$TOMB" -apply 2>&1)"; then
+    log "FAIL: sdmaint replay-tombstones could not replay $TOMB onto the restored copy — $REPLAY_OUT"
+    exit 1
+  fi
+  log "$(echo "$REPLAY_OUT" | tail -n1)"
+else
+  log "replay-tombstones: no tombstone log ($TOMB) — no account deletions to replay"
+fi
 
 log "OK: $SRC_LABEL backup $(basename "$SRC") restores clean — integrity_check ok, $ROWS bars rows, ledger chain + anchors verified"
 exit 0

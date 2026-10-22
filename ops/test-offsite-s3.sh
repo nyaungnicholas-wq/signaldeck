@@ -32,6 +32,11 @@ if ! type s3_upload_verified >/dev/null 2>&1; then
   echo "FAIL: could not extract s3_upload_verified from the backup script"; exit 1
 fi
 type sd_nosleep >/dev/null 2>&1 || sd_nosleep() { "$@"; }
+# The backup-key lookup and sdmaint resolution live in lib-offsite-gh.sh. Point
+# the default key location at an empty temp home so a real key on this machine
+# cannot change what the cases below exercise.
+. "$SD/ops/lib-offsite-gh.sh"
+export USERPROFILE="$TMPROOT/home" HOME="$TMPROOT/home"; unset SIGNALDECK_OFFSITE_KEY_FILE
 
 SRC="$TMPROOT/backup.db"
 head -c 200000 /dev/urandom > "$SRC"
@@ -84,6 +89,24 @@ else ok "failed upload rejected: $S3_FAIL_REASON"; fi
 #    to a 5 GB database, and a leaked ~925 MB gz per failure fills the disk.
 if [ -e "$TMPROOT/t.gz" ]; then bad "the temp .gz was left behind after a failure"
 else ok "temp .gz cleaned up on every path"; fi
+
+# 7. A backup key is configured but sealing fails: the upload must abort before
+#    `aws s3 cp` ever runs, never fall back to the plaintext gzip.
+cat > "$TMPROOT/bin/aws" <<STUB
+#!/bin/bash
+echo "\$*" >> "$TMPROOT/aws.calls"
+exit 0
+STUB
+printf '#!/bin/bash\nexit 1\n' > "$TMPROOT/bin/sdmaint"; chmod +x "$TMPROOT/bin/sdmaint"
+gh_offsite_sdmaint() { echo "$TMPROOT/bin/sdmaint"; }
+: > "$TMPROOT/aws.calls"
+export SIGNALDECK_OFFSITE_KEY_FILE="$TMPROOT/backup.key"; : > "$SIGNALDECK_OFFSITE_KEY_FILE"
+if run; then bad "a failed seal still uploaded"
+elif grep -q '^s3 cp' "$TMPROOT/aws.calls"; then bad "aws s3 cp ran although sealing failed"
+else ok "seal failure aborts before any upload: $S3_FAIL_REASON"; fi
+if [ -e "$TMPROOT/t.gz" ] || [ -e "$TMPROOT/t.gz.enc" ]; then bad "a failed seal left a temp file behind"
+else ok "temp files cleaned up after a failed seal"; fi
+unset SIGNALDECK_OFFSITE_KEY_FILE
 
 if [ "$FAILED" = "0" ]; then echo "test-offsite-s3: PASS"; else echo "test-offsite-s3: FAIL"; fi
 exit "$FAILED"
