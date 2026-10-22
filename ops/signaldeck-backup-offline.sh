@@ -525,6 +525,11 @@ elif [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then # GitHub release asset on th
   fi
 elif [ -z "$OFFSITE" ]; then
   log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume, SIGNALDECK_OFFSITE_S3 to an s3:// URI, or SIGNALDECK_OFFSITE_GH_REPO to a private owner/repo)"
+elif [ -n "$(gh_offsite_key_file)" ]; then
+  # Once a backup key exists no plaintext copy may leave the machine, and the
+  # directory copy below is the plain .db, often into a cloud-synced folder
+  # (2026-10-22 review). Refuse it rather than seal it: use S3 or GitHub.
+  log "WARNING: offsite dir copy skipped: key configured and directory copies are not sealed ($OFFSITE)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
   if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
     COPY="$OFFSITE/$(basename "$TARGET")"

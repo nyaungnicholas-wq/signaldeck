@@ -38,6 +38,8 @@ encrypted disk), or accept the stated consequence:
 | `%USERPROFILE%\.signaldeck\deletions.jsonl` (account-deletion tombstones, outside the database) | the copy sealed into each release (`deletions.jsonl.enc`) covers deletions up to that backup; deletions after the newest release are lost with the machine, and those accounts come back on restore |
 | everything written after the last nightly backup | gone. RPO = last offsite backup: ≤ ~24 h on weekdays, up to ~3 days across a weekend (the scheduled backup runs Mon–Fri after the close; the daemon's 30 h failsafe copy on weekends stays on this machine unless an off-site directory is configured for it); backfill workers close price-data gaps, but resolved outcomes emitted in the lost window are not reconstructable |
 
+Known plaintext gap (2026-10-22): with a backup key configured `ops/signaldeck-backup-offline.sh` refuses its unsealed `SIGNALDECK_OFFSITE_DIR` copy, but the daemon's own backup worker (`OffsiteDir`, from `SIGNALDECK_OFFSITE_BACKUP_DIR` / `SIGNALDECK_OFFSITE_DIR`) still copies the plaintext `.db` to that directory; neither variable is set on the production machine, so keep it that way until that worker seals too.
+
 ## 0. Prerequisites on the clean machine (~30 min)
 
 1. **Git for Windows** — required, and it must be Git Bash, never WSL. The ops
@@ -195,11 +197,14 @@ if (Test-Path $tomb) {
 } else { 'no tombstone log found: confirm no member ever deleted an account before skipping this' }
 ```
 
-A tombstone deletes an account only when its id, the SHA-256 of its stored
-email AND the SHA-256 of its username all match, because `users.id` is reused.
-For an account with no email (the username-only accounts) the username is
-what tells a reused id apart; the dry run marks those lines, so read them
-before `-apply`. If you replayed the release's copy,
+Each line is `{"uid":N,"account_sha256":"<hex>"}`, the hex SHA-256 of the
+account's lowercased email, username and `created_ts` joined by newlines
+(empty email for the username-only accounts). A tombstone deletes an account
+only when its id AND that hash, recomputed from the restored row, both match:
+`users.id` is reused, and someone who deleted and signed up again under the
+same id, username and email has a later `created_ts`, so the new account is
+left alone. Lines in the pre-release `email_sha256`/`username_sha256` format
+are refused with an error (none were written in production). If you replayed the release's copy,
 copy it to `%USERPROFILE%\.signaldeck\deletions.jsonl` so every later backup
 keeps carrying it.
 

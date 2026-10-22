@@ -3,11 +3,12 @@
 // account, so restoring it would bring the member back; replaying this log
 // over the restored copy (sdmaint replay-tombstones) erases them again.
 //
-// One JSON line per deletion, {"uid":N,"email_sha256":"<hex>",
-// "username_sha256":"<hex>"}, and nothing else: no address, no name, no time.
-// users.id is reused, so a replay must match ALL three before it deletes
-// anything; the username hash is what tells apart two accounts with no address
-// that held the same id (2026-10-22 review).
+// One JSON line per deletion, {"uid":N,"account_sha256":"<hex>"}, and nothing
+// else: no address, no name, no time in the clear. The hash covers the
+// account's address, username and sign-up time together (AccountHash), so it
+// names one account instance: users.id is reused, and a person who deletes and
+// signs up again under the same id, name and address gets a later created_ts,
+// so a replay leaves the new account alone (2026-10-22 review).
 package tombstone
 
 import (
@@ -21,14 +22,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // Entry is one deletion.
 type Entry struct {
-	UID            int64  `json:"uid"`
-	EmailSHA256    string `json:"email_sha256"`
-	UsernameSHA256 string `json:"username_sha256"`
+	UID           int64  `json:"uid"`
+	AccountSHA256 string `json:"account_sha256"`
 }
 
 // Path is SIGNALDECK_TOMBSTONE_LOG, else ~/.signaldeck/deletions.jsonl.
@@ -43,30 +44,24 @@ func Path() (string, error) {
 	return filepath.Join(home, ".signaldeck", "deletions.jsonl"), nil
 }
 
-// EmailHash is the hex SHA-256 of the address as the users table stores it
-// (lowercased at sign-up; trimmed here as well). An account with no address
-// hashes the empty string.
-func EmailHash(email string) string {
-	return sha256Hex(strings.ToLower(strings.TrimSpace(email)))
-}
-
-// UsernameHash is the hex SHA-256 of the username exactly as stored.
-func UsernameHash(username string) string { return sha256Hex(username) }
-
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
+// AccountHash is the hex SHA-256 of normalisedEmail + "\n" + username + "\n" +
+// decimal(created_ts), each as the users row stores it. The address is
+// lowercased at sign-up and trimmed here as well; an account with no address
+// contributes the empty string.
+func AccountHash(email, username string, createdTs int64) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email)) + "\n" + username + "\n" + strconv.FormatInt(createdTs, 10)))
 	return hex.EncodeToString(sum[:])
 }
 
 // Append writes one line and fsyncs it before returning. Call it BEFORE the
 // delete; if it fails, do not delete. Its errors name the file, never the
 // address.
-func Append(uid int64, username, email string) error {
+func Append(uid int64, username, email string, createdTs int64) error {
 	p, err := Path()
 	if err != nil {
 		return err
 	}
-	line, err := json.Marshal(Entry{UID: uid, EmailSHA256: EmailHash(email), UsernameSHA256: UsernameHash(username)})
+	line, err := json.Marshal(Entry{UID: uid, AccountSHA256: AccountHash(email, username, createdTs)})
 	if err != nil {
 		return err
 	}
@@ -121,10 +116,12 @@ func Replay(path string, fn func(Entry) error) error {
 			continue
 		}
 		if err == nil {
-			_, err = hex.DecodeString(e.EmailSHA256 + e.UsernameSHA256)
+			_, err = hex.DecodeString(e.AccountSHA256)
 		}
-		if err != nil || e.UID <= 0 || len(e.EmailSHA256) != 64 || len(e.UsernameSHA256) != 64 {
-			return fmt.Errorf("%s line %d is not a tombstone", path, n)
+		if err != nil || e.UID <= 0 || len(e.AccountSHA256) != 64 {
+			// The pre-release email_sha256/username_sha256 lines land here too:
+			// none exist in production, so they are refused, not converted.
+			return fmt.Errorf(`%s line %d is not a tombstone: want {"uid":N,"account_sha256":"<64 hex>"} and nothing else`, path, n)
 		}
 		if err := fn(e); err != nil {
 			return err

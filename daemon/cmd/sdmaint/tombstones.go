@@ -13,8 +13,10 @@ import (
 
 // replayTombstones re-applies the account deletions in the tombstone log to a
 // restored database (2026-10-22): a backup taken before a deletion still holds
-// the account. users.id is reused, so an account is deleted only when BOTH its
-// id and the hash of its stored address match; the delete itself is
+// the account. users.id is reused, so an account is deleted only when its id
+// matches AND the hash of its stored address, username and created_ts
+// (tombstone.AccountHash) does: a later sign-up that reuses the id, name and
+// address has a later created_ts and is left alone. The delete itself is
 // store.DeleteAccount, the same tables and admin guard as the live path. Dry
 // run unless -apply.
 func replayTombstones(args []string) error {
@@ -48,31 +50,27 @@ func replayTombstones(args []string) error {
 		if err != nil || !ok {
 			return err
 		}
-		email, _, err := st.AccountEmailFor(ctx, e.UID, u.Username)
-		if err != nil {
+		email, created, ok, err := st.AccountEmailFor(ctx, e.UID, u.Username)
+		if err != nil || !ok {
 			return err
 		}
-		if tombstone.EmailHash(email) != e.EmailSHA256 || tombstone.UsernameHash(u.Username) != e.UsernameSHA256 {
-			return nil // the id now belongs to a different account
+		if tombstone.AccountHash(email, u.Username, created) != e.AccountSHA256 {
+			return nil // the id now belongs to a different account, or a later one under the same name and address
 		}
 		if u.IsAdmin {
 			fmt.Printf("skipped uid=%d: the operator account is never deleted by a replay\n", e.UID)
 			return nil
 		}
 		matched++
-		note := ""
-		if email == "" {
-			note = " (no address on this account: matched on uid and username)"
-		}
 		if !*apply {
-			fmt.Printf("would delete uid=%d%s\n", e.UID, note)
+			fmt.Printf("would delete uid=%d\n", e.UID)
 			return nil
 		}
 		if err := st.DeleteAccount(ctx, e.UID, u.Username); err != nil {
 			return fmt.Errorf("delete uid=%d: %w", e.UID, err)
 		}
 		deleted++
-		fmt.Printf("deleted uid=%d%s\n", e.UID, note)
+		fmt.Printf("deleted uid=%d\n", e.UID)
 		return nil
 	})
 	if err != nil {
