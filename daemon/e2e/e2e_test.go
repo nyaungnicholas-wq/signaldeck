@@ -143,9 +143,8 @@ func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 		"SIGNALDECK_OPEN_SIGNUP=true",
 		"SIGNALDECK_PUBLIC_READS=true",
 		// Point companion-service URLs at a dead port so the test never
-		// touches a real hud/tickstream instance on this machine.
+		// touches a real hud instance on this machine.
 		"SIGNALDECK_HUD_URL=http://127.0.0.1:1/api/summary",
-		"SIGNALDECK_TICKSTREAM_URL=http://127.0.0.1:1/api/snapshot",
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)

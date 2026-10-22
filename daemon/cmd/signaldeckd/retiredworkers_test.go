@@ -29,6 +29,9 @@ func TestFleetRegistersNoRetiredSourceWorker(t *testing.T) {
 		"pipeline.TVRatingPoller":    &pipeline.TVRatingPoller{},
 		"pipeline.TVQuotesPoller":    &pipeline.TVQuotesPoller{},
 	}
+	// Retired-source CLIENTS: not workers, but e.g. a Kraken client handed to
+	// NewBackfiller would silently re-enable crypto backfills.
+	retiredClients := map[string]bool{"cryptohist.New": true, "hyperliquid.New": true, "cryptolive.New": true}
 	banned := map[string]bool{"crypto-live": true, "crypto-bars": true, "crypto-perp": true, "tv-rating": true, "tv-quotes": true}
 	for ref, w := range retired { // pins the table to the names it stands for
 		if n := w.Name(); !banned[n] && !strings.HasPrefix(n, "stocktwits") {
@@ -53,6 +56,9 @@ func TestFleetRegistersNoRetiredSourceWorker(t *testing.T) {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
 				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); ok && retiredClients[x.Name+"."+sel.Sel.Name] {
+				t.Errorf("%s: references %s.%s, a retired-source client", fset.Position(sel.Pos()), x.Name, sel.Sel.Name)
 			}
 			if x, ok := sel.X.(*ast.Ident); ok && retired[x.Name+"."+sel.Sel.Name] != nil {
 				t.Errorf("%s: references %s.%s, which builds the retired %q worker",

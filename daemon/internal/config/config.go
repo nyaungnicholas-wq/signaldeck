@@ -95,11 +95,10 @@ type Config struct {
 	// free tier with a 16-min guarded tail). On a paid Algo Trader Plus upgrade
 	// nothing else changes — Alpaca simply serves the full real-time SIP the code
 	// already asks for; set this to "iex" only to force the free real-time feed.
-	AlpacaFeed    string
-	HudURL        string // trader-hud summary endpoint
-	TickstreamURL string // tickstream dashboard snapshot endpoint
-	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
-	CryptoSymbol  string // TickStream consolidated symbol label
+	AlpacaFeed   string
+	HudURL       string // trader-hud summary endpoint
+	GeminiKey    string // optional: LLM polish for insights ("" = rule-based only)
+	CryptoSymbol string // crypto tape label (crypto paused 2026-10-21; shown only if already active)
 
 	// HTTP security (see internal/api/security.go).
 	WebOrigins   []string // CORS-allowlisted browser origins for the web app
@@ -278,7 +277,6 @@ func Load() Config {
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        httpAddr,
 		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
-		TickstreamURL:   envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
 		GeminiKey:       os.Getenv("SIGNALDECK_GEMINI_KEY"),
 		CryptoSymbol:    "BTC/USD",
 		WebOrigins:      splitList(pick("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000")),

@@ -5,9 +5,8 @@ import type { NextConfig } from "next";
 // the route handler at src/app/api/[...path]/route.ts (reads
 // SIGNALDECK_DAEMON, forwards an allowlist of headers, attaches the
 // server-only SIGNALDECK_API_TOKEN when set), so the daemon port is never
-// exposed and there is one localhost to open. tickstream (:8321) and
-// trader-hud (:8787) stay as background data sources the daemon consumes —
-// not user-facing.
+// exposed and there is one localhost to open. trader-hud (:8787) stays a
+// background companion the daemon reads — not user-facing.
 
 // Stage 2 nav consolidation: 24 flat routes became 6 hubs with nested
 // sub-tab routes. Every old URL redirects (307, query string preserved —
