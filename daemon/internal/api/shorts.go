@@ -121,7 +121,7 @@ func (d Deps) shorts(w http.ResponseWriter, r *http.Request) {
 	if day == "" {
 		// Honest absence: worker hasn't ingested anything yet.
 		out["extremes"] = []any{}
-		out["emptyNote"] = "no Reg SHO data stored yet — the finra-shorts worker ingests the latest file after ~6:30pm ET and backfills ~30 trading days on first run"
+		out["emptyNote"] = "no Reg SHO data stored — FINRA short-sale volume was retired 22 Oct 2026: licence terms do not permit this use, so nothing new is ingested"
 		writeJSON(w, out)
 		return
 	}

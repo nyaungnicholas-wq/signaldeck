@@ -331,16 +331,18 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("keyless AAPL subscribe: %d %s (want 422 mentioning Alpaca)", resp.StatusCode, body)
 	}
 
-	// Crypto subscription needs no keys and must land on the watchlist.
+	// Crypto is paused (2026-10-21: no licensed crypto data source), so a
+	// crypto subscription must be refused with a clear client error and must
+	// not reach the watchlist.
 	resp, body = postJSON(t, c, d.url+"/api/subscribe", map[string]string{
 		"symbol": "ETH/USD", "market": "crypto",
 	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("subscribe ETH/USD: %d %s", resp.StatusCode, body)
+	if resp.StatusCode != 422 || !strings.Contains(body, "crypto is paused") {
+		t.Fatalf("subscribe ETH/USD: %d %s (want 422: crypto is paused)", resp.StatusCode, body)
 	}
 	resp, body = getBody(t, c, d.url+"/api/watchlist")
-	if resp.StatusCode != 200 || !strings.Contains(body, `"ETH/USD"`) {
-		t.Fatalf("watchlist: %d %s (want ETH/USD)", resp.StatusCode, body)
+	if resp.StatusCode != 200 || strings.Contains(body, `"ETH/USD"`) {
+		t.Fatalf("watchlist: %d %s (want 200 without ETH/USD)", resp.StatusCode, body)
 	}
 
 	// The worker fleet reports runs on /api/agents (workers fire immediately
@@ -387,8 +389,11 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("login after restart: %d %s (persistence broken?)", resp.StatusCode, body)
 	}
+	// The watchlist can no longer be seeded here (stocks need Alpaca keys, which
+	// are isolated away, and crypto is paused), so persistence is asserted on
+	// the account above; the watchlist read must still answer.
 	resp, body = getBody(t, c2, d2.url+"/api/watchlist")
-	if resp.StatusCode != 200 || !strings.Contains(body, `"ETH/USD"`) {
+	if resp.StatusCode != 200 {
 		t.Fatalf("watchlist after restart: %d %s", resp.StatusCode, body)
 	}
 	d2.stopForRestart(t)

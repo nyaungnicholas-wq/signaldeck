@@ -40,9 +40,12 @@ scheduler · integrity checks · model health · alerts · reporting
 interval); `tv-quotes`, `universe-live` (1m); `crypto-bars`, `crypto-perp`,
 `stocktwits-fetcher`, `tv-rating` (15m); `news-fetcher`, `backfill-reconciler`
 (20m); `news-backfiller` (30m); `filings-poller` (2h); `stock-bars`,
-`hist-backfill`, `fred-poller`, `cboe-pc`, `universe-discovery`,
+`hist-backfill`, `universe-discovery`,
 `universe-poller`, `tape-seeder` (6h); `sic-bulk-sync` (12h); `companies-sync`,
 `edgar-fetcher`, `delisting-detector` (24h); and the CALENDAR workers below.
+`fred-poller`, `cboe-pc`, `finra-shorts` and `finra-shortint` were unwired on
+22 Oct 2026 because their sources' licence terms do not permit this use; their
+stored rows are kept.
 
 **Feature build** — `signal-runner` (1m); `sentiment-tagger` (10m);
 `sentiment-lex-scorer`, `breakout-runner` (15m); `sentiment-aggregator`,
@@ -81,8 +84,6 @@ retained only to size the per-run timeout.
 
 | Worker | Fires | Upstream reality |
 |---|---|---|
-| `finra-shorts` | trading days 18:30 ET | daily Reg SHO file, published by ~18:00 ET |
-| `finra-shortint` | trading days 18:45 ET | semi-monthly, ~8 business days after settlement |
 | `cot-poller` | Saturday 09:00 ET | CFTC COT, Friday 15:30 ET, Tuesday's positions |
 | `13f-poller` | daily 20:00 ET | quarterly filings, manager list rotated by cursor |
 | `congress-poller` | daily 09:00 ET, backing off to 7d while mirrors are dead | STOCK Act allows 45 days to file |

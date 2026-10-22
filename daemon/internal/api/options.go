@@ -190,10 +190,9 @@ func (d Deps) optionsVolEdge(w http.ResponseWriter, r *http.Request) {
 	strike := qfloat(r, "strike", spot)
 	rate, rateSrc := qfloat(r, "rate", math.NaN()), "caller-supplied"
 	if math.IsNaN(rate) {
-		rate, rateSrc = 0.04, "default 4% — no FRED fed-funds observation stored"
-		if p, ok, err := d.St.LatestMacro(ctx, "DFF"); err == nil && ok {
-			rate, rateSrc = p.Value/100, "FRED effective fed funds (DFF), the platform's stored short-rate proxy"
-		}
+		// The stored FRED fed-funds rate (DFF) is no longer read: FRED was
+		// retired 22 Oct 2026 because its licence terms do not permit this use.
+		rate, rateSrc = 0.04, "default 4% (pass ?rate= to override); the FRED fed-funds rate is no longer used — its licence terms do not permit this use"
 	}
 	in := options.Inputs{Spot: spot, Strike: strike, T: days / 365, Rate: rate,
 		DivYield: qfloat(r, "divYield", 0)}

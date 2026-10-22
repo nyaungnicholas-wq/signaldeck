@@ -1,0 +1,124 @@
+# selfref ablation — 2026-10-22 06:09 UTC
+source=C:/Program Files/Git/nonexistent-not-used.db
+snapshot=C:/Users/NICHOL~1/AppData/Local/Temp/claude/C--Users-Nicholas-N-Desktop-claude-code/cd6f8414-0929-4802-9a26-17d3b05630e0/scratchpad/p7/ablate-snap.db
+snapshot_sha256=3f9166dc24788f98f88bda7abfcdd19117e586c5ff7fa42ad5e8688f6354b89d
+ablated keys: short_vol_z, short_int_dtc, pc_total, vix_level, vix_regime, vix_high_vol, macro_dgs10_pct, macro_dgs10_chg, macro_dgs2_pct, macro_dgs2_chg, macro_curve_10y2y_pct, macro_curve_10y2y_chg, macro_curve_10y3m_pct, macro_curve_10y3m_chg, macro_fedfunds_pct, macro_fedfunds_chg, macro_hy_spread_pct, macro_hy_spread_chg, macro_nfci_pct, macro_nfci_chg, macro_oil_pct, macro_oil_chg
+
+## GBM leg · v12 · 1d — labeled rows 11792 (hash 309cb0e0caec245d)
+  with shortcuts (pre-A7)  graded=  10 admitted(lift>0)=   3 (30.0%) meanLift=-0.0939 medianLift=-0.1591 NwLift=-0.1111 OOS-N=216
+  without (shipped)        graded=  10 admitted(lift>0)=   4 (40.0%) meanLift=-0.0944 medianLift=-0.0800 NwLift=-0.1111 OOS-N=216
+  paired legs=10 mean Δlift (with − without) = +0.0005
+
+  per-leg (OOS lift; admitted = lift>0):
+  symbol        OOS-N  with(preA7)      without        Δ gate flip?
+  UBER             10      +0.2000      +0.2000  +0.0000 no
+  TER              23      +0.0652      +0.1087  -0.0435 no
+  OUST             23      +0.1957      +0.0652  +0.1304 no
+  ISRG             22      -0.0682      +0.0227  -0.0909 YES
+  HYG              25      -0.1600      -0.0800  -0.0800 no
+  NXT              22      -0.1591      -0.1591  +0.0000 no
+  CWD              23      -0.2826      -0.1957  -0.0870 no
+  CLRO             23      -0.2174      -0.2174  +0.0000 no
+  LQD              22      -0.2955      -0.3409  +0.0455 no
+  OKLO             23      -0.2174      -0.3478  +0.1304 no
+
+## GBM leg · v12 · 1w — labeled rows 20526 (hash 83579b3416da8c38)
+  with shortcuts (pre-A7)  graded=  83 admitted(lift>0)=  20 (24.1%) meanLift=-0.1448 medianLift=-0.0769 NwLift=-0.1383 OOS-N=1938
+  without (shipped)        graded=  83 admitted(lift>0)=  20 (24.1%) meanLift=-0.1901 medianLift=-0.1250 NwLift=-0.1734 OOS-N=1938
+  paired legs=83 mean Δlift (with − without) = +0.0453
+
+  per-leg (OOS lift; admitted = lift>0):
+  symbol        OOS-N  with(preA7)      without        Δ gate flip?
+  CPOP             10      -0.4500      +0.3500  -0.8000 YES
+  VEEE             31      +0.2903      +0.2903  +0.0000 no
+  IBM              24      +0.1875      +0.1875  +0.0000 no
+  PLTD             30      +0.0000      +0.1667  -0.1667 YES
+  SPY              11      -0.1364      +0.1364  -0.2727 YES
+  DNLI             26      -0.3654      +0.1346  -0.5000 YES
+  ETN              24      +0.1250      +0.1250  +0.0000 no
+  HYG              12      +0.1250      +0.1250  +0.0000 no
+  TRV              27      -0.0926      +0.0926  -0.1852 YES
+  VTAK             11      +0.0909      +0.0909  +0.0000 no
+  INTW             29      +0.1207      +0.0862  +0.0345 no
+  REPL             31      -0.0484      +0.0806  -0.1290 YES
+  EQIX             26      -0.0769      +0.0769  -0.1538 YES
+  SHW              29      +0.0862      +0.0517  +0.0345 no
+  T                11      +0.1364      +0.0455  +0.0909 no
+  CSCO             26      +0.0000      +0.0385  -0.0385 YES
+  MPC              27      +0.0370      +0.0370  +0.0000 no
+  ABT              31      +0.0000      +0.0323  -0.0323 YES
+  VLO              31      +0.0323      +0.0323  +0.0000 no
+  CLRO             32      -0.3281      +0.0156  -0.3438 YES
+  XLP              31      +0.0000      +0.0000  +0.0000 no
+  VRTX             29      +0.1034      +0.0000  +0.1034 YES
+  XLV              27      +0.0000      +0.0000  +0.0000 no
+  FIG              31      +0.0000      +0.0000  +0.0000 no
+  MCD              26      +0.0000      +0.0000  +0.0000 no
+  QTTB             31      +0.0000      +0.0000  +0.0000 no
+  BKNG             29      +0.0000      +0.0000  +0.0000 no
+  BA               11      +0.0000      +0.0000  +0.0000 no
+  BTC/USD          24      -0.0417      +0.0000  -0.0417 no
+  ABUS             12      +0.0000      +0.0000  +0.0000 no
+  TGB              22      -0.1136      -0.0227  -0.0909 no
+  PLTR             30      -0.1667      -0.0333  -0.1333 no
+  MA               28      +0.0714      -0.0357  +0.1071 YES
+  KO               13      +0.1154      -0.0385  +0.1538 YES
+  GE               11      -0.1364      -0.0455  -0.0909 no
+  RKLX             31      -0.2742      -0.0484  -0.2258 no
+  QBTZ             25      -0.4000      -0.0800  -0.3200 no
+  WDFC             31      -0.1129      -0.0806  -0.0323 no
+  NOWL             28      -0.0893      -0.0893  +0.0000 no
+  CRML             11      -0.0909      -0.0909  +0.0000 no
+  SPDN             27      -0.0741      -0.1111  +0.0370 no
+  RMBS             24      +0.0417      -0.1250  +0.1667 YES
+  EWZ              29      +0.0690      -0.1379  +0.2069 YES
+  PG               31      -0.1452      -0.1452  +0.0000 no
+  OUST             29      +0.0862      -0.1552  +0.2414 YES
+  SYK              28      -0.0179      -0.1607  +0.1429 no
+  INTC             32      -0.2344      -0.2031  -0.0312 no
+  TALO             24      -0.0208      -0.2292  +0.2083 no
+  XLF              25      -0.4400      -0.2400  -0.2000 no
+  NXGLW            25      -0.3000      -0.2600  -0.0400 no
+  IONS             11      -0.2727      -0.2727  +0.0000 no
+  XRP/USD          11      +0.0000      -0.2727  +0.2727 no
+  MCK              27      -0.4259      -0.2778  -0.1481 no
+  UMC              27      -0.2778      -0.2778  +0.0000 no
+  NU               27      +0.0000      -0.2963  +0.2963 no
+  XLY              10      -0.3000      -0.3000  +0.0000 no
+  BB               25      -0.2800      -0.3200  +0.0400 no
+  TSM              28      +0.3929      -0.3214  +0.7143 YES
+  NEM              31      -0.3226      -0.3226  +0.0000 no
+  TMUS             31      -0.2903      -0.3226  +0.0323 no
+  EDBL             23      +0.0000      -0.3478  +0.3478 no
+  SEI              10      -0.3500      -0.3500  +0.0000 no
+  SPGI             31      +0.1613      -0.3871  +0.5484 YES
+  MPWR             11      +0.2273      -0.4091  +0.6364 YES
+  ADP              12      -0.5000      -0.4167  -0.0833 no
+  AUR              26      -0.5000      -0.4231  -0.0769 no
+  UBER             26      -0.3077      -0.4231  +0.1154 no
+  SCHD             28      -0.4643      -0.4643  +0.0000 no
+  XLRE             28      -0.2500      -0.4643  +0.2143 no
+  LIN              29      -0.0172      -0.4655  +0.4483 no
+  GLD              26      -0.3462      -0.5000  +0.1538 no
+  LGPS             31      -0.5000      -0.5000  +0.0000 no
+  LRCX             11      +0.1364      -0.5000  +0.6364 YES
+  VSAT             24      -0.2083      -0.5000  +0.2917 no
+  DOGE/USD         12      -0.1667      -0.5833  +0.4167 no
+  XLU              11      -0.6364      -0.6364  +0.0000 no
+  XOM              11      -0.3636      -0.6364  +0.2727 no
+  ISRG             31      -0.6452      -0.6452  +0.0000 no
+  VZ               31      -0.6452      -0.6774  +0.0323 no
+  ASTS             12      -0.7500      -0.7500  +0.0000 no
+  RIVN             32      -0.7812      -0.7812  +0.0000 no
+  QBTS             10      -0.9000      -0.9000  +0.0000 no
+  XLE              10      +0.0000      -0.9000  +0.9000 no
+
+## alphax leg (pooled) · v3+ · 1d — pooled rows 50000 (hash f7f4e8a88a3430ef)
+  with shortcuts (pre-A7) lift=+0.0243 acc=0.5143 base=0.4901 auc=0.5184 N=906 → ADMITTED
+  without (shipped)       lift=+0.0386 acc=0.5298 base=0.4912 auc=0.5365 N=906 → ADMITTED
+  Δlift (with − without): -0.0143
+
+## alphax leg (pooled) · v3+ · 1w — pooled rows 50000 (hash 5ffeca0281a389b6)
+  with shortcuts (pre-A7) refused: too few distinct days for purged walk-forward folds
+  without (shipped)       refused: too few distinct days for purged walk-forward folds
+

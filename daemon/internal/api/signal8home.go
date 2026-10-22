@@ -2,21 +2,22 @@
 // from stored free data. Three read-only endpoints:
 //
 //   - GET /api/tape      — the ticker-tape strip: index/sector ETFs (stored
-//     daily bars) + BTC (crypto daily bars) + VIX (FRED VIXCLS daily close).
+//     daily bars) + BTC (crypto daily bars, while crypto is active). VIX
+//     (FRED) left the strip on 22 Oct 2026.
 //   - GET /api/movers    — gainers/losers over the daily universe, with
 //     BEST-EFFORT market cap (EDGAR SharesOutstanding × last close; symbols
 //     EDGAR hasn't covered are labeled "mcap unavailable", never fabricated).
-//   - GET /api/calendar  — econ prints from the stored FRED series (honest
-//     subset: FRED series only, no paid econ-event feed) + an earnings
-//     "reports soon" list that is EXPLICITLY AN ESTIMATE (last SEC filing
+//   - GET /api/calendar  — an earnings "reports soon" list that is
+//     EXPLICITLY AN ESTIMATE (last SEC filing
 //     date + ~1 quarter). IPO calendar is deliberately OMITTED: there is no
 //     free, redistributable source of IPO pricing/listing dates (EDGAR S-1s
 //     show intent, not dates) — fabricating one would violate the honesty
-//     doctrine, so the surface simply doesn't exist.
+//     doctrine, so the surface simply doesn't exist. The FRED econ prints
+//     left on 22 Oct 2026 (licence), so "econ" is always empty.
 //
 // HONESTY: every payload states its cadence and lag. Tape prices are stored
-// DAILY closes refreshed on worker cadence (not tick-live quotes); VIX is the
-// FRED daily close (~1 trading day behind); mcap and earnings dates carry
+// DAILY closes refreshed on worker cadence (not tick-live quotes); mcap and
+// earnings dates carry
 // their own provenance notes.
 package api
 
@@ -27,28 +28,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
 )
 
 const (
-	tapeNote = "Prices are stored daily closes refreshed on worker cadence — NOT live quotes. VIX is the FRED VIXCLS daily close (lags ~1 trading day). Day % is vs the prior stored close."
-	vixNote  = "FRED VIXCLS daily close — updated once per day by FRED, lags ~1 trading day."
+	tapeNote = "Prices are stored daily closes refreshed on worker cadence — NOT live quotes. Day % is vs the prior stored close."
+	vixNote  = "VIX is no longer shown: it came from FRED, whose licence terms do not permit this use (retired 22 Oct 2026)."
 
 	moversNote = "Computed from stored daily universe bars (free IEX feed, worker cadence). Index/sector ETFs are excluded — they are baskets, not single-name moves. Symbols with no bar in the last 5 days are skipped."
 	mcapNote   = "Market cap = SEC EDGAR SharesOutstanding × last stored close (best-effort). Symbols EDGAR hasn't covered show 'mcap unavailable' — never a fabricated number. With a min-mcap filter active, unknown-mcap symbols are excluded and counted."
 
-	econNote     = "FRED series prints only (VIX, 10y yield, 10y-2y spread, fed funds) — no paid economic-event feed, and upcoming-release dates aren't available on the keyless FRED endpoint, so this shows the LATEST OBSERVED prints, not a forward calendar."
+	econNote     = "Economic prints are no longer shown: they came from FRED, whose licence terms do not permit this use (retired 22 Oct 2026). There is no free replacement, so none is faked."
 	earningsNote = "ESTIMATE ONLY: derived as each company's last SEC filing date + ~91 days (quarterly filer heuristic). NOT a confirmed earnings date — there is no free confirmed-date feed. Companies may pre-announce, delay, or file on a different cycle."
 )
-
-// econLabels maps the tracked FRED series ids to display names.
-var econLabels = map[string]string{
-	"VIXCLS": "VIX close",
-	"DGS10":  "10y Treasury yield",
-	"T10Y2Y": "10y-2y spread",
-	"DFF":    "Effective fed funds",
-}
 
 // tapeItem is one strip entry.
 type tapeItem struct {
@@ -200,14 +192,6 @@ func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// econPrint is one latest-observation row of a tracked FRED series.
-type econPrint struct {
-	Series string  `json:"series"`
-	Label  string  `json:"label"`
-	Value  float64 `json:"value"`
-	Ts     int64   `json:"ts"` // observation day (UTC-midnight epoch)
-}
-
 // earningsEst is one "reports soon" ESTIMATE row.
 type earningsEst struct {
 	Symbol       string `json:"symbol"`
@@ -217,31 +201,14 @@ type earningsEst struct {
 	Estimate     bool   `json:"estimate"`     // always true — rendered as a label
 }
 
-// calendar serves the honest free-data calendar card: FRED econ prints +
-// filing-derived earnings ESTIMATES. (No IPO section — see package comment:
-// no free source exists, so none is faked.)
+// calendar serves the honest free-data calendar card: filing-derived earnings
+// ESTIMATES. (No IPO section — see package comment: no free source exists, so
+// none is faked.) The stored FRED econ prints are not served since 22 Oct
+// 2026: FRED's licence terms do not permit this use, and the last stored value
+// would read as current.
 // GET /api/calendar
 func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Econ: latest observed print of each tracked FRED series, stable order.
-	latest, err := d.St.LatestMacroAll(ctx)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	econ := make([]econPrint, 0, len(fred.DefaultSeries))
-	for _, series := range fred.DefaultSeries {
-		p, ok := latest[series]
-		if !ok {
-			continue // not fetched yet — honest absence
-		}
-		label := econLabels[series]
-		if label == "" {
-			label = series
-		}
-		econ = append(econ, econPrint{Series: series, Label: label, Value: p.Value, Ts: p.Ts})
-	}
 
 	// Earnings (EST): last SEC filing date + ~91 days, within a window of
 	// [-14d overdue … +21d upcoming]. Quarterly-filer heuristic, labeled.
@@ -281,7 +248,7 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"econ":         econ,
+		"econ":         []struct{}{},
 		"econNote":     econNote,
 		"earningsEst":  ests,
 		"earningsNote": earningsNote,

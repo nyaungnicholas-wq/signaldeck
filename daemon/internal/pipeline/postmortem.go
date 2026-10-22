@@ -130,10 +130,10 @@ func (w *PostmortemWorker) buildCase(ctx context.Context, m store.MissRow, h md.
 		}
 	}
 
-	// Macro vol regime (current-state proxy — slow-moving, weak corroboration).
-	if vix, ok, err := w.St.LatestVIX(ctx); err == nil && ok {
-		c.VIXRegime = vixRegime(vix)
-	}
+	// Macro vol regime: not read since 22 Oct 2026. It came from FRED's VIXCLS
+	// (licence terms do not permit this use), and the last stored value would
+	// stamp a frozen regime onto every new miss as macro_event. VIXRegime stays
+	// 0, so that reason never fires.
 
 	// Calibration: was this prob bucket historically overconfident?
 	if def, known := calib.deficit(m.Prob); known {
@@ -186,20 +186,6 @@ func legDisagreement(comp map[string]float64) float64 {
 		sum += math.Abs(p - 0.5)
 	}
 	return sum / float64(len(legs))
-}
-
-// vixRegime maps a VIX level to the 0..3 calm/normal/elevated/stressed band.
-func vixRegime(vix float64) int {
-	switch {
-	case vix >= 25:
-		return 3
-	case vix >= 20:
-		return 2
-	case vix >= 15:
-		return 1
-	default:
-		return 0
-	}
 }
 
 // calibBuckets holds realized hit-rate by 0.1-wide probability bucket.

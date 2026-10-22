@@ -145,6 +145,64 @@ func TestCompositeScorerEmitsForcedCurve(t *testing.T) {
 	}
 }
 
+// The Reg SHO short-volume tile (FINRA, retired 22 Oct 2026) and the
+// TradingView tile (retired 21 Oct 2026) are no longer fed. Seeded short_volume
+// rows must not reach the tile, and both tiles must say "retired", not "no rows".
+func TestCompositeScorerRetiredTilesStayUnfed(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "composite_retired.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ids := seedCompositePreds(t, st, ctx, 30)
+
+	rows := make([]store.ShortVolumeRow, 30)
+	now := time.Now().UTC()
+	for d := 1; d <= 30; d++ {
+		day := now.AddDate(0, 0, -d).Format("2006-01-02")
+		sv := float64(30 + d%7)
+		rows[d-1] = store.ShortVolumeRow{
+			SymbolID: ids[0], Day: day, ShortVol: sv, TotalVol: 100, ShortPct: sv / 100,
+		}
+	}
+	if err := st.UpsertShortVolume(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (&CompositeScorer{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	row, ok, err := st.LatestCompositeScore(ctx, ids[0], "1d")
+	if err != nil || !ok {
+		t.Fatalf("no composite row (err %v)", err)
+	}
+
+	var p composite.Payload
+	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		composite.FactorShortVol: composite.ShortVolRetiredReason,
+		composite.FactorTVRating: composite.TVRatingRetiredReason,
+	}
+	seen := 0
+	for _, f := range p.Factors {
+		if r, ok := want[f.Key]; ok {
+			seen++
+			if !f.Gated || f.GateReason != r {
+				t.Errorf("%s tile = %+v, want gated with %q", f.Key, f, r)
+			}
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("expected both retired factors, saw %d", seen)
+	}
+}
+
 // TestCompositeScorerCadence: after the day's universe pass, a second run the
 // same day re-scores ONLY the hot set (streamed stocks + crypto); daily-only
 // universe symbols keep their single row for the day.

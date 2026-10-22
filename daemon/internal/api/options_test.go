@@ -116,6 +116,10 @@ func TestOptionsVolEdgeRoute(t *testing.T) {
 	ctx := context.Background()
 	sym, _ := st.UpsertSymbol(ctx, "NVDA", md.Stocks, "NVIDIA")
 	seedVolRegimeBars(t, st, sym.ID, 12, 160) // ~1900 bars, alternating vol blocks
+	// A stored FRED fed-funds row must not become the rate (FRED retired 22 Oct 2026).
+	if err := st.InsertMacro(ctx, "DFF", time.Now().Unix()-86400, 5.33); err != nil {
+		t.Fatal(err)
+	}
 
 	if code, _ := apiGET(t, srv, "/api/options/vol-edge?symbol=ZZZ&market=stocks"); code != 404 {
 		t.Fatal("unknown symbol must 404")
@@ -159,6 +163,9 @@ func TestOptionsVolEdgeRoute(t *testing.T) {
 	edge, _ := out["edge"].(map[string]any)
 	if edge == nil || edge["verdict"] != "iv-rich" {
 		t.Fatalf("verdict %v, want iv-rich: %v", edge, out)
+	}
+	if pi, _ := out["pricingInputs"].(map[string]any); pi == nil || pi["rate"] != 0.04 {
+		t.Fatalf("rate must be the 4%% default, not the stored FRED DFF: %v (%v)", out["pricingInputs"], out["rateSource"])
 	}
 	if edge["robust"] != true {
 		t.Fatal("a verdict clear of both branches must be flagged robust")

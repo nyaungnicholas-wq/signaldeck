@@ -30,8 +30,9 @@ type TapeETF struct {
 }
 
 // TapeETFs is the fixed tape membership. Order = display order on the strip.
-// BTC and VIX join the strip in the API layer (crypto bars + FRED VIXCLS);
-// they are not equities so they don't belong in this seed list.
+// BTC joins the strip in the API layer (crypto bars, while crypto is active);
+// it is not an equity so it doesn't belong in this seed list. VIX (FRED) left
+// the strip on 22 Oct 2026.
 var TapeETFs = []TapeETF{
 	{Symbol: "SPY", Name: "SPDR S&P 500 ETF", Kind: "index"},
 	{Symbol: "QQQ", Name: "Invesco Nasdaq-100 ETF", Kind: "index"},

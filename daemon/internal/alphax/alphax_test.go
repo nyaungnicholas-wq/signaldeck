@@ -379,7 +379,7 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 	for i := 0; i < MinCrossSection; i++ {
 		vec := map[string]float64{"x": float64(i)}
 		if i%2 == 0 {
-			vec["short_int_dtc"] = 0 // measured zero days-to-cover
+			vec["insider_net_ratio"] = 0 // measured zero net buying
 		} // odd rows: source absent — NOT the same thing
 		rows = append(rows, LabeledRow{
 			SymbolID: int64(i + 1), Ts: dayTs(0, int64(i)),
@@ -391,9 +391,9 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 	hasIdx, valIdx := -1, -1
 	for i, k := range ds.Keys {
 		switch k {
-		case "short_int_dtc":
+		case "insider_net_ratio":
 			valIdx = i
-		case "short_int_dtc__has":
+		case "insider_net_ratio__has":
 			hasIdx = i
 		}
 	}
@@ -401,7 +401,7 @@ func TestFlatten_PresenceIndicatorsDistinguishAbsentFromZero(t *testing.T) {
 		t.Fatalf("key union must carry the feature AND its __has indicator, got %v", ds.Keys)
 	}
 
-	present := Flatten(map[string]float64{"x": 1, "short_int_dtc": 0}, ds.Keys)
+	present := Flatten(map[string]float64{"x": 1, "insider_net_ratio": 0}, ds.Keys)
 	absent := Flatten(map[string]float64{"x": 1}, ds.Keys)
 	if present[valIdx] != 0 || absent[valIdx] != 0 {
 		t.Fatalf("base value flattening changed: present=%v absent=%v", present[valIdx], absent[valIdx])

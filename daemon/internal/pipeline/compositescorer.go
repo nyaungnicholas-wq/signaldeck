@@ -233,16 +233,10 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 		in.InsiderBuys, in.InsiderSells = buys, sells
 		in.InsiderNBuys, in.InsiderNSells = nBuys, nSells
 
-		// Short-volume ratios (stocks only — Reg SHO is an equity dataset).
-		if p.Market == md.Stocks {
-			series, err := w.St.ShortVolumeSeries(ctx, p.SymbolID, 30)
-			if err != nil {
-				return "", err
-			}
-			for _, r := range series {
-				in.ShortRatios = append(in.ShortRatios, r.ShortPct)
-			}
-		}
+		// The Reg SHO short-volume tile is no longer fed (22 Oct 2026): FINRA's
+		// terms bar derivative works from its files, and the stored series stops
+		// growing once finra-shorts is unwired, so its z would freeze. ShortRatios
+		// stays empty and composite.BuildFactors gates the tile as absent.
 
 		// Most recent breakout, only within the 7d window.
 		if b, ok, err := w.St.LatestBreakoutFor(ctx, p.SymbolID); err != nil {

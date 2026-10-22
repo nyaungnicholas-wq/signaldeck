@@ -67,6 +67,14 @@ const ShortVolMinPrior = 10
 // package test) — the classic retail trap this platform refuses to feed.
 const ShortVolCaveat = "short sale volume ratio (Reg SHO daily) — NOT short interest; includes market-maker activity; a high ratio is NOT directly bearish"
 
+// Gate reasons for the tiles whose sources were retired for licence reasons.
+// The scorer no longer feeds them, so "absent" means retired, and saying "no
+// rows stored" would be false: the old rows are kept.
+const (
+	ShortVolRetiredReason = "retired 22 Oct 2026: FINRA's terms do not permit this use of Reg SHO short-volume data"
+	TVRatingRetiredReason = "retired 21 Oct 2026: TradingView's terms bar non-display use of its scanner data"
+)
+
 // Factor keys, in tile display order.
 const (
 	FactorTechnical  = "technical"
@@ -463,7 +471,9 @@ func BuildFactors(in Inputs) []Factor {
 	// shortvol — latest daily short-sale volume ratio z vs own trailing
 	// baseline. NEVER directional: the verbatim caveat is the whole point.
 	if z, ok := ShortVolZ(in.ShortRatios); !ok {
-		reason := "no Reg SHO short-volume rows stored for this symbol"
+		// The scorer stopped feeding ShortRatios on 22 Oct 2026, so an empty
+		// series means the source is retired, not that no rows are stored.
+		reason := ShortVolRetiredReason
 		if n := len(in.ShortRatios); n > 0 {
 			reason = fmt.Sprintf("only %d day(s) of Reg SHO history (needs %d prior days with a non-flat baseline) — z withheld", n, ShortVolMinPrior)
 		}
@@ -700,7 +710,7 @@ type TVRatingInfo struct {
 // the gate, and directional (verdict = sign(reco_all) + skill chip) once it has.
 func (in Inputs) tvRatingFactor() Factor {
 	if in.TVRating == nil {
-		return gatedFactor(FactorTVRating, "no TradingView rating stored for this symbol")
+		return gatedFactor(FactorTVRating, TVRatingRetiredReason)
 	}
 	label := in.TVRating.Label
 	if label == "" {
