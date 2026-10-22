@@ -19,8 +19,8 @@
 | Your calls and their notes | `member_calls` | Your journal, graded | Until the account is deleted; a call cannot be edited once made |
 | Alert settings (digest on/off, optional Telegram chat id) | `member_alert_prefs`, `member_digest_tries` | The opt-in daily digest | Until the account is deleted |
 | Notification-list email (the landing page form, no account) | `waitlist` | One email when the volatility record can be judged | **DECIDED 2026-10-22**: up to 12 months, or sooner on request to the contact address |
-| Failed sign-in | daemon log: a 12-character digest of the typed name and its length, no name and no address | Spotting a name under attack | Log rotation (20 MB × 3 files, plus a daily rotation over 10 MB); **DECIDED 2026-10-22**: logs kept up to 30 days |
-| Requests | daemon log: method, path, status, user id, duration; no IP address, no user agent | Operating the service | Up to 30 days, as above |
+| Failed sign-in | daemon log: a 12-character digest of the typed name and its length, no name and no address | Spotting a name under attack | Log rotation by size (20 MB × 3 files, plus a daily rotation over 10 MB); **DECIDED 2026-10-22**: a log file is deleted 30 days after its last entry. Rotation is by size, not date, so on a quiet site one file can cover months and an entry can be kept longer than 30 days |
+| Requests | daemon log: method, path, status, user id, duration; no IP address, no user agent | Operating the service | As above |
 
 Unverified sign-ups older than 24 hours are deleted the next time anyone signs up. There is no analytics, no advertising tracker and no tracking cookie.
 
@@ -43,9 +43,9 @@ Unverified sign-ups older than 24 hours are deleted the next time anyone signs u
 
 ## Backups
 
-- On this machine: the local backup folder keeps compressed copies within a disk budget, plus the 2 newest uncompressed ones. The cleanup moves older ones to a local holding folder; **DECIDED 2026-10-22**: kept there up to 30 days. Local copies are not encrypted.
+- On this machine: the local backup folder keeps the 5 newest compressed copies, plus up to 2 uncompressed ones (the newest). The cleanup moves older ones to a local holding folder; **DECIDED 2026-10-22**: kept there up to 30 days. Local copies are not encrypted.
 - Off-site: the newest 7 GitHub releases (about a week and a half).
-- A deleted account therefore remains in logs up to 30 days and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days). **DECIDED 2026-10-22**: off-site copies are encrypted from that date.
+- A deleted account therefore remains in logs until the log file holding it is deleted (30 days after that file's last entry) and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days). **DECIDED 2026-10-22**: off-site copies are encrypted from that date.
 - A daily automated job checks the log, holding-folder and waitlist limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand.
 
 ## Open decisions for the owner and counsel
@@ -54,7 +54,7 @@ Unverified sign-ups older than 24 hours are deleted the next time anyone signs u
 2. The jurisdiction and governing law; any age requirement (no age gate exists).
 3. ~~Whether to encrypt off-site backups, and the backup retention to state~~ **DECIDED 2026-10-22** (see Backups).
 4. ~~Waitlist retention and a removal path~~ **DECIDED 2026-10-22**: 12 months, removal on request.
-5. Consent for third-party scripts (Google Sign-In, Turnstile) for EU and UK visitors once they are enabled.
+5. Consent for third-party scripts for EU and UK visitors: Turnstile (live since 2026-10-11) and Google Sign-In (if it is ever configured).
 6. The terms of use, including "descriptive market analysis, not financial advice", data-source attributions, and the Kraken derived-works question (crypto-derived grades are public). *2026-10-22:* the Kraken question is moot (crypto paused); the source list below is on /terms; the remaining licence questions are in counsel packet version 3.
 
 ## Data sources (2026-10-22)

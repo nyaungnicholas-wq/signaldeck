@@ -23,7 +23,9 @@ it — this file is the readable mirror, not the source of truth. Tests fail if 
 Licensed or Restricted source is ever flagged redistributable.
 
 The Status column was added 2026-10-22 after the data-licence review. It is not
-mirrored in `datalicense.go`, which still lists every source below.
+mirrored in `datalicense.go`, which still lists every source below. The `fred`,
+`finra` and `cboe` rows show the class they get in `datalicense.go` on branch
+`fullfix/p7-retire` (Restricted); on this branch the code still says Public.
 
 | Source | Class | Provider | Raw redistribution | Status (2026-10-22) |
 |---|---|---|---|---|
@@ -35,11 +37,11 @@ mirrored in `datalicense.go`, which still lists every source below.
 | `tvscanner` | Restricted | TradingView | **No** — automated access is against their terms; ratings are their IP | Retired 2026-10-21/22 |
 | `stocktwits` | Restricted | StockTwits | **No** — undocumented endpoint, personal use only | Retired 2026-10-21/22 |
 | `edgar` | Public | SEC | Yes — SEC data is free to access and reuse | In use |
-| `fred` | Public | St. Louis Fed | n/a — retired | Retired 2026-10-22: licence review (forecasts before then used FRED data) |
-| `finra` | Public | FINRA | n/a — retired | Retired 2026-10-22: licence review |
+| `fred` | Restricted | St. Louis Fed | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review (forecasts before then used FRED data) |
+| `finra` | Restricted | FINRA | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review |
 | `cftc` | Public | CFTC | Yes | In use |
-| `cboe` | Public | Cboe | n/a — retired | Retired 2026-10-22: licence review |
-| `congress` | Public | STOCK Act disclosures, via third-party datasets (Kadoa's congress-trades file; older rows House/Senate Stock Watcher) | Yes | In use. Open question: the Ethics in Government Act commercial-use restriction (SignalDeck is free and non-commercial) |
+| `cboe` | Restricted | Cboe | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review |
+| `congress` | Public | STOCK Act disclosures, via third-party datasets (Kadoa's congress-trades file; older rows House/Senate Stock Watcher) | Unclear (counsel): Kadoa's permission pending | In use. Open question: the Ethics in Government Act commercial-use restriction (SignalDeck is free and non-commercial) |
 | `wikimedia` | Public | Wikimedia | Yes — page-view counts are CC0 | In use |
 
 ## What the guard does

@@ -154,5 +154,5 @@ is not explicitly classified as observation or model output.
 
 ## Realistic timeline
 - Weeks: reframe + features + data upgrade.
-- **Months** of live resolutions before ANY edge claim is trustworthy (crypto accrues fastest, 24/7).
+- **Months** of live resolutions before ANY edge claim is trustworthy (crypto accrued fastest, 24/7, until it was paused on 2026-10-22).
 - If after all that the edge is still zero, the honest app will *say so* — and you'll have saved yourself from trading noise.

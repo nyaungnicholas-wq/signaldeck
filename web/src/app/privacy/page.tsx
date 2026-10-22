@@ -157,7 +157,7 @@ export default function PrivacyPage() {
                   To spot a name under attack
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Up to 30 days (it is a log entry)
+                  Until its log file is deleted, 30 days after that file&rsquo;s last entry (see the note on logs below)
                 </td>
               </tr>
               <tr>
@@ -168,7 +168,7 @@ export default function PrivacyPage() {
                   To run and fix the service
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Up to 30 days
+                  As for failed sign-in records
                 </td>
               </tr>
               <tr>
@@ -195,7 +195,7 @@ export default function PrivacyPage() {
           - Your browser&rsquo;s user agent. Read to block AI crawlers; not stored.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. Logs are kept for up to 30 days. Retention limits are listed under Backups and deletion.
+          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. A log file is deleted 30 days after its last entry. Because logs rotate by size, not by date, one log file on a quiet site can cover several months, so an entry can stay in the logs for more than 30 days. Retention limits are listed under Backups and deletion.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Stored in your browser">
@@ -363,10 +363,10 @@ export default function PrivacyPage() {
           Off-site, one compressed copy of the database is uploaded each weekday to a private GitHub repository, and the 7 newest copies are kept (about a week and a half). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key the operator keeps offline. Copies made before 22 October 2026 were not encrypted; they leave the rotation as newer copies replace them.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Retention limits: logs up to 30 days; the local holding folder up to 30 days; waitlist entries up to 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand.
+          Retention limits: a log file 30 days after its last entry; the local holding folder up to 30 days; waitlist entries up to 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          When you delete your account, its data is erased from the live database at once. It can remain in logs for up to 30 days, and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days).
+          When you delete your account, its data is erased from the live database at once. It can remain in logs until the log file holding it is deleted (30 days after that file&rsquo;s last entry), and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days).
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
           When an account is deleted, SignalDeck records the account number and a one-way (SHA-256) hash of the account&rsquo;s email address, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back. This record is kept indefinitely.
