@@ -32,6 +32,11 @@ if ! type s3_upload_verified >/dev/null 2>&1; then
   echo "FAIL: could not extract s3_upload_verified from the backup script"; exit 1
 fi
 type sd_nosleep >/dev/null 2>&1 || sd_nosleep() { "$@"; }
+# The backup-key lookup and sdmaint resolution live in lib-offsite-gh.sh. Point
+# the default key location at an empty temp home so a real key on this machine
+# cannot change what the cases below exercise.
+. "$SD/ops/lib-offsite-gh.sh"
+export USERPROFILE="$TMPROOT/home" HOME="$TMPROOT/home"; unset SIGNALDECK_OFFSITE_KEY_FILE
 
 SRC="$TMPROOT/backup.db"
 head -c 200000 /dev/urandom > "$SRC"
@@ -84,6 +89,43 @@ else ok "failed upload rejected: $S3_FAIL_REASON"; fi
 #    to a 5 GB database, and a leaked ~925 MB gz per failure fills the disk.
 if [ -e "$TMPROOT/t.gz" ]; then bad "the temp .gz was left behind after a failure"
 else ok "temp .gz cleaned up on every path"; fi
+
+# 7. A backup key is configured but sealing fails: the upload must abort before
+#    `aws s3 cp` ever runs, never fall back to the plaintext gzip.
+cat > "$TMPROOT/bin/aws" <<STUB
+#!/bin/bash
+echo "\$*" >> "$TMPROOT/aws.calls"
+exit 0
+STUB
+printf '#!/bin/bash\nexit 1\n' > "$TMPROOT/bin/sdmaint"; chmod +x "$TMPROOT/bin/sdmaint"
+gh_offsite_sdmaint() { echo "$TMPROOT/bin/sdmaint"; }
+: > "$TMPROOT/aws.calls"
+export SIGNALDECK_OFFSITE_KEY_FILE="$TMPROOT/backup.key"; : > "$SIGNALDECK_OFFSITE_KEY_FILE"
+if run; then bad "a failed seal still uploaded"
+elif grep -q '^s3 cp' "$TMPROOT/aws.calls"; then bad "aws s3 cp ran although sealing failed"
+else ok "seal failure aborts before any upload: $S3_FAIL_REASON"; fi
+if [ -e "$TMPROOT/t.gz" ] || [ -e "$TMPROOT/t.gz.enc" ]; then bad "a failed seal left a temp file behind"
+else ok "temp files cleaned up after a failed seal"; fi
+
+# 8. A key is configured and sealing works: the SEALED file (never the plaintext
+#    gzip) goes up as <uri>.enc, and head-object checks that key at the sealed size.
+printf '#!/bin/bash\nshift\nwhile [ $# -gt 0 ]; do case "$1" in -in) in="$2" ;; -out) out="$2" ;; esac; shift 2; done\n{ printf SEALED; cat "$in"; } > "$out"\n' > "$TMPROOT/bin/sdmaint"
+SEALED=$((REAL + 6)); : > "$TMPROOT/aws.calls"
+cat > "$TMPROOT/bin/aws" <<STUB
+#!/bin/bash
+if [ "\$1 \$2" = "s3 cp" ]; then echo "\$4 \$(head -c 6 "\$3") \$(wc -c < "\$3" | tr -d ' ')" >> "$TMPROOT/aws.calls"; fi
+if [ "\$1 \$2" = "s3api head-object" ]; then echo "\$6" > "$TMPROOT/head.key"; echo "$SEALED"; fi
+exit 0
+STUB
+if run; then ok "sealed upload verified (${S3_VERIFIED_BYTES} bytes)"
+else bad "a sealed upload was rejected: $S3_FAIL_REASON"; fi
+if [ "$(cat "$TMPROOT/aws.calls")" = "s3://bucket/nightly/backup.db.gz.enc SEALED $SEALED" ]; then ok "the sealed file went up as <uri>.enc"
+else bad "s3 cp sent '$(cat "$TMPROOT/aws.calls")', want the SEALED file at <uri>.enc"; fi
+if [ "$(cat "$TMPROOT/head.key" 2>/dev/null)" = "nightly/backup.db.gz.enc" ] && [ "${S3_VERIFIED_BYTES:-}" = "$SEALED" ]; then ok "head-object checked the .enc key at the sealed size"
+else bad "verified ${S3_VERIFIED_BYTES:-} bytes at key '$(cat "$TMPROOT/head.key" 2>/dev/null)', want $SEALED at the .enc key"; fi
+if [ -e "$TMPROOT/t.gz" ] || [ -e "$TMPROOT/t.gz.enc" ]; then bad "a sealed upload left a temp file behind"
+else ok "temp files cleaned up after a sealed upload"; fi
+unset SIGNALDECK_OFFSITE_KEY_FILE
 
 if [ "$FAILED" = "0" ]; then echo "test-offsite-s3: PASS"; else echo "test-offsite-s3: FAIL"; fi
 exit "$FAILED"

@@ -40,6 +40,13 @@
 //	                                      nightly by ops/signaldeck-refresh.sh so
 //	                                      growth regressions page instead of
 //	                                      being discovered at 13GB)
+//	sdmaint offsite-keygen [-key P]     — new owner-only off-site backup key
+//	sdmaint offsite-seal|offsite-open -key K -in X -out Y
+//	                                    — chunked AES-256-GCM for the off-site
+//	                                      backup (offsite.go, lib-offsite-gh.sh)
+//	sdmaint replay-tombstones -db D [-log L] [-apply]
+//	                                    — re-apply logged account deletions to
+//	                                      a restored copy (tombstones.go)
 //
 // apply-delistings exists so the Python planner can stay strictly read-only
 // (mode=ro, like accuracy_registry.py): every write goes through
@@ -149,6 +156,20 @@ func main() {
 		}
 		return
 	}
+	// Off-site backup sealing (offsite.go) and deletion replay (tombstones.go).
+	if len(os.Args) > 1 {
+		if run, ok := map[string]func([]string) error{
+			"offsite-keygen":    offsiteKeygen,
+			"offsite-seal":      func(a []string) error { return offsiteSeal(a, false) },
+			"offsite-open":      func(a []string) error { return offsiteSeal(a, true) },
+			"replay-tombstones": replayTombstones,
+		}[os.Args[1]]; ok {
+			if err := run(os.Args[2:]); err != nil {
+				log.Fatalf("%s: %v", os.Args[1], err)
+			}
+			return
+		}
+	}
 	if len(os.Args) > 1 && os.Args[1] == "storage-report" {
 		over, err := storageReport(os.Args[2:])
 		if err != nil {
@@ -184,7 +205,8 @@ func main() {
 			"This binary knows: apply-delistings, repair-added-at, build-universe,\n"+
 			"split-reused-tickers, purge-bad-bars, import-delisted, ledger-verify,\n"+
 			"research-loop, "+
-			"paper-epochs, storage-report, quarantine-flat-pads.\n"+
+			"paper-epochs, storage-report, quarantine-flat-pads, offsite-keygen,\n"+
+			"offsite-seal, offsite-open, replay-tombstones.\n"+
 			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
 			"Refusing to fall through to the default compaction pass, which would\n"+
 			"strip blobs and VACUUM data/signaldeck.db and ignore every flag you passed.",

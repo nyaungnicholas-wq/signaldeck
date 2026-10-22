@@ -115,6 +115,19 @@ func (s *Store) AccountEmail(ctx context.Context, uid int64) (email string, veri
 	return e.String, v == 1, e.Valid && e.String != "", err
 }
 
+// AccountEmailFor is AccountEmail keyed on the id AND username pair that
+// DeleteAccount checks: users.id is reused, so a read by id alone can return
+// the address of an account that took the id since the caller checked it.
+// ok is false when no such account exists.
+func (s *Store) AccountEmailFor(ctx context.Context, uid int64, username string) (email string, ok bool, err error) {
+	var e sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT email FROM users WHERE id=? AND username=?`, uid, username).Scan(&e)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return e.String, err == nil, err
+}
+
 // SetPassword replaces an account's hash and ends every session it holds, so a
 // reset also evicts whoever had the old password. One transaction: as three
 // autocommits, a deadline between them left the new hash in place with the

@@ -1,4 +1,4 @@
-# offsite-env: load SIGNALDECK_OFFSITE_S3 and SIGNALDECK_OFFSITE_DIR from daemon/.env
+# offsite-env: load the off-site settings (SIGNALDECK_OFFSITE_*, SIGNALDECK_TOMBSTONE_LOG; names only) from daemon/.env
 # 2026-09-01: nightly backup script missed offsite copy because scheduled task
 # did not source daemon/.env, leaving vars unset. This library makes .env the
 # single source of truth: the backup script should prepend:
@@ -9,12 +9,12 @@ sd_offsite_env_from_dotenv() {
     local dotenv_path="$1" name line value
     if [[ ! -f "$dotenv_path" ]]; then
         printf 'offsite-env: %s absent\n' "$dotenv_path" >&2
-        for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO; do
+        for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO SIGNALDECK_OFFSITE_KEY_FILE SIGNALDECK_TOMBSTONE_LOG; do
             printf 'offsite-env: %s unset\n' "$name" >&2
         done
         return 0
     fi
-    for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO; do
+    for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO SIGNALDECK_OFFSITE_KEY_FILE SIGNALDECK_TOMBSTONE_LOG; do
         if [[ -n "${!name:-}" ]]; then
             printf 'offsite-env: %s from env\n' "$name" >&2
             continue

@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/tombstone"
 )
 
 // registerAccountData serves a signed-in account's own data, to take away or
@@ -78,6 +80,27 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 	if bcrypt.CompareHashAndPassword([]byte(u.PassHash), []byte(body.Password)) != nil {
 		loginFailures.fail(lockKey, time.Now())
 		httpErr(w, http.StatusForbidden, "that password is not right")
+		return
+	}
+	// Write-ahead tombstone (2026-10-22): a backup taken before this delete
+	// still holds the account, so record it OUTSIDE the database first; a
+	// restore replays the log (sdmaint replay-tombstones). No record, no
+	// delete. If the delete below then fails, the record stays and a replay
+	// errs toward erasing an account its owner asked to erase.
+	// Keyed on the id AND the username whose password was just checked: a
+	// double-clicked delete must not record the account that took the id since.
+	email, ok, err := d.St.AccountEmailFor(ctx, uid, u.Username)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	if !ok { // already gone, or the id now belongs to someone else
+		httpErr(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	if err := tombstone.Append(uid, u.Username, email); err != nil {
+		slog.Error("account delete refused: the deletion record could not be written", "uid", uid, "err", err)
+		httpErr(w, http.StatusInternalServerError, "your account could not be deleted right now and nothing was erased; please try again later")
 		return
 	}
 	// A person is waiting: go ahead of the worker fleet.

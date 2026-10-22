@@ -23,7 +23,21 @@ list)
         case "${tag:-}" in backup-*) printf '%s %s\n' "$created" "$tag" ;; esac
     done ;;
 view)
-    var="ASSETS_$(key "${3:-}")"; printf '%s\n' "${!var:-0}" ;;
+    var="NAMES_$(key "${3:-}")"
+    if [ -n "${!var+x}" ]; then
+        # NAMES_<tag> lists asset names; count those ending in a suffix the
+        # caller's own --jq filter selects, so the real filter text is tested.
+        filt="" prev="" n=0
+        for a in "$@"; do [ "$prev" = "--jq" ] && filt="$a"; prev="$a"; done
+        for a in ${!var}; do
+            for s in $(printf '%s' "$filt" | grep -o 'endswith("[^"]*")' | sed 's/^endswith("//; s/")$//'); do
+                case "$a" in *"$s") n=$((n+1)); break ;; esac
+            done
+        done
+        printf '%s\n' "$n"
+    else
+        var="ASSETS_$(key "${3:-}")"; printf '%s\n' "${!var:-0}"
+    fi ;;
 delete)
     [ -n "${3:-}" ] || exit 1
     var="FAIL_$(key "$3")"; [ -n "${!var:-}" ] && exit 1
@@ -42,7 +56,7 @@ bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail+1)); }
 check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
 
 reset_fixtures() {
-    unset "${!ASSETS_@}" "${!FAIL_@}" 2>/dev/null
+    unset "${!ASSETS_@}" "${!FAIL_@}" "${!NAMES_@}" 2>/dev/null
     export RELEASES=""
     : > "$DELETED"
 }
@@ -103,6 +117,18 @@ for k in 0 "" abc; do
     check "KEEP='$k' is reported as refused" "$(printf '%s
 ' "$out" | grep -c 'REFUSED')" "1"
 done
+
+# f. Sealed backups (.db.gz.enc, 2026-10-22) count like plaintext ones; a release
+#    holding only a sidecar and the sealed tombstone log is still assetless.
+reset_fixtures
+releases backup-20261001-131000 backup-20261002-131000 backup-20261003-131000 backup-20261004-131000
+export NAMES_backup_20261001_131000="signaldeck-20261001-131000.db.gz signaldeck-20261001-131000.db.gz.sha256"
+export NAMES_backup_20261002_131000="signaldeck-20261002-131000.db.gz.enc signaldeck-20261002-131000.db.gz.enc.sha256 deletions.jsonl.enc"
+export NAMES_backup_20261003_131000="signaldeck-20261003-131000.db.gz.enc.sha256 deletions.jsonl.enc"
+export NAMES_backup_20261004_131000="signaldeck-20261004-131000.db.gz.enc signaldeck-20261004-131000.db.gz.enc.sha256"
+out=$(gh_offsite_prune o/r 2)
+check "sealed releases count toward KEEP; oldest plaintext one goes" "$(tr '\n' ' ' < "$DELETED")" "backup-20261001-131000 "
+check "a release without a .db.gz(.enc) is kept and not counted" "$(printf '%s\n' "$out" | grep -c 'kept backup-20261003-131000')" "1"
 
 echo "----------------------------------------------------------------------"
 echo "$pass passed, $fail failed"

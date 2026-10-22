@@ -23,7 +23,7 @@ Survives (recovery inputs):
 
 | artifact | where |
 |---|---|
-| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256`, newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.sha256'` or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
+| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256` — or, once a backup key exists (2026-10-22), `<backup>.db.gz.enc` (AES-256-GCM, `sdmaint offsite-seal`) + its `.sha256` + `deletions.jsonl.enc` (the account-deletion tombstone log) — newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.db.gz.enc' --pattern '*.sha256' --pattern 'deletions.jsonl.enc'` (a sealed `.enc` is then checked and opened as in section 2) or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
 | Source, ops scripts, the `.plist` files the task installer reads | GitHub: `nyaungnicholas-wq/signaldeck` |
 | External anchors, prereg chain head, accuracy registry | the public anchors repo (`anchors.log`, `prereg.log`, `accuracy_registry.json` in its git history) |
 
@@ -34,6 +34,8 @@ encrypted disk), or accept the stated consequence:
 |---|---|
 | `daemon\.env` (gitignored: API token, TV webhook secret, data-source keys, allowlists) | re-enter every secret by hand; nothing else breaks |
 | `%USERPROFILE%\.signaldeck\ledger_anchor.key` (Ed25519 signing key — deliberately OUTSIDE `data\`, so it is in NO backup) | survivable but publicly visible: old anchors still verify (each `Record` embeds its `pubKey`), but the daemon generates a fresh key and every NEW anchor signs with it — external observers see a key rotation they are entitled to question |
+| `%USERPROFILE%\.signaldeck\backup.key` (off-site backup key, `sdmaint offsite-keygen`; like the anchor key it is in NO backup, by design) | **every sealed `.db.gz.enc` release is unreadable** — only older plaintext `.db.gz` releases, if any are left, can be restored. Keep an offline copy from the day it is generated |
+| `%USERPROFILE%\.signaldeck\deletions.jsonl` (account-deletion tombstones, outside the database) | the copy sealed into each release (`deletions.jsonl.enc`) covers deletions up to that backup; deletions after the newest release are lost with the machine, and those accounts come back on restore |
 | everything written after the last nightly backup | gone. RPO = last offsite backup: ≤ ~24 h on weekdays, up to ~3 days across a weekend (the scheduled backup runs Mon–Fri after the close; the daemon's 30 h failsafe copy on weekends stays on this machine unless an off-site directory is configured for it); backfill workers close price-data gaps, but resolved outcomes emitted in the lost window are not reconstructable |
 
 ## 0. Prerequisites on the clean machine (~30 min)
@@ -85,8 +87,28 @@ $tag  = (gh release list --repo $repo --limit 50 |
          ForEach-Object { $_.Matches.Value } | Sort-Object -Descending | Select-Object -First 1)
 if (-not $tag) { throw "no backup-* release found in $repo -- is gh authenticated? (gh auth status)" }
 New-Item -ItemType Directory -Force restore-dl | Out-Null
-gh release download $tag --repo $repo --pattern '*.db.gz' --pattern '*.sha256' --dir restore-dl --clobber
-$src = Get-ChildItem restore-dl -Filter '*.db.gz' | Select-Object -First 1
+gh release download $tag --repo $repo --pattern '*.db.gz' --pattern '*.db.gz.enc' --pattern '*.sha256' --pattern 'deletions.jsonl.enc' --dir restore-dl --clobber
+$sealedOK = $false
+$enc = Get-ChildItem restore-dl | Where-Object Name -like '*.db.gz.enc' | Select-Object -First 1
+if ($enc) {
+    # SEALED (2026-10-22): check the sealed file's sidecar FIRST, then open it with
+    # the backup key restored from its offline copy (section 3). Without that key
+    # this release cannot be opened; go back to an older plaintext .db.gz release.
+    $want = (Get-Content "$($enc.FullName).sha256" -Raw).Split()[0].Trim()
+    $got  = (Get-FileHash $enc.FullName -Algorithm SHA256).Hash.ToLower()
+    if ($want -ne $got) { throw "SHA256 MISMATCH on the sealed archive: recorded $want, got $got" }
+    $key = if ($env:SIGNALDECK_OFFSITE_KEY_FILE) { $env:SIGNALDECK_OFFSITE_KEY_FILE } else { "$env:USERPROFILE\.signaldeck\backup.key" }
+    if (-not (Test-Path $key)) { throw "no backup key at $key -- restore it from the offline copy first (section 3, step 3)" }
+    .\bin\sdmaint.exe offsite-open -key $key -in $enc.FullName -out ($enc.FullName -replace '\.enc$','')
+    if ($LASTEXITCODE -ne 0) { throw "offsite-open refused $($enc.Name): wrong key, or the file is damaged -- go back one release" }
+    if (Test-Path restore-dl\deletions.jsonl.enc) {
+        .\bin\sdmaint.exe offsite-open -key $key -in restore-dl\deletions.jsonl.enc -out restore-dl\deletions.jsonl
+        if ($LASTEXITCODE -ne 0) { throw "could not open the release's deletions.jsonl.enc" }
+    }
+    Remove-Item $enc.FullName, "$($enc.FullName).sha256"
+    $sealedOK = $true   # sha256 checked above and GCM authenticated every chunk
+}
+$src = Get-ChildItem restore-dl | Where-Object Name -like '*.db.gz' | Select-Object -First 1
 if (-not $src) { throw "release $tag carried no .db.gz asset" }
 $offsite = $src.DirectoryName
 "restoring from $tag / $($src.Name) ($([math]::Round($src.Length/1GB,2)) GB)"
@@ -143,6 +165,7 @@ if (Test-Path $gzSidecar) {
     $got  = (Get-FileHash 'data\signaldeck.db' -Algorithm SHA256).Hash.ToLower()
     if ($want -ne $got) { throw "SHA256 MISMATCH: recorded $want, restored $got" }
     'sha256 OK (restored database)'
+} elseif ($sealedOK) { 'sha256 OK (sealed archive, checked before it was opened)'
 } else { 'WARNING: no .sha256 sidecar - integrity is unverified' }
 sqlite3 data\signaldeck.db "PRAGMA quick_check;"
 sqlite3 data\signaldeck.db "SELECT COUNT(*) FROM bars;"
@@ -151,6 +174,34 @@ sqlite3 data\signaldeck.db "SELECT COUNT(*) FROM bars;"
 Neither check is optional. `PRAGMA quick_check` catches a corrupt page; the
 sha256 catches a truncated or swapped file, which quick_check will happily
 pass on a structurally valid prefix.
+
+### Replay account deletions before the daemon starts
+
+A member who deleted their account after this backup was taken is still in
+it. Each deletion is recorded write-ahead OUTSIDE the database, in
+`%USERPROFILE%\.signaldeck\deletions.jsonl` (or `SIGNALDECK_TOMBSTONE_LOG`),
+and a sealed copy rides in every release as `deletions.jsonl.enc`. Replay the
+NEWEST log you have: this machine's own if it survived (it holds every
+uploaded copy and more), else the newest release's copy, opened above into
+`restore-dl\deletions.jsonl` (if you restored an older release, download
+`deletions.jsonl.enc` from the newest one and open it the same way).
+
+```powershell
+$tomb = if ($env:SIGNALDECK_TOMBSTONE_LOG) { $env:SIGNALDECK_TOMBSTONE_LOG } else { "$env:USERPROFILE\.signaldeck\deletions.jsonl" }
+if (-not (Test-Path $tomb)) { $tomb = 'restore-dl\deletions.jsonl' }
+if (Test-Path $tomb) {
+    .\bin\sdmaint.exe replay-tombstones -db data\signaldeck.db -log $tomb          # dry run: lists what it would delete
+    .\bin\sdmaint.exe replay-tombstones -db data\signaldeck.db -log $tomb -apply   # deletes them
+} else { 'no tombstone log found: confirm no member ever deleted an account before skipping this' }
+```
+
+A tombstone deletes an account only when its id, the SHA-256 of its stored
+email AND the SHA-256 of its username all match, because `users.id` is reused.
+For an account with no email (the username-only accounts) the username is
+what tells a reused id apart; the dry run marks those lines, so read them
+before `-apply`. If you replayed the release's copy,
+copy it to `%USERPROFILE%\.signaldeck\deletions.jsonl` so every later backup
+keeps carrying it.
 
 ## 3. Recreate secrets, keys, and the anchor repo
 
@@ -161,7 +212,12 @@ pass on a structurally valid prefix.
    copy. If it is gone, let the daemon generate a new one and **say so publicly**
    alongside the next anchor; a silent key rotation looks exactly like a forged
    chain to anyone verifying it.
-3. Clone the public anchors repo to
+3. `%USERPROFILE%\.signaldeck\backup.key` — restore it from your offline copy
+   BEFORE section 2 whenever the newest release is sealed (`.db.gz.enc`):
+   there is no other way to open it. `sdmaint offsite-keygen` on the new
+   machine makes a NEW key that only seals future backups (it refuses to
+   overwrite an existing file).
+4. Clone the public anchors repo to
    `%USERPROFILE%\.signaldeck\anchor-publish`.
 
 ## 4. Reinstall the Scheduled Task fleet
