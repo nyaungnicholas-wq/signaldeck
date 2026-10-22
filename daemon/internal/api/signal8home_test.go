@@ -70,9 +70,10 @@ func TestTapeEndpoint(t *testing.T) {
 	if code := s8Get(t, srv.URL+"/api/tape", &body); code != 200 {
 		t.Fatalf("status = %d", code)
 	}
-	// Full strip: every tape ETF + BTC + VIX, present even without data.
-	if body.Count != len(universe.TapeETFs)+2 {
-		t.Fatalf("count = %d, want %d", body.Count, len(universe.TapeETFs)+2)
+	// Full strip: every tape ETF + BTC, present even without data. VIX (FRED)
+	// left the strip on 22 Oct 2026 although VIXCLS rows are stored above.
+	if body.Count != len(universe.TapeETFs)+1 {
+		t.Fatalf("count = %d, want %d", body.Count, len(universe.TapeETFs)+1)
 	}
 	byKey := map[string]int{}
 	for i, it := range body.Items {
@@ -87,9 +88,8 @@ func TestTapeEndpoint(t *testing.T) {
 	if !b.HasData || b.Kind != "crypto" || b.DayChangePct > -1.9 {
 		t.Errorf("BTC item = %+v", b)
 	}
-	v := body.Items[byKey["VIX"]]
-	if !v.HasData || v.Price != 25 || v.DayChangePct < 24.9 || !strings.Contains(v.Note, "FRED") {
-		t.Errorf("VIX item = %+v", v)
+	if i, ok := byKey["VIX"]; ok {
+		t.Errorf("VIX is retired (FRED) and must not be on the tape: %+v", body.Items[i])
 	}
 	// Registered-but-empty ETF is honestly present with hasData=false.
 	if dia := body.Items[byKey["DIA"]]; dia.HasData {

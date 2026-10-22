@@ -587,8 +587,6 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/research-ledger":    get("/api/research-ledger", fmt.Sprintf(`"weeks":{"rows":%d,`, perVariant)), // cached
 		"/api/research-loop":      get("/api/research-loop", "SNTL_LOOP_REV"),
 		"/api/self-audit":         get("/api/self-audit", "SNTL_AUDIT_DETAIL"),
-		"/api/short-interest":     get("/api/short-interest?symbol=SNTL&market=stocks", "2026-09-15"),
-		"/api/shorts":             get("/api/shorts", "SNTL"),
 		// The seeded sample size, not the personality: a member gets a fixed line in
 		// place of a personality that quotes a hit rate (SD-30 / n=1 rows).
 		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", `"nSamples":60`),
@@ -750,8 +748,8 @@ func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 
 func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config), variant int) {
 	ctx := context.Background()
-	// The widest member surface: the FINRA routes open too (memberFINRARoutes;
-	// finra_member_test.go drives their default refusal).
+	// The widest member surface: every switch on. MemberFINRA has had no effect
+	// since FINRA's retirement (22 Oct 2026; finra_member_test.go).
 	srv, st, mb, d := newProductionServer(t, func(c *config.Config) {
 		c.MemberFINRA = true
 		if mutate != nil {
@@ -979,7 +977,8 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 	}{
 		{"/api/watch", map[string]string{"symbol": "SNTC/USD", "market": "crypto"}, 400},
 		{"/api/symbol-agent?symbol=SNTC/USD&market=crypto", nil, 404},
-		{"/api/short-interest?symbol=SNTC/USD&market=crypto", nil, 404},
+		// /api/short-interest left this list on 22 Oct 2026: the FINRA licence
+		// guard answers 451 before the handler can refuse the crypto symbol.
 		{"/api/company/profile?symbol=SNTC", nil, 404},
 	} {
 		var code int

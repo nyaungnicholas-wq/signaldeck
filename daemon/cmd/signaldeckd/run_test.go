@@ -6,6 +6,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // TestEdgarClientSharedAcrossWaves locks the SEC rate-limit invariant at
@@ -52,5 +53,26 @@ func TestEdgarClientSharedAcrossWaves(t *testing.T) {
 	}
 	if fp.Client.Client != tf.Client.Client {
 		t.Fatal("filings-poller and 13f-poller use different EDGAR limiters")
+	}
+}
+
+// TestLicenceRetiredWorkersAreNotWired: FINRA (Reg SHO volume and short
+// interest), Cboe put/call and FRED were retired on 22 Oct 2026 because their
+// terms do not permit SignalDeck's use. The waves that used to build their
+// pollers must not build them any more.
+func TestLicenceRetiredWorkersAreNotWired(t *testing.T) {
+	retired := map[string]bool{"finra-shorts": true, "finra-shortint": true, "cboe-pc": true, "fred-poller": true}
+	cfg := config.Config{AlpacaKey: "k", AlpacaSecret: "s"}
+	var fleet []workers.Worker
+	fleet = append(fleet, freeDataWorkers(cfg, nil, edgar.New())...)
+	fleet = append(fleet, finraShortsWorkers(nil)...)
+	fleet = append(fleet, dataExpansionWorkers(nil)...)
+	if len(fleet) == 0 {
+		t.Fatal("no workers built; the scan would pass vacuously")
+	}
+	for _, w := range fleet {
+		if retired[w.Name()] {
+			t.Errorf("%s is still wired; its source was retired for licence reasons", w.Name())
+		}
 	}
 }

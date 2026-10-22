@@ -177,10 +177,11 @@ func TestDashboardEndpoint(t *testing.T) {
 		t.Errorf("breadth caption = %q", br.Caption)
 	}
 
-	// VIX: 18.5 → "normal" band, FRED-lag caption.
+	// VIX: FRED was retired on 22 Oct 2026, so the stored 18.5 must NOT be
+	// served; the gauge says why it is empty.
 	vx := body.Gauges.Vix
-	if !vx.HasData || vx.Level != 18.5 || vx.Regime != "normal" || !strings.Contains(vx.Caption, "FRED") {
-		t.Errorf("vix = %+v", vx)
+	if vx.HasData || vx.Level != 0 || !strings.Contains(vx.Caption, "retired") {
+		t.Errorf("vix = %+v, want an empty gauge with the retirement caption", vx)
 	}
 
 	// Anomalies: only the in-window row counts; caption stays descriptive.

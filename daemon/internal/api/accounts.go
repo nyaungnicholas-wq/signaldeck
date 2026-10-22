@@ -66,13 +66,13 @@ var memberRoutes = map[string]bool{
 	// Validated regime and volatility forecasts, each with its measured accuracy.
 	"/api/regimes": true, "/api/vol-regime": true, "/api/market-regimes": true,
 	"/api/symbol-agent": true,
-	// Public-domain intel: SEC EDGAR filings, Form 4, 13F and XBRL fundamentals,
-	// FINRA short data, STOCK Act disclosures. The two FINRA routes are listed
-	// so every member-surface test scans them, but the gate keeps them
-	// operator-only unless SIGNALDECK_MEMBER_FINRA=1 (memberFINRARoutes).
+	// Public intel: SEC EDGAR filings, Form 4, 13F and XBRL fundamentals,
+	// STOCK Act disclosures. /api/shorts and /api/short-interest left this list
+	// on 22 Oct 2026: FINRA's terms do not permit this use, and the licence guard
+	// now governs both (datalicense.RestrictedRoutes).
 	"/api/company/profile": true, "/api/filings": true, "/api/insiders": true,
 	"/api/institutions": true, "/api/dilution": true, "/api/fundamentals": true,
-	"/api/short-interest": true, "/api/shorts": true, "/api/congress": true,
+	"/api/congress": true,
 	// The member's own alert switches (plan step 5): on/off and a Telegram
 	// link code, never an input that could personalise what is sent.
 	"/api/alert-prefs": true, "/api/alert-prefs/telegram-link": true,
@@ -253,15 +253,12 @@ func memberAllowed(path string) bool {
 		strings.HasPrefix(path, "/api/evidence/")
 }
 
-// memberFINRARoutes serve FINRA short data, whose terms may not permit passing
-// it on to members (owner's call, 2026-10-02: close to members). They stay in
-// memberRoutes, so the member-surface tests scan them, and the member gate
-// (security.go 6b) refuses them unless SIGNALDECK_MEMBER_FINRA=1.
-var memberFINRARoutes = map[string]bool{"/api/shorts": true, "/api/short-interest": true}
-
-// memberMay is the member gate's answer for path on this deployment.
+// memberMay is the member gate's answer for path on this deployment. The
+// SIGNALDECK_MEMBER_FINRA switch that once opened the two FINRA routes here has
+// had no effect since FINRA's retirement (22 Oct 2026): neither route is a
+// member route any more.
 func (d Deps) memberMay(path string) bool {
-	return memberAllowed(path) && (d.Cfg.MemberFINRA || !memberFINRARoutes[path])
+	return memberAllowed(path)
 }
 
 // ── public URL (email links + dynamic origin) ──────────────────────────────

@@ -55,6 +55,7 @@ type spec struct {
 const (
 	pausedTradingView = "TradingView's terms bar non-display use of scanner data (2026-10-21)"
 	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-21)"
+	pausedLicence     = "retired 22 Oct 2026: licence terms do not permit this use"
 )
 
 var registry = []spec{
@@ -77,7 +78,7 @@ var registry = []spec{
 		// short_interest cannot cover this failure for us, because ITS honest
 		// age reaches ~28d and no budget that tolerates that can see a
 		// week-old daily-feed outage (SD-H35).
-		budget: 6 * 24 * time.Hour, gated: true,
+		budget: 6 * 24 * time.Hour, gated: true, paused: pausedLicence,
 		note: "FINRA Reg SHO daily short-sale volume (per-session file, published 18:30 ET)"},
 	{source: "short_interest", query: `SELECT CAST(strftime('%s', MAX(settlement_date)) AS INTEGER) FROM short_interest`,
 		// 35d, not 20d: settlement is bi-monthly (~15d apart) AND publication
@@ -85,7 +86,7 @@ var registry = []spec{
 		// legitimately up to ~28d old just before the next one publishes. A 20d
 		// budget false-flags near every cycle boundary — the auditor must not
 		// cry wolf when the worker already holds the newest available file.
-		budget: 35 * 24 * time.Hour, gated: false,
+		budget: 35 * 24 * time.Hour, gated: false, paused: pausedLicence,
 		note: "FINRA bi-monthly short interest (settlement-dated, ~2wk publication lag)"},
 	{source: "crypto_perp", query: `SELECT MAX(ts) FROM crypto_perp`,
 		budget: 2 * time.Hour, gated: false, paused: pausedCrypto,
@@ -100,8 +101,11 @@ var registry = []spec{
 		budget: 3 * 24 * time.Hour, gated: false,
 		note: "Wikipedia daily page views (24h worker, attention proxy)"},
 	{source: "cboe_pc", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM cboe_pc`,
-		budget: 3 * 24 * time.Hour, gated: true,
+		budget: 3 * 24 * time.Hour, gated: true, paused: pausedLicence,
 		note: "CBOE market-wide put/call (6h worker, ~3 trading-day budget)"},
+	{source: "macro_series", query: `SELECT MAX(ts) FROM macro_series`,
+		budget: 4 * 24 * time.Hour, gated: false, paused: pausedLicence,
+		note: "FRED macro series incl. VIXCLS (6h worker, daily/weekly prints)"},
 	{source: "news", query: `SELECT MAX(ts) FROM news`,
 		budget: 12 * time.Hour, gated: true,
 		note: "Alpaca news headlines (market hours)"},

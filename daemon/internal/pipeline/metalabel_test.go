@@ -16,7 +16,7 @@ func TestMetaLabelContextExcludesTheCall(t *testing.T) {
 		Vec: map[string]float64{
 			"pred_cal": 0.62, "pred_raw": 0.60, "gbm_prob": 0.55,
 			"meanrev_prob": 0.48, "alphax_prob": 0.51,
-			"vix_level": 0.18, "adx14": 22, "rank_pct": 0.7,
+			"wiki_z": 0.18, "adx14": 22, "rank_pct": 0.7,
 		},
 		FwdReturn: 0.01,
 	}}
@@ -40,12 +40,12 @@ func TestMetaLabelDedupesToSymbolDay(t *testing.T) {
 	day := int64(86400)
 	rows := []store.LabeledFeature{
 		// Three intraday rows for symbol 1 on the same UTC day.
-		{SymbolID: 1, Ts: day + 100, Vec: map[string]float64{"pred_cal": 0.60, "vix_level": 0.1}, FwdReturn: 0.01},
-		{SymbolID: 1, Ts: day + 200, Vec: map[string]float64{"pred_cal": 0.61, "vix_level": 0.1}, FwdReturn: 0.01},
-		{SymbolID: 1, Ts: day + 300, Vec: map[string]float64{"pred_cal": 0.62, "vix_level": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 1, Ts: day + 100, Vec: map[string]float64{"pred_cal": 0.60, "wiki_z": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 1, Ts: day + 200, Vec: map[string]float64{"pred_cal": 0.61, "wiki_z": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 1, Ts: day + 300, Vec: map[string]float64{"pred_cal": 0.62, "wiki_z": 0.1}, FwdReturn: 0.01},
 		// One row for symbol 2 the same day, and symbol 1 again the next day.
-		{SymbolID: 2, Ts: day + 150, Vec: map[string]float64{"pred_cal": 0.40, "vix_level": 0.1}, FwdReturn: -0.01},
-		{SymbolID: 1, Ts: 2*day + 100, Vec: map[string]float64{"pred_cal": 0.58, "vix_level": 0.1}, FwdReturn: 0.02},
+		{SymbolID: 2, Ts: day + 150, Vec: map[string]float64{"pred_cal": 0.40, "wiki_z": 0.1}, FwdReturn: -0.01},
+		{SymbolID: 1, Ts: 2*day + 100, Vec: map[string]float64{"pred_cal": 0.58, "wiki_z": 0.1}, FwdReturn: 0.02},
 	}
 	samples, _ := metaLabelSamples(rows, horizonSecs(md.H1d))
 	if len(samples) != 3 {
@@ -71,9 +71,9 @@ func TestMetaLabelDedupesToSymbolDay(t *testing.T) {
 // refuses unsorted input rather than silently grading it.
 func TestMetaLabelSamplesAreSorted(t *testing.T) {
 	rows := []store.LabeledFeature{
-		{SymbolID: 1, Ts: 5 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "vix_level": 0.1}, FwdReturn: 0.01},
-		{SymbolID: 2, Ts: 1 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "vix_level": 0.1}, FwdReturn: 0.01},
-		{SymbolID: 3, Ts: 3 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "vix_level": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 1, Ts: 5 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "wiki_z": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 2, Ts: 1 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "wiki_z": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 3, Ts: 3 * 86400, Vec: map[string]float64{"pred_cal": 0.6, "wiki_z": 0.1}, FwdReturn: 0.01},
 	}
 	samples, _ := metaLabelSamples(rows, horizonSecs(md.H1d))
 	for i := 1; i < len(samples); i++ {
@@ -91,8 +91,8 @@ func TestMetaLabelSamplesAreSorted(t *testing.T) {
 func TestMetaLabelDeclaresTheLabelHorizon(t *testing.T) {
 	for _, h := range metaLabelHorizons {
 		rows := []store.LabeledFeature{
-			{SymbolID: 1, Horizon: h, Ts: 86400, Vec: map[string]float64{"pred_cal": 0.62, "vix_level": 0.1}, FwdReturn: 0.01},
-			{SymbolID: 2, Horizon: h, Ts: 2 * 86400, Vec: map[string]float64{"pred_cal": 0.38, "vix_level": 0.2}, FwdReturn: -0.01},
+			{SymbolID: 1, Horizon: h, Ts: 86400, Vec: map[string]float64{"pred_cal": 0.62, "wiki_z": 0.1}, FwdReturn: 0.01},
+			{SymbolID: 2, Horizon: h, Ts: 2 * 86400, Vec: map[string]float64{"pred_cal": 0.38, "wiki_z": 0.2}, FwdReturn: -0.01},
 		}
 		samples, _ := metaLabelSamples(rows, horizonSecs(h))
 		if len(samples) != 2 {
@@ -113,8 +113,8 @@ func TestMetaLabelDeclaresTheLabelHorizon(t *testing.T) {
 // or reject, and inventing one would put a phantom trade into the grade.
 func TestMetaLabelSkipsRowsWithoutAPrimaryCall(t *testing.T) {
 	rows := []store.LabeledFeature{
-		{SymbolID: 1, Ts: 86400, Vec: map[string]float64{"vix_level": 0.1, "adx14": 20}, FwdReturn: 0.01},
-		{SymbolID: 2, Ts: 2 * 86400, Vec: map[string]float64{"pred_raw": 0.7, "vix_level": 0.1}, FwdReturn: 0.01},
+		{SymbolID: 1, Ts: 86400, Vec: map[string]float64{"wiki_z": 0.1, "adx14": 20}, FwdReturn: 0.01},
+		{SymbolID: 2, Ts: 2 * 86400, Vec: map[string]float64{"pred_raw": 0.7, "wiki_z": 0.1}, FwdReturn: 0.01},
 	}
 	samples, _ := metaLabelSamples(rows, horizonSecs(md.H1d))
 	if len(samples) != 1 {

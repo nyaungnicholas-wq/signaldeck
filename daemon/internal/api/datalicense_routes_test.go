@@ -71,7 +71,8 @@ func TestPublicRoutesNeverGoverned(t *testing.T) {
 }
 
 func TestEveryRegisteredVendorRouteIsGoverned(t *testing.T) {
-	vendorHints := []string{"/bars", "/snaps", "/news", "/export/", "/tv-", "/stocktwits", "/crypto-perp", "/quote"}
+	vendorHints := []string{"/bars", "/snaps", "/news", "/export/", "/tv-", "/stocktwits", "/crypto-perp", "/quote",
+		"/shorts", "/short-interest", "/cboe", "/macro-series"}
 	derivedExceptions := map[string]string{
 		"/api/chart-overlays": "annotations only: timestamp, marker, label, own score; no OHLC, volume or vendor price (see datalicense.go)",
 		"/api/news-trends":    "headline COUNTS per day and a z-score; no headline text, no publisher rows",

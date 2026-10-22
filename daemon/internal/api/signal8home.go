@@ -2,7 +2,8 @@
 // from stored free data. Three read-only endpoints:
 //
 //   - GET /api/tape      — the ticker-tape strip: index/sector ETFs (stored
-//     daily bars) + BTC (crypto daily bars) + VIX (FRED VIXCLS daily close).
+//     daily bars) + BTC (crypto daily bars, while crypto is active). VIX
+//     (FRED) left the strip on 22 Oct 2026.
 //   - GET /api/movers    — gainers/losers over the daily universe, with
 //     BEST-EFFORT market cap (EDGAR SharesOutstanding × last close; symbols
 //     EDGAR hasn't covered are labeled "mcap unavailable", never fabricated).
@@ -15,8 +16,8 @@
 //     doctrine, so the surface simply doesn't exist.
 //
 // HONESTY: every payload states its cadence and lag. Tape prices are stored
-// DAILY closes refreshed on worker cadence (not tick-live quotes); VIX is the
-// FRED daily close (~1 trading day behind); mcap and earnings dates carry
+// DAILY closes refreshed on worker cadence (not tick-live quotes); mcap and
+// earnings dates carry
 // their own provenance notes.
 package api
 
@@ -32,8 +33,8 @@ import (
 )
 
 const (
-	tapeNote = "Prices are stored daily closes refreshed on worker cadence — NOT live quotes. VIX is the FRED VIXCLS daily close (lags ~1 trading day). Day % is vs the prior stored close."
-	vixNote  = "FRED VIXCLS daily close — updated once per day by FRED, lags ~1 trading day."
+	tapeNote = "Prices are stored daily closes refreshed on worker cadence — NOT live quotes. Day % is vs the prior stored close."
+	vixNote  = "VIX is no longer shown: it came from FRED, whose licence terms do not permit this use (retired 22 Oct 2026)."
 
 	moversNote = "Computed from stored daily universe bars (free IEX feed, worker cadence). Index/sector ETFs are excluded — they are baskets, not single-name moves. Symbols with no bar in the last 5 days are skipped."
 	mcapNote   = "Market cap = SEC EDGAR SharesOutstanding × last stored close (best-effort). Symbols EDGAR hasn't covered show 'mcap unavailable' — never a fabricated number. With a min-mcap filter active, unknown-mcap symbols are excluded and counted."

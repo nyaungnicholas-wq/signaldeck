@@ -38,8 +38,13 @@ import (
 const (
 	// pvBaseURL hosts the per-article pageviews metrics.
 	pvBaseURL = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
-	// defaultMinInterval spaces requests; Wikimedia asks for ≤100 req/s from
-	// anonymous clients, so 200ms is far politer than required.
+	// defaultMinInterval spaces requests, one at a time. Wikimedia's rate
+	// limits page (checked 22 Oct 2026) allows an unauthenticated client with a
+	// descriptive User-Agent fewer than 5 req/s, at most 200 req/min and 3
+	// concurrent requests. 200ms sits at the per-second ceiling (request latency
+	// keeps the real rate below it), and a wiki-attention run makes at most ~60
+	// requests, so the per-minute cap is never reached. The User-Agent is
+	// edgar.ResolveUA(): SignalDeck/0.1 plus SIGNALDECK_CONTACT_EMAIL.
 	defaultMinInterval = 200 * time.Millisecond
 )
 

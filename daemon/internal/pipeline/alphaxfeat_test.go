@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,9 +43,9 @@ func seedPredictable(t *testing.T, st *store.Store, symbol string, market md.Mar
 }
 
 // FEATURE-VECTOR integration (featureVersion 5): fresh, gate-clearing
-// new-source data must ride the persisted vector as short_int_dtc, wiki_z,
-// pc_total and cot_spx_net. StockTwits and TradingView data are still seeded
-// below and must NOT appear: both sources were retired on 2026-10-21.
+// new-source data must ride the persisted vector as wiki_z and cot_spx_net.
+// StockTwits and TradingView data (retired 2026-10-21) and FINRA, Cboe and FRED
+// data (retired 22 Oct 2026) are still seeded below and must NOT appear.
 func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
@@ -95,6 +96,17 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// FRED: a fresh VIX close and a DGS10 history long enough for macrofeat.
+	for i := 0; i < 40; i++ {
+		ts := now.Unix() - int64(40-i)*86400
+		if err := st.InsertMacro(ctx, "VIXCLS", ts, 20+float64(i%5)); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.InsertMacro(ctx, "DGS10", ts, 4+float64(i%7)/10); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -109,17 +121,21 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	}
 	vec := feats[0].Vec
 	for k, want := range map[string]float64{
-		"short_int_dtc": 3.5,
-		"pc_total":      0.91,
-		"cot_spx_net":   (100.0 - 40.0) / 200.0,
+		"cot_spx_net": (100.0 - 40.0) / 200.0,
 	} {
 		if got := vec[k]; got != want {
 			t.Fatalf("vec[%q] = %v, want %v (vec %+v)", k, got, want, vec)
 		}
 	}
-	for _, k := range []string{"stocktwits_bull_ratio", "tv_reco"} {
+	for _, k := range []string{"stocktwits_bull_ratio", "tv_reco", "short_int_dtc", "short_vol_z",
+		"pc_total", "vix_level", "vix_regime", "vix_high_vol"} {
 		if v, ok := vec[k]; ok {
 			t.Fatalf("retired source %q must not be built, got %v", k, v)
+		}
+	}
+	for k := range vec {
+		if strings.HasPrefix(k, "macro_") {
+			t.Fatalf("retired FRED key %q must not be built (vec %+v)", k, vec)
 		}
 	}
 	if z, ok := vec["wiki_z"]; !ok || z <= 0 {

@@ -30,12 +30,9 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cboe"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
@@ -382,7 +379,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// own findings past `shadow`.
 	fleet = append(fleet, &pipeline.ResearchLoop{St: st})
 	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
-	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
+	// edgar-fetcher (fred-poller retired 22 Oct 2026, licence) (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);
 	// BEFORE the watchdog spec snapshot so both are health-audited.
 	fleet = append(fleet, freeDataWorkers(cfg, st, edgarClient)...)
@@ -447,7 +444,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// spec snapshot so both are health-audited like every other worker.
 	fleet = append(fleet, weeklyProofWorkers(st, llmClient)...)
 	// Stage 5 — FINRA Reg SHO wave (constructor appended at the END of this
-	// file) — finra-shorts (6h tick): free, registration-less daily short sale
+	// file) — RETIRED 22 Oct 2026 (FINRA terms; the constructor returns nil).
+	// Was: finra-shorts (6h tick): free, registration-less daily short sale
 	// volume files (cdn.finra.org Consolidated NMS), NY ~18:30 publish gate +
 	// meta day-key dedup, ~30-trading-day first-run backfill, universe-scoped
 	// storage. Missing/late files degrade to a dq event, never a fleet
@@ -482,7 +480,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// resolved history and writes findings to self_audit + insights, every check
 	// gated at n>=30. BEFORE the watchdog spec snapshot so it's health-audited.
 	fleet = append(fleet, selfAuditWorkers(st)...)
-	// DATA-EXPANSION wave (constructor appended at the END of this file) — six
+	// DATA-EXPANSION wave (constructor appended at the END of this file). Only
+	// cot-poller and wiki-attention remain wired; finra-shortint and cboe-pc
+	// were retired 22 Oct 2026 (licence). Originally six
 	// free, keyless external context pollers: finra-shortint (bi-monthly short
 	// interest), crypto-perp (Hyperliquid funding/OI), cot-poller (CFTC weekly
 	// positioning), stocktwits-fetcher + wiki-attention (watchlist/hot-set
@@ -1028,13 +1028,16 @@ func perSymbolWorkers(st *store.Store) []workers.Worker {
 // mutex-serialized limiter spaces this fetcher's requests against the
 // signal8 pollers' too, keeping the whole process under SEC's 10 req/s.
 func freeDataWorkers(cfg config.Config, st *store.Store, ec *edgar.Client) []workers.Worker {
-	fp := &pipeline.FredPoller{St: st, Client: fred.New(os.Getenv("SIGNALDECK_FRED_KEY"))}
+	// fred-poller removed 22 Oct 2026: FRED's terms grant a personal,
+	// non-commercial licence and bar storing its content in a database without
+	// written consent (some series, e.g. VIXCLS and BAMLH0A0HYM2, are
+	// third-party copyrighted). Stored macro_series rows are kept, not deleted.
 	ef := &pipeline.EdgarFetcher{St: st}
 	if cfg.HasAlpaca() {
 		// Only fetch fundamentals when there's a stock universe to fetch for.
 		ef.Client = ec
 	}
-	return []workers.Worker{fp, ef}
+	return []workers.Worker{ef}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1416,9 +1419,11 @@ func sicBulkWorkers(st *store.Store, ec *edgar.Client) []workers.Worker {
 // short interest; it includes market-maker activity and a high ratio is NOT
 // directly bearish. /api/shorts and the UI carry that caveat verbatim.
 func finraShortsWorkers(st *store.Store) []workers.Worker {
-	return []workers.Worker{
-		&pipeline.ShortVolPoller{St: st, Client: finra.New()},
-	}
+	// finra-shorts removed 22 Oct 2026: finra.org's Terms of Use bar building
+	// a database, derivative works and automated extraction from its files.
+	// /api/shorts now serves only rows written before then, and the licence
+	// guard refuses it on a published deployment (datalicense.RestrictedRoutes).
+	return nil
 }
 
 // runSICBulkOnce is the MANUAL one-shot entry behind `signaldeckd
@@ -1567,13 +1572,16 @@ func selfAuditWorkers(st *store.Store) []workers.Worker {
 // httptest coverage (NO live-network tests).
 func dataExpansionWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
-		&pipeline.ShortInterestPoller{St: st, Client: finra.NewSI()},
+		// ShortInterestPoller (finra-shortint) removed 22 Oct 2026: FINRA's
+		// terms, as for finra-shorts above.
 		// CryptoPerpPoller is not wired while crypto is paused (2026-10-21).
 		&pipeline.COTPoller{St: st, Client: cftc.New()},
 		// StocktwitsFetcher removed 2026-10-21: StockTwits' terms bar automated
 		// extraction without written authorization.
 		&pipeline.WikiAttention{St: st, Client: wikimedia.New()},
-		&pipeline.CboePCPoller{St: st, Client: cboe.New()},
+		// CboePCPoller (cboe-pc) removed 22 Oct 2026: Cboe's website terms bar
+		// storing its market statistics in a retrieval system, displaying them
+		// and deriving from them.
 		// tv-quotes (60s, market-hours gated; crypto 24/7): near-real-time
 		// quote tape from TradingView's public scanner — rtc real-time Cboe
 		// One composite when present, else the 15-min-delayed close, per-row

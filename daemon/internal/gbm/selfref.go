@@ -88,12 +88,21 @@ const PresenceSuffix = "__has"
 // (stocktwits_bull_ratio). New vectors no longer carry them, but labeled rows
 // written before the change still do, so every trainer must drop them too, or
 // a model would learn a key that is always absent at prediction time.
+//
+// Retired 22 Oct 2026 because their licences do not permit this use: FINRA
+// (short_vol_z, short_int_dtc), Cboe put/call (pc_total) and FRED (vix_level,
+// vix_regime, vix_high_vol, and every macro_<series>_pct / macro_<series>_chg
+// key macrofeat.FromSeries builds).
 func RetiredSourceKey(k string) bool {
-	switch strings.TrimSuffix(k, PresenceSuffix) {
-	case "tv_reco", "stocktwits_bull_ratio":
+	base := strings.TrimSuffix(k, PresenceSuffix)
+	switch base {
+	case "tv_reco", "stocktwits_bull_ratio",
+		"short_vol_z", "short_int_dtc", "pc_total",
+		"vix_level", "vix_regime", "vix_high_vol":
 		return true
 	}
-	return false
+	return strings.HasPrefix(base, "macro_") &&
+		(strings.HasSuffix(base, "_pct") || strings.HasSuffix(base, "_chg"))
 }
 
 // ExcludedKey is every key a model must not train on: self-referential keys
