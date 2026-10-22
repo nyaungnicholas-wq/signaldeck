@@ -22,6 +22,7 @@ import Skeleton from "@/components/Skeleton";
 import { specFields, type SpecField } from "@/lib/specfields";
 import FullRecord from "@/components/proof/FullRecord";
 import { liveResolvedNote } from "@/lib/regimeCaveat";
+import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 
 function when(r: PreregRecord): string {
   if (r.registeredOn) return r.registeredOn;
@@ -153,6 +154,11 @@ export default function Registrations() {
                     </td>
                     <td className="px-2 py-1">
                       <span style={{ color: "var(--fg)" }}>{r.kind}</span>
+                      {isCryptoPredictor(r.kind) && (
+                        <span className="block text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                          {CRYPTO_PAUSED_LABEL}
+                        </span>
+                      )}
                       {fields.length === 0 ? null : (
                         <dl className="mt-[2px] flex max-w-[60ch] flex-col gap-[2px] leading-snug">
                           {fields.map((field) => (
