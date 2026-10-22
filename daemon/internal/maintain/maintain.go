@@ -1510,9 +1510,12 @@ func (d *DerivedRetention) Interval() time.Duration { return time.Hour }
 // Run archives+prunes the derived tiers, each fail-safe and independently.
 func (d *DerivedRetention) Run(ctx context.Context) (string, error) {
 	now := time.Now()
+	// First and independent: a SymbolNameMap failure below used to return
+	// before the waitlist step ever ran.
+	waitlist := d.waitlistRetention(ctx, now)
 	names, err := d.St.SymbolNameMap(ctx)
 	if err != nil {
-		return "", err
+		return waitlist, err
 	}
 	scoresCut := now.Add(-d.retentionScores()).Unix()
 	featuresCut := now.Add(-d.retentionFeatures()).Unix()
@@ -1605,7 +1608,7 @@ func (d *DerivedRetention) Run(ctx context.Context) (string, error) {
 	if scSkip || outSkip || featSkip || filSkip || insSkip || pmSkip || rwSkip {
 		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
 	}
-	return msg + "; " + d.waitlistRetention(ctx, now), nil
+	return msg + "; " + waitlist, nil
 }
 
 // waitlistRetention ages out waitlist sign-ups past the window. REPORT-ONLY
@@ -1617,22 +1620,24 @@ func (d *DerivedRetention) waitlistRetention(ctx context.Context, now time.Time)
 		keep = time.Duration(envIntOr("SIGNALDECK_WAITLIST_RETENTION_D", 365)) * 24 * time.Hour
 	}
 	cut := now.Add(-keep).Unix()
-	var line string
 	if os.Getenv("SIGNALDECK_RETENTION_ENFORCE") == "1" {
 		n, err := d.St.DeleteWaitlistBefore(ctx, cut)
-		if err != nil {
-			return "waitlist retention: delete failed: " + err.Error()
-		}
-		line = fmt.Sprintf("waitlist retention: removed %d", n)
-	} else {
-		n, err := d.St.CountWaitlistBefore(ctx, cut)
-		if err != nil {
-			return "waitlist retention: count failed: " + err.Error()
-		}
-		line = fmt.Sprintf("waitlist retention: would remove %d", n)
+		return logWaitlist(fmt.Sprintf("removed %d", n), "delete", err)
 	}
-	slog.Info(line)
-	return line
+	n, err := d.St.CountWaitlistBefore(ctx, cut)
+	return logWaitlist(fmt.Sprintf("would remove %d", n), "count", err)
+}
+
+// logWaitlist logs the waitlist retention outcome; a failure is a Warn, not
+// just a phrase buried in the worker's detail string.
+func logWaitlist(ok, op string, err error) string {
+	if err != nil {
+		line := "waitlist retention: " + op + " failed: " + err.Error()
+		slog.Warn(line)
+		return line
+	}
+	slog.Info("waitlist retention: " + ok)
+	return "waitlist retention: " + ok
 }
 
 func (d *DerivedRetention) retentionScores() time.Duration {

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/api"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -25,6 +26,11 @@ func waitlistRemove(args []string, out io.Writer) error {
 	email, ok := api.NormaliseEmail(*raw)
 	if !ok {
 		return errors.New("-email is missing or not a valid address")
+	}
+	// store.Open creates a missing file, so a mistyped -db would make a fresh
+	// empty database and report "not on the waitlist": a false confirmation.
+	if _, err := os.Stat(*dbPath); err != nil {
+		return fmt.Errorf("-db %s: %w (refusing to create a new database)", *dbPath, err)
 	}
 	st, err := store.Open(*dbPath)
 	if err != nil {

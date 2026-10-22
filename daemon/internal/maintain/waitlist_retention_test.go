@@ -137,3 +137,28 @@ func TestWaitlistRetentionWindowFromEnv(t *testing.T) {
 		t.Errorf("detail contains email address: %s", detail)
 	}
 }
+
+// The waitlist step must not depend on the archive tiers: SymbolNameMap failing
+// used to return before it ran, so expired sign-ups silently stayed.
+func TestWaitlistRetentionRunsWhenArchiveTiersCannot(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	if _, err := st.AddWaitlist(ctx, "old@example.com", "web", time.Now().Add(-400*24*time.Hour)); err != nil {
+		t.Fatalf("add old: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `ALTER TABLE symbols RENAME TO symbols_gone`); err != nil {
+		t.Fatalf("break SymbolNameMap: %v", err)
+	}
+	w := &DerivedRetention{St: st, Arc: archive.New(t.TempDir()), KeepWaitlist: 365 * 24 * time.Hour}
+	t.Setenv("SIGNALDECK_RETENTION_ENFORCE", "1")
+	detail, err := w.Run(ctx)
+	if err == nil {
+		t.Fatalf("expected the SymbolNameMap error, got nil; detail: %s", detail)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM waitlist`); n != 0 {
+		t.Errorf("waitlist step skipped: %d expired row(s) left; detail: %s", n, detail)
+	}
+	if !strings.Contains(detail, "waitlist retention: removed 1") {
+		t.Errorf("detail missing 'removed 1': %q", detail)
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,5 +115,22 @@ func TestWaitlistRemoveRejectsInvalidAddress(t *testing.T) {
 				t.Errorf("a@example.com should still exist after invalid address %q", bad)
 			}
 		})
+	}
+}
+
+// A mistyped -db must fail, not create an empty database and confirm the
+// address is gone.
+func TestWaitlistRemoveRefusesMissingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "typo.db")
+	var buf bytes.Buffer
+	err := waitlistRemove([]string{"-db", path, "-email", "a@example.com", "-apply"}, &buf)
+	if err == nil {
+		t.Errorf("expected an error for a missing -db, got nil; output: %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "not on the waitlist") {
+		t.Errorf("missing -db reported a false confirmation: %q", buf.String())
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Errorf("missing -db %s was created", path)
 	}
 }
