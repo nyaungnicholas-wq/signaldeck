@@ -28,6 +28,11 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
+// shortVolMaxAgeDays bounds the newest Reg SHO short-volume day. FINRA posts
+// each trade date the same evening; 5 calendar days absorbs a weekend plus a
+// market holiday. Older series are absent, never carried forward.
+const shortVolMaxAgeDays = 5
+
 // SmartMoneyScorer computes and persists the per-symbol Smart Money Score.
 type SmartMoneyScorer struct {
 	St *store.Store
@@ -115,9 +120,11 @@ func (w *SmartMoneyScorer) Run(ctx context.Context) (string, error) {
 			}
 
 			// Reg SHO short-volume ratio z vs the symbol's own trailing 30d.
+			// Freshness-gated: the FINRA poller was retired 22 Oct 2026, so a
+			// stored series must not keep feeding a score stamped now.
 			if series, err := w.St.ShortVolumeSeries(ctx, s.ID, 30); err != nil {
 				readErrs++
-			} else if len(series) > 0 {
+			} else if len(series) > 0 && dayWithinUTC(series[len(series)-1].Day, now, shortVolMaxAgeDays) {
 				ratios := make([]float64, len(series))
 				for i, r := range series {
 					ratios[i] = r.ShortPct

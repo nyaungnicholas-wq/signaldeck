@@ -116,7 +116,8 @@ type MarketCtx struct {
 // and SMA50 are both above SMA200, -1 bear when both below, 0 sideways),
 // mkt_ret_13w (the week's SPY anchor close vs the anchor close exactly 13
 // week buckets earlier), and vix_* via macrofeat from the latest VIX
-// observation at or before the week's SPY anchor ts. Absent inputs leave
+// observation at or before the week's SPY anchor ts and at most
+// vixMaxAgeSecs older than it. Absent or stale inputs leave
 // the matching keys omitted rather than zeroed.
 func BuildMarketCtx(spyDaily []md.Bar, vix []Point) MarketCtx {
 	ctx := MarketCtx{weeks: make(map[int64]marketWeek)}
@@ -142,8 +143,8 @@ func BuildMarketCtx(spyDaily []md.Bar, vix []Point) MarketCtx {
 			mw.ret13w = b.Close/prev - 1
 			mw.ret13wOK = true
 		}
-		if v, ok := latestAtOrBefore(vix, b.Ts); ok {
-			mw.vix = macrofeat.FromVIX(v)
+		if p, ok := latestAtOrBefore(vix, b.Ts); ok && b.Ts-p.Ts <= vixMaxAgeSecs {
+			mw.vix = macrofeat.FromVIX(p.Value)
 			mw.vixOK = true
 		}
 		ctx.weeks[w] = mw
@@ -151,13 +152,20 @@ func BuildMarketCtx(spyDaily []md.Bar, vix []Point) MarketCtx {
 	return ctx
 }
 
-// latestAtOrBefore returns the newest Value with Ts <= ts.
-func latestAtOrBefore(pts []Point, ts int64) (float64, bool) {
+// vixMaxAgeSecs bounds how old the newest VIX observation may be at a week's
+// anchor. FRED was retired 22 Oct 2026, so the stored series stops; without
+// this bound every later week would be stamped with the frozen last close.
+// Beyond it the regime is unobserved (vix_* omitted, HighVol false), which is
+// how the research ledger reads a row without vix_high_vol.
+const vixMaxAgeSecs = 5 * 86400
+
+// latestAtOrBefore returns the newest point with Ts <= ts.
+func latestAtOrBefore(pts []Point, ts int64) (Point, bool) {
 	i := sort.Search(len(pts), func(i int) bool { return pts[i].Ts > ts })
 	if i == 0 {
-		return 0, false
+		return Point{}, false
 	}
-	return pts[i-1].Value, true
+	return pts[i-1], true
 }
 
 // WeeklyRows computes the point-in-time weekly research rows for one symbol.

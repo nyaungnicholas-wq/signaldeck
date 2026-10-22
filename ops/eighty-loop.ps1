@@ -290,8 +290,10 @@ AS-OF AND LOOKAHEAD HAZARDS -- these are NOT derivable from the counts above
 - inst_holdings: 13F. period is the quarter END; 13Fs are filed up to 45 days
   later, and this table does NOT record the filing date. Treating period as
   knowable is a 45-day lookahead. Prefer another input unless you lag it >=45d.
-- macro_series: FRED series keyed by name. Reaches back to 1947.
-- short_volume / sentiment_features: day is a 'YYYY-MM-DD' string, not an epoch.
+- macro_series: FRED series keyed by name. RETIRED 2026-10-22 (licence review):
+  no new rows, do not build on it.
+- short_volume: RETIRED 2026-10-22 (FINRA licence review): no new rows, do not
+  build on it. sentiment_features: day is a 'YYYY-MM-DD' string, not an epoch.
 
 MODEL OUTPUTS -- self-reference hazard, read this before using them
 scores(symbol_id, horizon, ts, score, components) 1.9M; composite_scores(
@@ -568,10 +570,9 @@ a wasted cycle.
   insider transactions 2008..2026, 609 symbols, with BOTH trade and disclosure
     dates (only the disclosure date is knowable in advance)
   SEC filings 2026-02..now ONLY, 903 symbols: 8-K, Form 4, 144, 424B2
-  short volume 2026-05-20..2026-07-31 ONLY, 1,040 symbols
   news headlines + daily sentiment aggregates 2012..now, ~700 symbols
-  StockTwits bullish/bearish counts
-  FRED macro series
+  RETIRED 2026-10-22 (licence review), do not use: short volume (FINRA),
+    StockTwits bullish/bearish counts, FRED macro series
   fundamentals as key/value (EPS, Revenues, SharesOutstanding, public float)
   13F institutional holdings by quarter (filed up to 45 days after period end)
   this system's own scores, rankings and expectancy tables -- usable, but a
