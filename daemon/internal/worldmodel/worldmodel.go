@@ -127,8 +127,8 @@ type Propagation struct {
 
 const graphNote = "Curated DIRECTIONAL causal graph: drivers → sectors → representative symbols. " +
 	"Edges encode a KNOWN sign and rationale (the direction of a well-established relationship), " +
-	"NOT learned or calibrated magnitudes. Driver states are classified from live FRED values against " +
-	"documented thresholds; a missing series stays 'unknown' rather than being fabricated. " +
+	"NOT learned or calibrated magnitudes. Driver states read 'unknown': they were classified from FRED " +
+	"values, whose licence terms do not permit this use (retired 22 Oct 2026), and none is fabricated. " +
 	"Use it as a reasoning scaffold, not a forecast."
 
 const propagationNote = "Deterministic shortest-path walk over the causal graph. Effects are DIRECTIONS only " +

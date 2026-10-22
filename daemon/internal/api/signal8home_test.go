@@ -220,13 +220,12 @@ func TestCalendarEndpoint(t *testing.T) {
 	if code := s8Get(t, srv.URL+"/api/calendar", &body); code != 200 {
 		t.Fatalf("status = %d", code)
 	}
-	if len(body.Econ) != 2 {
-		t.Fatalf("econ = %+v, want VIXCLS + DGS10", body.Econ)
+	// FRED was retired 22 Oct 2026 (licence): the stored VIXCLS/DGS10 rows
+	// seeded above must not be served, and the note must say why.
+	if len(body.Econ) != 0 {
+		t.Fatalf("econ = %+v, want empty: stored FRED rows are not served", body.Econ)
 	}
-	if body.Econ[0].Series != "VIXCLS" || body.Econ[0].Value != 18.5 || body.Econ[0].Label == "" {
-		t.Errorf("econ[0] = %+v", body.Econ[0])
-	}
-	if !strings.Contains(body.EconNote, "FRED") || !strings.Contains(body.EconNote, "no paid") {
+	if !strings.Contains(body.EconNote, "FRED") || !strings.Contains(body.EconNote, "licence") {
 		t.Errorf("econNote = %q", body.EconNote)
 	}
 

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
@@ -74,5 +78,22 @@ func TestLicenceRetiredWorkersAreNotWired(t *testing.T) {
 		if retired[w.Name()] {
 			t.Errorf("%s is still wired; its source was retired for licence reasons", w.Name())
 		}
+	}
+	// run() also appends workers inline and through ~40 other waves, so the
+	// constructors above are not the whole fleet. No source file of this
+	// package may construct a retired poller at all.
+	ctor := regexp.MustCompile(`pipeline\.(ShortVolPoller|ShortInterestPoller|CboePCPoller|FredPoller)\{`)
+	files, _ := filepath.Glob("*.go")
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil || strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		if m := ctor.Find(src); m != nil {
+			t.Errorf("%s constructs %s; its source was retired for licence reasons", f, m)
+		}
+	}
+	if len(files) < 5 {
+		t.Fatalf("scanned only %d files; the glob is broken", len(files))
 	}
 }

@@ -123,6 +123,37 @@ func TestPostmortemWorker_RegimeAttribution(t *testing.T) {
 	}
 }
 
+// FRED was retired 22 Oct 2026 (licence). A stored, stressed VIXCLS row is a
+// frozen value and must not stamp macro_event onto a new miss.
+func TestPostmortemWorker_IgnoresStoredVIX(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "pmvix.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close() //nolint:errcheck
+	sym, _ := st.UpsertSymbol(ctx, "CCC", md.Stocks, "")
+	if err := st.InsertMacro(ctx, "VIXCLS", 500, 40); err != nil { // stressed
+		t.Fatalf("macro: %v", err)
+	}
+	if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: 1000,
+		RawProb: 0.72, CalProb: 0.72, NUsed: 40, Components: `{"PressureScore":0.4}`}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 1000, -0.03); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	w := NewPostmortemWorker(st)
+	w.Now = func() time.Time { return time.Unix(5000, 0) }
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	recent, err := st.RecentPostmortems(ctx, 10)
+	if err != nil || len(recent) != 1 || recent[0].Primary == string(postmortem.ReasonMacroEvent) {
+		t.Fatalf("want one miss not attributed to macro_event, got %+v (err %v)", recent, err)
+	}
+}
+
 // CAL-N: a calibration bucket's rate is trusted only over minBucket pairs on
 // minBucketDays distinct days; forty symbols on one day are one market move.
 func TestCalibBucketsNeedDistinctDays(t *testing.T) {

@@ -8,11 +8,15 @@ package api
 // registered route literals so the omission fails CI instead of an audit.
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 )
 
@@ -72,12 +76,16 @@ func TestPublicRoutesNeverGoverned(t *testing.T) {
 
 func TestEveryRegisteredVendorRouteIsGoverned(t *testing.T) {
 	vendorHints := []string{"/bars", "/snaps", "/news", "/export/", "/tv-", "/stocktwits", "/crypto-perp", "/quote",
-		"/shorts", "/short-interest", "/cboe", "/macro-series"}
+		"/shorts", "/short-interest", "/cboe", "/macro-series", "/calendar", "/world-model"}
 	derivedExceptions := map[string]string{
-		"/api/chart-overlays": "annotations only: timestamp, marker, label, own score; no OHLC, volume or vendor price (see datalicense.go)",
-		"/api/news-trends":    "headline COUNTS per day and a z-score; no headline text, no publisher rows",
-		"/api/tv-status":      "tunnel reachability and webhook totals; no rating, quote or signal rows",
-		"/api/tv-webhook":     "inbound POST from TradingView; serves nothing",
+		"/api/calendar":              "EDGAR-derived earnings estimates only; the FRED econ prints were removed 22 Oct 2026 (TestCalendarEndpoint)",
+		"/api/world-model":           "curated causal graph; FRED no longer classifies the drivers (TestWorldModelServesNoStoredFRED)",
+		"/api/world-model/shocks":    "static shock list from the curated graph; no stored rows",
+		"/api/world-model/propagate": "walk over the curated graph; no stored rows",
+		"/api/chart-overlays":        "annotations only: timestamp, marker, label, own score; no OHLC, volume or vendor price (see datalicense.go)",
+		"/api/news-trends":           "headline COUNTS per day and a z-score; no headline text, no publisher rows",
+		"/api/tv-status":             "tunnel reachability and webhook totals; no rating, quote or signal rows",
+		"/api/tv-webhook":            "inbound POST from TradingView; serves nothing",
 	}
 	for path := range registeredAPIRoutes(t) {
 		vendor := false
@@ -98,6 +106,28 @@ func TestEveryRegisteredVendorRouteIsGoverned(t *testing.T) {
 				"RouteRedistributable reports it redistributable and 451 can never fire; either add it "+
 				"to RestrictedRoutes or, if it is genuinely derived analytics, add it to derivedExceptions "+
 				"with the reason", path)
+		}
+	}
+}
+
+// FRED was retired 22 Oct 2026 (licence). A stored VIXCLS row must not come
+// back as a driver's "live value" on /api/world-model.
+func TestWorldModelServesNoStoredFRED(t *testing.T) {
+	srv, st, d := newTestServer(t, func(c *config.Config) { c.PublicReads = true })
+	mux := http.NewServeMux()
+	d.registerDesk(mux)
+	srv.Config.Handler = d.secure(mux)
+	if err := st.InsertMacro(context.Background(), "VIXCLS", time.Now().Unix()-86400, 40); err != nil {
+		t.Fatal(err)
+	}
+	code, out := apiGET(t, srv, "/api/world-model")
+	drivers, _ := out["drivers"].([]any)
+	if code != 200 || len(drivers) == 0 {
+		t.Fatalf("world-model: %d %v", code, out)
+	}
+	for _, dr := range drivers {
+		if m, _ := dr.(map[string]any); m["known"] == true {
+			t.Errorf("driver classified from stored FRED: %v", m)
 		}
 	}
 }

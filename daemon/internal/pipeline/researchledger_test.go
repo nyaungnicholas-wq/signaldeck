@@ -169,11 +169,32 @@ func seedLedgerLabeled(t *testing.T, st *store.Store, sym md.Symbol, ts int64, v
 // inverse call over a balanced sample must RAISE the posterior above the
 // prior, write the experiment + 3 attack rows, and count one replication.
 func TestResearchLedgerGraderUpdatesPosterior(t *testing.T) {
-	ctx := context.Background()
 	st := newLedgerStore(t)
+	// Rows written before 22 Oct 2026 carry the FRED regime flag.
+	seedH002Window(t, st, map[string]float64{"vix_high_vol": 0})
+	runAndCheckH002Grade(t, st, 3)
+}
 
-	// 100 obs: 10 symbols × 10 calendar weeks, balanced up/down, inverse call
-	// correct 65% of the time. pressure<0 predicts up.
+// A window whose rows carry no vix_high_vol (its FRED source was retired on
+// 22 Oct 2026) has an UNOBSERVED regime: the grade must write no single-regime
+// row at all, rather than a calm-only penalty that moves the public posterior.
+func TestResearchLedgerSkipsRegimeAttackWithoutRegimeData(t *testing.T) {
+	st := newLedgerStore(t)
+	seedH002Window(t, st, nil)
+	ev := runAndCheckH002Grade(t, st, 2)
+	for _, e := range ev {
+		if e.Kind == rl.KindAttack && strings.HasPrefix(e.Note, "single-regime") {
+			t.Errorf("single-regime row written for a window with no regime data: BF %.2f %q", e.BF, e.Note)
+		}
+	}
+}
+
+// seedH002Window seeds 100 obs: 10 symbols × 10 calendar weeks, balanced
+// up/down, inverse call correct 65% of the time (pressure<0 predicts up).
+// extra keys are added to every vector.
+func seedH002Window(t *testing.T, st *store.Store, extra map[string]float64) {
+	t.Helper()
+	ctx := context.Background()
 	syms := make([]md.Symbol, 10)
 	for i := range syms {
 		s, err := st.UpsertSymbol(ctx, "T"+string(rune('A'+i)), md.Stocks, "")
@@ -201,11 +222,21 @@ func TestResearchLedgerGraderUpdatesPosterior(t *testing.T) {
 			fwd = 0.01
 		}
 		ts := base + int64(week)*weekSecs + int64(sIdx)
-		seedLedgerLabeled(t, st, syms[sIdx], ts, map[string]float64{
+		vec := map[string]float64{
 			"pressure_score": pressure, "comp_rsi": 0.005, // below H008's 0.02 trigger
-		}, fwd)
+		}
+		for k, v := range extra {
+			vec[k] = v
+		}
+		seedLedgerLabeled(t, st, syms[sIdx], ts, vec, fwd)
 	}
+}
 
+// runAndCheckH002Grade runs the ledger once over seedH002Window's rows, checks
+// the in-sample grade plus wantAttacks attack rows, and returns the evidence.
+func runAndCheckH002Grade(t *testing.T, st *store.Store, wantAttacks int) []rl.Evidence {
+	t.Helper()
+	ctx := context.Background()
 	w := NewResearchLedgerWorker(st)
 	w.MinNewObs = 50
 	w.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
@@ -247,8 +278,8 @@ func TestResearchLedgerGraderUpdatesPosterior(t *testing.T) {
 			attacks++
 		}
 	}
-	if exp != 1 || attacks != 3 {
-		t.Errorf("evidence = %d experiments + %d attacks, want 1 + 3", exp, attacks)
+	if exp != 1 || attacks != wantAttacks {
+		t.Errorf("evidence = %d experiments + %d attacks, want 1 + %d", exp, attacks, wantAttacks)
 	}
 
 	// Next day, NO new rows: the grader must write nothing (cursor discipline)
@@ -266,6 +297,7 @@ func TestResearchLedgerGraderUpdatesPosterior(t *testing.T) {
 	if len(ev2) != len(ev) {
 		t.Errorf("evidence grew with no new data: %d -> %d rows", len(ev), len(ev2))
 	}
+	return ev
 }
 
 // An anti-predictive fresh window must LOWER the posterior and count a

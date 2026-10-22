@@ -16,7 +16,7 @@
 // name heuristic that can pick the wrong page. Descriptive context only.
 //
 // Discipline mirrors the other ingest clients: declarative User-Agent,
-// mutex-serialized min-interval pacing (default 200ms), request timeout,
+// mutex-serialized min-interval pacing (default 250ms), request timeout,
 // graceful degradation everywhere.
 package wikimedia
 
@@ -41,11 +41,12 @@ const (
 	// defaultMinInterval spaces requests, one at a time. Wikimedia's rate
 	// limits page (checked 22 Oct 2026) allows an unauthenticated client with a
 	// descriptive User-Agent fewer than 5 req/s, at most 200 req/min and 3
-	// concurrent requests. 200ms sits at the per-second ceiling (request latency
-	// keeps the real rate below it), and a wiki-attention run makes at most ~60
-	// requests, so the per-minute cap is never reached. The User-Agent is
-	// edgar.ResolveUA(): SignalDeck/0.1 plus SIGNALDECK_CONTACT_EMAIL.
-	defaultMinInterval = 200 * time.Millisecond
+	// concurrent requests. 250ms is at most 4 req/s, under the per-second
+	// limit with no reliance on request latency, and a wiki-attention run makes
+	// at most ~60 requests, so the per-minute cap is never reached. The
+	// User-Agent is edgar.ResolveUA(): SignalDeck/0.1 plus
+	// SIGNALDECK_CONTACT_EMAIL.
+	defaultMinInterval = 250 * time.Millisecond
 )
 
 // ErrNotFound means the article has no pageview data (unknown title or no

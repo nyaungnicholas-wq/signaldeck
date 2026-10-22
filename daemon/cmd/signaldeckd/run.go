@@ -1012,11 +1012,8 @@ func perSymbolWorkers(st *store.Store) []workers.Worker {
 
 // ─────────────────────────────────────────────────────────────────────────
 // FREE-DATA WAVE / STAGE 2 (appended block).
-// freeDataWorkers returns the wave's two zero-cost, no-vendor context workers:
-//   - fred-poller (6h): pulls the FRED macro set (VIXCLS/DGS10/T10Y2Y/DFF) via
-//     the KEYLESS CSV endpoint so it always runs; an optional
-//     SIGNALDECK_FRED_KEY switches the client to the JSON API. Feeds
-//     macro_series (LatestMacro / LatestVIX) for the Stage-6 feature layer.
+// freeDataWorkers returns the wave's one zero-cost, no-vendor context worker
+// (fred-poller left on 22 Oct 2026, see below):
 //   - edgar-fetcher (24h): pulls SEC EDGAR company-facts (Revenues/EPS/shares/
 //     latest-filing) for the equity universe, rate-limited (<=10 req/s) with a
 //     descriptive User-Agent and 429/503 backoff, sweeping the universe over
@@ -1189,8 +1186,8 @@ func anomalyWorkers(st *store.Store) []workers.Worker {
 // for members with zero daily bars — a single free multi-symbol request at
 // most. Once registered, the regular universe-poller refreshes them with the
 // rest of the daily universe, so the steady-state run is a no-op sweep.
-// BTC and VIX complete the strip in the API layer (/api/tape) from crypto
-// bars + the stored FRED VIXCLS series — no equity seeding needed for them.
+// BTC completes the strip in the API layer (/api/tape) from crypto bars while
+// crypto is active; VIX (FRED) left the strip on 22 Oct 2026.
 // Without Alpaca keys the worker still registers the symbols and reports
 // honestly that it cannot backfill.
 func tapeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []workers.Worker {

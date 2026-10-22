@@ -228,12 +228,17 @@ var RestrictedRoutes = map[string]string{
 	// push socket instead of a poll. Found 2026-09-20 by the route scan
 	// (TestEveryRegisteredVendorRouteIsGoverned); a second door for the same
 	// vendor rows with no policy on it, exactly the shape the CSV exports had.
-	"/api/stream/snaps":        "cryptolive",
+	"/api/stream/snaps": "cryptolive",
 	// Retired 22 Oct 2026 (licence): these serve only rows stored before then.
-	"/api/shorts":              "finra",
-	"/api/short-interest":      "finra",
-	"/api/cboe-pc":             "cboe",
-	"/api/macro-series":        "fred",
+	"/api/shorts":         "finra",
+	"/api/short-interest": "finra",
+	"/api/cboe-pc":        "cboe",
+	"/api/macro-series":   "fred",
+	// /api/scenario fits a symbol's beta to a stored FRED series (VIXCLS by
+	// default); it has no non-FRED factor to fall back to. /api/calendar,
+	// /api/world-model, /api/recommendation and /api/options/vol-edge mixed
+	// FRED into other data, so their FRED parts were removed instead.
+	"/api/scenario":            "fred",
 	"/api/tv-quote":            "tvscanner",
 	"/api/tv-rating":           "tvscanner",
 	"/api/tv-signals":          "tvscanner",
