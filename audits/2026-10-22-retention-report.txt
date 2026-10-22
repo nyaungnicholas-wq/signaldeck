@@ -12,28 +12,23 @@ RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/c
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/codex-integrity-tests-20260906.log 45d 139
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/codex-web-build-20260906.log 45d 5111
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon-audit-0802.log 80d 118856
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon-restart.err.log 79d 5439
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon-restart.out.log 79d 23
+RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon-restart.err.log 80d 5439
+RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon-restart.out.log 80d 23
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon.err.log 84d 222910
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/daemon.out.log 84d 3887
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/deploy-f7ad531.log 41d 19239
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/docs_build.log 78d 181
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.20260731-dead500.log 81d 137105
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.20260803-002542.err 79d 0
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.20260803-002542.log 79d 1469
+RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.20260803-002542.err 80d 0
+RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.20260803-002542.log 80d 1469
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.err 80d 0
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-console.log 66d 1658071
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-events.jsonl 66d 1456881
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/eighty-research.md 66d 5674228
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/fix-task-settings-20260901.log 48d 1610
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/hud.err.log 65d 0
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/hud.out.log 65d 0
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/loop-console.err 82d 165846
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/loop-console.log 82d 17684
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/mcp_audit.jsonl 86d 1046
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/ots-stamp.log 48d 130
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/overnight.jsonl 75d 3133
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/overnight.md 75d 20379
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/phase2-sentiment.log 73d 2244
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/phase2.err.log 88d 0
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/phase2.out.log 88d 0
@@ -41,7 +36,7 @@ RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/r
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/schedule.err.log 93d 0
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/signaldeckd.log.3.gz 65d 651145
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tickstream.err.log 84d 292234
-RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tickstream.out.log 83d 5601068
+RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tickstream.out.log 84d 5601068
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tickstream.out.log.1.gz 84d 1422545
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tickstream.out.log.2.gz 86d 5535485
 RETENTION would-remove /c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/tunnel.log 32d 0
@@ -53,4 +48,4 @@ RETENTION would-remove /c/Users/Nicholas_N/.Trash/signaldeck-20260904-131006.db.
 RETENTION would-remove /c/Users/Nicholas_N/.Trash/signaldeck-20260918-131009.db 33d 6453760000
 RETENTION would-remove /c/Users/Nicholas_N/.Trash/signaldeck-20260918-131009.db.sha256 33d 96
 RETENTION would-remove /c/Users/Nicholas_N/.Trash/signaldeck-20260918-194544.db 33d 6523744256
-RETENTION mode=report logs=49 holding=5 bytes=18645012212
+RETENTION mode=report logs=44 holding=5 bytes=18637856545
