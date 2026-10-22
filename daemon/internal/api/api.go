@@ -546,13 +546,24 @@ func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 
 // ── basic ───────────────────────────────────────────────────────────────
 
+// healthReadBudget bounds the reads behind /api/health, well inside the
+// api-probe's 10s client timeout.
+const healthReadBudget = 4 * time.Second
+
 func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// schemaContract: workers the daemon REFUSED to register at boot because
 	// the database lacks a table/column they read or write. Non-empty means
 	// those workers are not running AND were never going to record anything —
 	// surfaced here so the absence is not mistaken for a healthy quiet fleet.
 	refusals := map[string][]string{}
-	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
+	// BOUNDED READS (2026-10-11). The api-probe gives up at 10s, and twice that
+	// day these two reads stalled ~10s on the read pool, so the probe filed
+	// "listener unreachable" while the daemon was answering everything else and
+	// the stall's cause was logged nowhere. A health answer must come back fast;
+	// a read that cannot finish in time is itself the degradation to report.
+	hctx, hcancel := context.WithTimeout(r.Context(), healthReadBudget)
+	defer hcancel()
+	if raw, err := d.St.GetMeta(hctx, store.SchemaContractMetaKey); err == nil && raw != "" {
 		// A CORRUPT BLOB IS NOT AN EMPTY ONE. Discarding this error made
 		// /api/health report schemaContract:{} -- "no worker was refused at
 		// boot" -- from a value nobody could parse, and the whole point of the
@@ -568,7 +579,18 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// had failed 43 times that day (tickstream down) and hud-sync 26 (trader-hud
 	// down). Any monitor pointed here reported 100% uptime through both. A
 	// health endpoint that cannot go unhealthy is decoration.
-	failing, werr := d.failingWorkers(r.Context())
+	failing, werr := d.failingWorkers(hctx)
+	if werr == nil && hctx.Err() != nil {
+		// The schema-contract read above drops its error by design (absent key
+		// = no refusals), so a read that ran out of budget must not pass as a
+		// clean answer.
+		werr = fmt.Errorf("health reads exceeded %s: %w", healthReadBudget, hctx.Err())
+	}
+	if werr != nil && !d.isOperator(r) {
+		// The operator branch below logs this too; the anonymous answer only
+		// says degraded, so without this line the cause was never recorded.
+		slog.Warn("health: worker fleet unreadable (anonymous probe)", "err", werr)
+	}
 
 	// Off-machine alert delivery. A local Windows toast is built in and always
 	// available, but it only reaches someone sitting at this desk — and the

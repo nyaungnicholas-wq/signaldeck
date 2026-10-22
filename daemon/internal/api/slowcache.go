@@ -112,6 +112,19 @@ func noteRebuildFailure(what string, err error) {
 	slog.Warn("cache rebuild failed; serving the stale copy", "cache", what, "err", err)
 }
 
+// renderFailure names why a background render produced no body: the refresh
+// context's own error when it has one, else the status the handler answered
+// (the handler logs its cause on the line before, e.g. "request failed").
+func renderFailure(ctxErr error, status int) error {
+	if ctxErr != nil {
+		return ctxErr
+	}
+	if status == http.StatusOK {
+		return errors.New("handler answered 200 with an empty body")
+	}
+	return fmt.Errorf("handler answered HTTP %d (its cause is logged just above)", status)
+}
+
 var coldBuildSlots = make(chan struct{}, maxConcurrentColdBuilds)
 
 // acquireColdSlot queues up to coldBuildWait for permission to run a cold
@@ -615,22 +628,25 @@ func newSWRBodyCache(ttl time.Duration) *swrBodyCache {
 }
 
 // render runs the handler against a throwaway recorder and returns the body,
-// or nil when the handler answered non-200 (errors must never be pinned).
-func swrRender(r *http.Request, h http.HandlerFunc) (body []byte) {
+// or nil when the handler answered non-200 (errors must never be pinned). The
+// status comes back too so a failed rebuild can say what the handler answered:
+// the refresh context is usually still live then, and logging only its Err()
+// printed err=<nil> for every failed rebuild (2026-10-11, swrbody:st2|screener).
+func swrRender(r *http.Request, h http.HandlerFunc) (body []byte, status int) {
 	// A background render has no withRecover above it: a panic here would end
 	// the daemon, so it ends the render instead.
 	defer func() {
 		if p := recover(); p != nil {
 			slog.Error("cache render panicked", "path", r.URL.Path, "panic", p, "stack", string(debug.Stack()))
-			body = nil
+			body, status = nil, http.StatusInternalServerError
 		}
 	}()
 	rec := &bodyRecorder{ResponseWriter: &discardResponseWriter{header: http.Header{}}}
 	h(rec, r)
 	if rec.status == 0 || rec.status == http.StatusOK {
-		return rec.buf
+		return rec.buf, http.StatusOK
 	}
-	return nil
+	return nil, rec.status
 }
 
 // serve returns the cached body for key, rendering via h when cold and
@@ -740,12 +756,12 @@ func (c *swrBodyCache) refresh(parent context.Context, bg *http.Request, e *swrB
 
 	bctx, cancel := context.WithTimeout(parent, detachedBuildTimeout)
 	defer cancel()
-	nb := swrRender(bg.WithContext(bctx), h)
+	nb, status := swrRender(bg.WithContext(bctx), h)
 	if nb == nil {
 		c.mu.Lock()
 		e.rebuilding = false
 		c.mu.Unlock()
-		noteRebuildFailure("swrbody:"+key, bctx.Err())
+		noteRebuildFailure("swrbody:"+key, renderFailure(bctx.Err(), status))
 		return
 	}
 	at := time.Now() // persisted before rebuilding clears: see swrCache.refresh
