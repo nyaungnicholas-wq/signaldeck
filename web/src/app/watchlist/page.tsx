@@ -7,6 +7,7 @@ import { fmtPrice } from "@/lib/format";
 import { Reveal, Spark, StatTile, PageHero, DeltaBadge } from "@/components/ui/Kit";
 import MemberWatchlist from "@/components/MemberWatchlist";
 import { useIsMember } from "@/hooks/useMe";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 
 // A MEMBER gets MemberWatchlist: this page's cards are built from closes,
 // sparks and day change, which the member tier strips (vendor-licensed), and its
@@ -218,13 +219,18 @@ function WatchlistCard({
       {isUndo ? (
         <div className="flex items-center justify-center h-full gap-2">
           <span style={{ color: "var(--ask)" }}>removed</span>
-          <button
-            onClick={onUndo}
-            className="chip px-3 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
-            style={{ color: "var(--accent)" }}
-          >
-            undo
-          </button>
+          {/* No undo for a crypto row: re-subscribing crypto is refused while it is paused. */}
+          {row.market === "crypto" ? (
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>{CRYPTO_PAUSED_LABEL}</span>
+          ) : (
+            <button
+              onClick={onUndo}
+              className="chip px-3 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
+              style={{ color: "var(--accent)" }}
+            >
+              undo
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -303,20 +309,21 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
   const matches = useMemo(() => {
     if (!query || !screenerData) return [];
     const q = query.toLowerCase();
+    // Stocks only: crypto is paused (no licensed data).
     return screenerData
       .filter(
         (r) =>
-          r.symbol.toLowerCase().includes(q) ||
-          r.name?.toLowerCase().includes(q)
+          r.market === "stocks" &&
+          (r.symbol.toLowerCase().includes(q) || r.name?.toLowerCase().includes(q))
       )
       .slice(0, 8);
   }, [query, screenerData]);
 
-  const add = async (symbol: string, market: "crypto" | "stocks") => {
+  const add = async (symbol: string) => {
     setPending(symbol);
     setError(null);
     try {
-      await api.subscribe(symbol, market);
+      await api.subscribe(symbol, "stocks");
       setQuery(""); // clearing the query empties `matches` — it is derived now
       refetch();
     } catch (e: unknown) {
@@ -367,7 +374,7 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
                 </div>
               )}
               <button
-                onClick={() => add(m.symbol, m.market)}
+                onClick={() => add(m.symbol)}
                 disabled={pending === m.symbol}
                 className="chip px-2 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.1)] disabled:opacity-50"
               >

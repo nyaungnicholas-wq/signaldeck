@@ -7,13 +7,14 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { CRYPTO_PAUSED_DATE } from "@/lib/cryptoPause";
 
 const KNOWN_AGENTS: { name: string; role: string }[] = [
-  { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
+  { name: "crypto-live", role: `retired ${CRYPTO_PAUSED_DATE} (crypto paused): last runs kept as history` },
   { name: "stock-streamer", role: "Alpaca IEX live minute bars" },
   { name: "backfiller", role: "pulls 2y history for new symbols" },
   { name: "backfill-reconciler", role: "re-enqueues under-covered symbols (self-healing)" },
-  { name: "crypto-bars", role: "refreshes Kraken OHLC" },
+  { name: "crypto-bars", role: `retired ${CRYPTO_PAUSED_DATE} (crypto paused): last runs kept as history` },
   { name: "stock-bars", role: "tops up official daily stock bars" },
   { name: "downsampler", role: "1m→1h rollups + retention" },
   { name: "signal-runner", role: "recomputes pressure scores" },

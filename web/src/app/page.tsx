@@ -10,6 +10,7 @@ import CountUp from "@/components/landing/CountUp";
 import HashChain from "@/components/landing/HashChain";
 import Marquee from "@/components/landing/Marquee";
 import SignupCTA from "@/components/landing/SignupCTA";
+import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import "@/components/landing/landing.css";
 
 /**
@@ -445,7 +446,14 @@ function LiveRecord({ live }: { live: Live }) {
                 return (
                   <Fragment key={key}>
                     <tr style={{ borderTop: "1px solid var(--border)" }}>
-                      <td className="py-2 pr-4">{rowLabel(r)}</td>
+                      <td className="py-2 pr-4">
+                        {rowLabel(r)}
+                        {isCryptoPredictor(r.predictor) && (
+                          <span className="block text-xs" style={{ color: "var(--faint)" }}>
+                            {CRYPTO_PAUSED_LABEL}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 pr-4">
                         <span
                           className="chip mono"

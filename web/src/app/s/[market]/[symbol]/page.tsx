@@ -64,7 +64,6 @@ import PatternPopup from "@/components/symbol/PatternPopup";
 import { type IndicatorId } from "@/components/symbol/indicators";
 import PressurePanel from "@/components/symbol/PressurePanel";
 import ExpectancyPanel from "@/components/symbol/ExpectancyPanel";
-import MicroPanel from "@/components/symbol/MicroPanel";
 import InsightsPanel from "@/components/symbol/InsightsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
@@ -971,9 +970,7 @@ function OperatorSymbolPage({
             </div>
           )}
 
-          {market === "crypto" && detail?.latestSnap && (
-            <MicroPanel symbol={symbol} market={market} snap={detail.latestSnap} />
-          )}
+          {/* MicroPanel (crypto order book) is not mounted: crypto paused since 22 October 2026. */}
 
           {detail && (
             <CoveragePanel symbol={symbol} market={market} coverage={detail.coverage ?? {}} />

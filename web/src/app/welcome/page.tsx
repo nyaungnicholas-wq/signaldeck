@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api, type Market } from "@/lib/api";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 import { ALERT_RULES } from "@/components/signals/alerts/rules";
 import { GOALS, applyGoal, markOnboarded, useGoal } from "@/lib/goal";
 
@@ -58,6 +59,8 @@ function CheckIcon() {
     </svg>
   );
 }
+
+const CRYPTO_PAUSED_MSG = `Stocks only: ${CRYPTO_PAUSED_LABEL}.`;
 
 export default function WelcomePage() {
   const router = useRouter();
@@ -125,8 +128,9 @@ export default function WelcomePage() {
     e.preventDefault();
     const s = sym.trim().toUpperCase();
     if (!s) return;
-    const market: Market = s.includes("/") ? "crypto" : mkt;
-    void addSymbol(s, market).then(() => setSym(""));
+    // A pair like BTC/USD is crypto, which is paused: say so, never subscribe it.
+    if (s.includes("/")) return setError(CRYPTO_PAUSED_MSG);
+    void addSymbol(s, mkt).then(() => setSym(""));
   }
 
   function finish() {
@@ -322,9 +326,9 @@ export default function WelcomePage() {
                   value={sym}
                   onChange={(e) => {
                     setSym(e.target.value);
-                    if (error) setError(null);
+                    setError(e.target.value.includes("/") ? CRYPTO_PAUSED_MSG : null);
                   }}
-                  placeholder={mkt === "crypto" ? "BTC/USD" : "AAPL"}
+                  placeholder="AAPL"
                   spellCheck={false}
                   autoComplete="off"
                   className="tnum min-h-[44px] w-32 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-3 text-sm uppercase text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"

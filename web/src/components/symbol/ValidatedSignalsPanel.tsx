@@ -37,6 +37,7 @@ import {
 import HelpTip from "@/components/HelpTip";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 
 /** Reading order: the validated edge first, the un-tradeable trends last. */
 const KIND_ORDER = [
@@ -53,9 +54,9 @@ const KIND_LABEL: Record<string, string> = {
   vol21: "VOLATILITY REGIME · 21d",
   vol63: "VOLATILITY REGIME · quarterly",
   liquidity21: "LIQUIDITY REGIME · 21d",
-  "liquidity21-crypto": "LIQUIDITY REGIME · 21d (crypto-measured)",
+  "liquidity21-crypto": `LIQUIDITY REGIME · 21d (crypto-measured · ${CRYPTO_PAUSED_LABEL})`,
   trend21: "TREND REGIME · 21d",
-  "trend21-crypto": "TREND REGIME · 21d (crypto-measured)",
+  "trend21-crypto": `TREND REGIME · 21d (crypto-measured · ${CRYPTO_PAUSED_LABEL})`,
   trend63: "TREND REGIME · quarterly",
 };
 
