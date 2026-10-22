@@ -202,6 +202,8 @@ test.describe("release smoke", () => {
     const body = page.locator("body");
     await expect(body).toContainText("AES-256-GCM");
     await expect(body).toContainText("Draft, pending legal review");
-    await expect(body).toContainText("creation time");
+    // The deletion record's own wording: "creation time" alone also matches the
+    // collected-data table, so it would pass with the record misdescribed.
+    await expect(body).toContainText("email address, username and creation time");
   });
 });
