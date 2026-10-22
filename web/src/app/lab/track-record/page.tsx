@@ -37,7 +37,7 @@ import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
 import HelpTip from "@/components/HelpTip";
 import { ledgerHeadline } from "@/lib/ledgerHeadline";
-import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
+import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -841,7 +841,14 @@ function RegimesLivePanel({
                 const e: RegimeKindRecord = kinds[k];
                 return (
                   <tr key={k} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td className="px-4 py-2">{k}</td>
+                    <td className="px-4 py-2">
+                      {k}
+                      {isCryptoPredictor(k) && (
+                        <span className="block text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                          {CRYPTO_PAUSED_LABEL}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2 text-right tnum">
                       {e.resolvedN.toLocaleString("en-US")}
                     </td>

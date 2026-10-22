@@ -8,7 +8,7 @@ test.describe("manual paper book", () => {
     // The first-run tour is a modal that swallows clicks; mark it seen like the other specs do.
     await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
     await loginAsSmokeUser(context);
-    const res = await context.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "BTC/USD", market: "crypto", side: "buy", qty: 0.001 } });
+    const res = await context.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "SPY", market: "stocks", side: "buy", qty: 1 } });
     expect([200, 409], `unexpected status ${res.status()}: ${await res.text()}`).toContain(res.status());
     if (res.status() === 200) { const body = await res.json(); expect(body.ok).toBe(true); expect(body.fill.Side).toBe("buy"); expect(body.fill.Cost).toBeGreaterThan(0); }
     const book = await context.request.get("/api/paper?strategy=manual");
@@ -16,15 +16,20 @@ test.describe("manual paper book", () => {
     const b = await book.json();
     expect(b.manual).toBe(true);
     expect(b.strategies).toContain("manual");
-    if (res.status() === 200) { expect(JSON.stringify(b.trades)).toContain("BTC/USD"); }
+    if (res.status() === 200) { expect(JSON.stringify(b.trades)).toContain("SPY"); }
     await page.goto("/lab/paper");
     await page.getByRole("button", { name: "MANUAL" }).click();
     await expect(page.getByText("MANUAL ORDER (SIMULATED)")).toBeVisible();
     await expect(page.getByRole("button", { name: "PLACE SIMULATED ORDER" })).toBeVisible();
   });
+  test("signed-in crypto order is refused (crypto paused since 22 October 2026)", async ({ context }) => {
+    await loginAsSmokeUser(context);
+    const res = await context.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "BTC/USD", market: "crypto", side: "buy", qty: 0.001 } });
+    expect(res.status(), await res.text()).toBe(422);
+  });
   test("anonymous order is refused", async ({ browser }) => {
     const ctx = await browser.newContext();
-    const res = await ctx.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "BTC/USD", market: "crypto", side: "buy", qty: 0.001 } });
+    const res = await ctx.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "SPY", market: "stocks", side: "buy", qty: 1 } });
     expect(res.status()).toBe(401);
     await ctx.close();
   });

@@ -3,10 +3,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "./cryptoPause.ts";
+import { CRYPTO_PAUSED_DATE, CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "./cryptoPause.ts";
 
 test("label carries the exact pause date", () => {
   assert.equal(CRYPTO_PAUSED_LABEL, "crypto paused since 22 October 2026");
+  // The agents page builds "retired <date>" from the date alone; it must be the same date.
+  assert.equal(CRYPTO_PAUSED_DATE, "22 October 2026");
 });
 
 test("crypto predictors and their #persist benchmarks match", () => {

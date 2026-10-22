@@ -7,6 +7,7 @@ import { fmtPrice } from "@/lib/format";
 import { Reveal, Spark, StatTile, PageHero, DeltaBadge } from "@/components/ui/Kit";
 import MemberWatchlist from "@/components/MemberWatchlist";
 import { useIsMember } from "@/hooks/useMe";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 
 // A MEMBER gets MemberWatchlist: this page's cards are built from closes,
 // sparks and day change, which the member tier strips (vendor-licensed), and its
@@ -218,13 +219,18 @@ function WatchlistCard({
       {isUndo ? (
         <div className="flex items-center justify-center h-full gap-2">
           <span style={{ color: "var(--ask)" }}>removed</span>
-          <button
-            onClick={onUndo}
-            className="chip px-3 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
-            style={{ color: "var(--accent)" }}
-          >
-            undo
-          </button>
+          {/* No undo for a crypto row: re-subscribing crypto is refused while it is paused. */}
+          {row.market === "crypto" ? (
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>{CRYPTO_PAUSED_LABEL}</span>
+          ) : (
+            <button
+              onClick={onUndo}
+              className="chip px-3 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
+              style={{ color: "var(--accent)" }}
+            >
+              undo
+            </button>
+          )}
         </div>
       ) : (
         <>

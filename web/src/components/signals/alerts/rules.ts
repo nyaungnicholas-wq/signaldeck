@@ -11,6 +11,8 @@
 // ruleFor() returns a generic entry that says out loud the rule is
 // unpublished, so open-ended kinds from newer daemons always render.
 
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
+
 export interface AlertRule {
   /** Chip label ("BREAKOUT"). */
   label: string;
@@ -97,7 +99,7 @@ export const ALERT_RULES: Record<string, AlertRule> = {
     rule: "z ≥ 2.5 vs its own baseline — trade imbalance",
     thresholds: [
       ...ANOMALY_BASE,
-      "stocks = volume-side PROXY (no order book on free stock data) — the alert says so verbatim; crypto order-book imbalance paused since 22 October 2026",
+      `stocks = volume-side PROXY (no order book on free stock data) — the alert says so verbatim; crypto order-book imbalance: ${CRYPTO_PAUSED_LABEL}`,
     ],
     known: true,
   },
