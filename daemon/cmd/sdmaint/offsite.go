@@ -311,7 +311,7 @@ func checkOwnerOnlyACL(icacls, user string) error {
 		}
 	}
 	want := strings.ToLower(user + ":(F)")
-	if len(aces) != 1 || !(aces[0] == want || strings.HasSuffix(aces[0], `\`+want) || strings.HasSuffix(aces[0], " "+want)) {
+	if len(aces) != 1 || (aces[0] != want && !strings.HasSuffix(aces[0], `\`+want) && !strings.HasSuffix(aces[0], " "+want)) {
 		return fmt.Errorf("key file access is not owner-only: %d entries %q", len(aces), aces)
 	}
 	return nil
