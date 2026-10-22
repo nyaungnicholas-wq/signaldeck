@@ -181,4 +181,23 @@ test.describe("release smoke", () => {
     await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
     expect(crashes.join(" | ")).toBe("");
   });
+
+  // Legal text guards. The Terms listed Kraken and Coinbase as live sources after
+  // crypto was paused, and nothing failed; the Privacy Notice must keep stating
+  // the backup encryption it promises and its draft status.
+  test("/terms names no retired crypto exchange", async ({ page }) => {
+    await page.goto("/terms");
+    const body = page.locator("body");
+    // Rendered first, so the negative checks below cannot pass on an empty page.
+    await expect(page.getByRole("heading", { name: "Data sources and third-party services" })).toBeVisible();
+    await expect(body).not.toContainText("Kraken");
+    await expect(body).not.toContainText("Coinbase");
+  });
+
+  test("/privacy states backup encryption and its draft status", async ({ page }) => {
+    await page.goto("/privacy");
+    const body = page.locator("body");
+    await expect(body).toContainText("AES-256-GCM");
+    await expect(body).toContainText("Draft, pending legal review");
+  });
 });

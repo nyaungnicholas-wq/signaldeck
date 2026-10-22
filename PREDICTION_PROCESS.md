@@ -66,8 +66,9 @@ live measurement backs it, and the citation is the proof. Where a row says
 
 ### Layer 0 — Ingest and validate
 
-Bars arrive from Alpaca (stocks, IEX free tier) and Kraken (crypto), plus
-keyless FRED macro series and SEC EDGAR filings. Before anything models them:
+Bars arrive from Alpaca (stocks, IEX free tier), plus SEC EDGAR filings. Kraken
+crypto bars stopped when crypto was paused (2026-10-22), and the keyless FRED
+macro series were retired 2026-10-22: licence review. Before anything models them:
 
 - `dq-auditor` gates staleness against `internal/marketcal`, so a market
   holiday is not read as a dead feed.
@@ -86,10 +87,12 @@ absent-when-unavailable rather than zero-filled:
 
 pressure components (trend/momentum/RSI/MACD/VWAP/RVOL/imbalance) · expectancy
 state key · regime label · cross-sectional rank percentile · news sentiment and
-`news_vol_z` · crypto microstructure from 1s snapshots · `vix_*` from FRED ·
-cross-sectional alpha sources (put/call, COT, short interest, funding rate,
-StockTwits, Wikipedia attention, TradingView reco) · candlestick and indicator
-signals · trend geometry.
+`news_vol_z` · cross-sectional alpha sources (COT, insider Form 4, Wikipedia
+attention, the operator's TradingView webhook alerts) · candlestick and
+indicator signals · trend geometry. No longer produced: crypto microstructure
+and funding rate (crypto paused 2026-10-22); StockTwits and TradingView reco
+(retired 2026-10-21/22); `vix_*` from FRED, put/call (Cboe), and short volume and
+short interest (FINRA) (retired 2026-10-22: licence review).
 
 The persisted vector is the training set. `pred_raw`, `pred_cal`, `gbm_prob`
 and `meanrev_prob` are excluded from `canonicalFeatureKeys` so no model can

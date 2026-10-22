@@ -45,6 +45,18 @@ solved by writing more of it.
 
 ## BLOCKING — legal
 
+### Release order for the 22 October 2026 legal pages (`fullfix/p4-legal`) — OPEN, 2026-10-22
+
+The updated /privacy and /terms describe work that lives on other branches. Do not merge or deploy `fullfix/p4-legal`, or run its web release, until every line below is true.
+
+1. `fullfix/p5-backup` is merged and deployed: off-site encryption and the deletion record (`daemon/internal/tombstone`). On 2026-10-22 both were uncommitted.
+2. The p5 upload refuses to run without a key. On 2026-10-22 it printed a warning and uploaded the backup UNENCRYPTED when no key was set (`ops/signaldeck-backup-offline.sh:448`, `ops/lib-offsite-gh.sh:84` on `fullfix/p5-backup`). If p5 keeps that fallback, replace "each copy is encrypted" on /privacy (Who else handles your data, Backups and deletion, Security) with "the backup job encrypts each copy (AES-256-GCM) on the operator's computer before upload when its key is present, and the operator checks that each new copy is encrypted".
+3. The key is configured, and the newest asset in the off-site GitHub release ends in `.enc`.
+4. `fullfix/p7-retire` is merged and deployed: FRED, FINRA and Cboe are unwired (this branch still wires them at `daemon/cmd/signaldeckd/run.go:1031`, `:1420`, `:1570`, `:1576`), and `/api/source-health` shows them paused.
+5. `fullfix/p2-crypto` is merged and deployed: crypto paused, open crypto forecasts voided.
+6. `fullfix/p6-retention` is merged and its daily job has run once (report-only is enough), because /privacy says a daily automated job checks the retention limits.
+7. Owner only: the Terms promise members an email before a material change takes effect. This update changes who the Terms bind, the data sources and the "Ask the data" wording. Send that email before the web release, or get counsel's answer that it is not needed (counsel packet version 3, decision 11).
+
 ### 1. No LICENSE file — CLEARED 2026-09-19
 `LICENSE` exists and is a Source-Available License, "Copyright (c) 2026
 Nicholas Nyaung. All rights reserved." A reader can now tell what they are
@@ -64,10 +76,11 @@ engineering check settles them.
 
 | source | how it is accessed | exposure |
 |---|---|---|
-| `tvscanner` | TradingView's public scanner endpoint, no account | automated access is against TradingView's terms; their ratings are their IP |
-| `stocktwits` | undocumented public JSON stream, no key | same class — tolerated for personal use, not a commercial supply chain |
-| `alpaca` | licensed market data | redistribution is prohibited by the agreement |
-| `edgar`, `fred`, `finra`, `cftc`, `cboe` | US government / public | genuinely free to use and redistribute |
+| `tvscanner` | TradingView's public scanner endpoint, no account | retired 2026-10-21/22 (no longer collected); was: automated access is against TradingView's terms; their ratings are their IP |
+| `stocktwits` | undocumented public JSON stream, no key | retired 2026-10-21/22 (no longer collected); was: tolerated for personal use, not a commercial supply chain |
+| `alpaca` | licensed market data | redistribution is prohibited by the agreement; derived-data consent is an open counsel question (2026-10-22) |
+| `edgar`, `cftc` | US government / public | free to access and reuse |
+| `fred`, `finra`, `cboe` | public websites | retired 2026-10-22: licence review (their terms do not allow this use) |
 
 SignalDeck is a bring-your-own-keys platform. The public surface serves derived analytics only (grades, the hash-chained ledger, the volatility record, calibration). No raw bar, quote, headline, or vendor rating leaves the host. The code already enforces this: every licensed raw route in `daemon/internal/datalicense/datalicense.go` `RestrictedRoutes` answers 451 on a published deployment; `BarsRedistributable()` is always false because every price feed in use is licensed; `SIGNALDECK_ALLOW_RAW_EXPORT` records an operator assertion and grants no right. This is a packaging decision, not a legal review, and `DATA_SOURCES.md` section "Not a legal review" still applies; if the platform is ever sold commercially, that paragraph is the trigger for a real one. A source-scan test (`TestEveryRegisteredVendorRouteIsGoverned`) now fails CI when a new `/api` route that looks like it serves vendor rows is not classified.
 
@@ -211,7 +224,7 @@ referred to does not exist, and picking a host is still an open decision.
 
 ### 6. Free-tier data — NOT A BLOCKER, corrected 2026-09-20
 
-The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which remain crypto-only. The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
+The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which were crypto-only (crypto paused 2026-10-22). The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
 
 ---
 

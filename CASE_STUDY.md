@@ -51,8 +51,8 @@ machinery caught me.
 
 ## What it is
 
-A Go daemon ingests live market data (Alpaca for US equities, a separate Go
-service for consolidated crypto order books), computes a decomposable score per
+A Go daemon ingests live market data (Alpaca for US equities; until crypto was
+paused on 2026-10-22, a separate Go service for consolidated crypto order books), computes a decomposable score per
 symbol and horizon, measures what usually happened next in comparable historical
 states, and **grades its own past predictions against realised returns**. A
 Next.js app serves the result. Everything lands in one SQLite database —
@@ -61,9 +61,12 @@ read them as a scale, not a running total.
 
 ```
 Alpaca REST + WebSocket ──┐
-Kraken OHLC ──────────────┼──▶ signaldeckd (Go, ~90 packages) ──▶ Next.js app
-TickStream (crypto L2) ───┘         SQLite · worker fleet           /accuracy
+SEC EDGAR · CFTC ─────────┼──▶ signaldeckd (Go, ~90 packages) ──▶ Next.js app
+Wikimedia · congress ─────┘         SQLite · worker fleet           /accuracy
 ```
+
+Kraken OHLC and TickStream (crypto L2) fed this until crypto was paused on
+2026-10-22; FRED, FINRA and Cboe were retired 2026-10-22: licence review.
 
 **Stack:** Go 1.26, Next.js 16 / React 19, SQLite, Python for the research and
 grading layer.
@@ -336,10 +339,10 @@ in. I would rather ship that than a number I can't defend.
 
 - **Live equity ticks are unverified.** The WebSocket connects, authenticates and
   subscribes; the market was closed during verification, so I have proven the
-  connection and not the flow. Live crypto ticks I have confirmed end to end.
+  connection and not the flow. Live crypto ticks were confirmed end to end before crypto was paused on 2026-10-22.
 - **Reconnection is code- and unit-tested, not demonstrated** against a real
   dropped stream.
-- **Microstructure features are crypto-only.** Alpaca's IEX feed covers ~2–3% of consolidated volume; order-book imbalance computed from it describes one venue, not the market. Daily bars used by all graded forecasts come from full-consolidated SIP on the free tier, so the limitation is intraday-only.
+- **Microstructure features were crypto-only, and crypto is paused (2026-10-22).** Alpaca's IEX feed covers ~2–3% of consolidated volume; order-book imbalance computed from it describes one venue, not the market. Daily bars used by all graded forecasts come from full-consolidated SIP on the free tier, so the limitation is intraday-only.
 - **Recovered delistings skew to 2021–2022** and only 40 are outright collapses.
   Better than 21 delistings; not equivalent to a paid survivorship-free vendor.
 - **Verdicts currently read "withheld"** because the rows were written by builds

@@ -36,13 +36,21 @@ export default function TermsPage() {
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
-          These Terms are an agreement between you and {OPERATOR_NAME} about your
-          use of SignalDeck (signaldeck.nicholasnyaung.com). Our{' '}
+          These Terms are an agreement between {OPERATOR_NAME} and each person
+          who holds an account on SignalDeck (signaldeck.nicholasnyaung.com).
+          They apply to account holders, who accept them when they create an
+          account. Our{' '}
           <Link href="/privacy" style={{ color: "var(--dim)", textDecoration: "underline" }}>
             Privacy Notice
           </Link>{' '}
-          explains how we handle personal information. You accept these Terms
-          when you create an account.
+          explains how we handle personal information.
+        </p>
+        <p
+          className="text-[0.85rem] leading-relaxed max-w-prose"
+          style={{ color: "var(--dim)" }}
+        >
+          If you browse without an account, you are not asked to accept
+          anything. The public pages are provided as-is, for information.
         </p>
       </section>
 
@@ -68,9 +76,6 @@ export default function TermsPage() {
           <li>
             The forecasts are the same for every reader, published on a regular
             schedule, and not tailored to anyone&rsquo;s finances or objectives.
-            The watchlist, journal grading and &ldquo;Ask the data&rdquo; work
-            only on what you enter yourself; they are not advice about your
-            finances.
           </li>
           <li>
             Using SignalDeck does not make us your adviser.
@@ -169,8 +174,10 @@ export default function TermsPage() {
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
-          Answers from &ldquo;Ask the data&rdquo; (when available) are generated
-          automatically. They may be wrong and are not advice.
+          &ldquo;Ask the data&rdquo; is switched off for member accounts. If it
+          is ever switched on, it gives general information about the data on
+          the site, not personalised advice. Its answers are generated
+          automatically and may be wrong.
         </p>
       </section>
 
@@ -183,25 +190,41 @@ export default function TermsPage() {
           style={{ color: "var(--dim)" }}
         >
           SignalDeck&rsquo;s figures are computed from third-party market and
-          public data, including Alpaca Markets, Kraken, Coinbase, Hyperliquid,
-          SEC EDGAR, FINRA, the CFTC, Cboe, STOCK Act disclosures, Wikimedia
-          and the Federal Reserve Bank of St. Louis (FRED).
+          public data: Alpaca Markets (US stock market data and news), SEC
+          EDGAR (filings, insider Form 4 reports, 13F holdings and company
+          facts), the CFTC (Commitments of Traders), Wikimedia (Wikipedia
+          page-view counts, CC0) and congressional trade disclosures.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
-          This product uses the FRED&reg; API but is not endorsed or certified
-          by the Federal Reserve Bank of St. Louis.{' '}
-          <a
-            href="https://fred.stlouisfed.org/docs/api/terms_of_use.html"
-            rel="noopener noreferrer"
-            target="_blank"
-            style={{ color: "var(--dim)", textDecoration: "underline" }}
-          >
-            FRED&reg; API Terms of Use
-          </a>
+          Congressional trades are disclosures made public under the STOCK
+          Act. We obtain them through third-party datasets: Kadoa&rsquo;s
+          public congress-trades file, and for older rows the House and
+          Senate Stock Watcher datasets. SignalDeck is free and
+          non-commercial: no ads, no fees and no sale of data.
         </p>
+        <p
+          className="text-[0.85rem] leading-relaxed max-w-prose"
+          style={{ color: "var(--dim)" }}
+        >
+          TradingView: member symbol pages embed TradingView&rsquo;s chart
+          widget, which your browser loads from TradingView. The operator also
+          sends alerts from his own TradingView account to SignalDeck by
+          webhook, used as one input to the forecasts.
+        </p>
+        <p
+          className="text-[0.85rem] leading-relaxed max-w-prose"
+          style={{ color: "var(--dim)" }}
+        >
+          No longer collected or used for new forecasts:
+        </p>
+        <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          <li>the TradingView scanner and StockTwits (retired 21&ndash;22 October 2026);</li>
+          <li>crypto market data (crypto paused since 22 October 2026; crypto history stays on the public record, and open crypto forecasts were voided, never deleted);</li>
+          <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review). Forecasts made before that date used FRED data.</li>
+        </ul>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
