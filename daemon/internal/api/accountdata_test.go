@@ -117,9 +117,10 @@ func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
 		t.Fatalf("operator self-delete: %d, want 403", code)
 	}
 	// Exactly one tombstone, for dora alone, holding only the id and the
-	// address hash: the wrong password and the refused operator wrote none.
+	// address and username hashes: the wrong password and the refused operator
+	// wrote none.
 	raw, _ = os.ReadFile(tombLog)
-	if want := `{"uid":` + strconv.FormatInt(u.ID, 10) + `,"email_sha256":"` + tombstone.EmailHash("dora@gmail.com") + `"}` + "\n"; string(raw) != want {
+	if want := `{"uid":` + strconv.FormatInt(u.ID, 10) + `,"email_sha256":"` + tombstone.EmailHash("dora@gmail.com") + `","username_sha256":"` + tombstone.UsernameHash("dora") + `"}` + "\n"; string(raw) != want {
 		t.Fatalf("tombstone log = %q, want %q", raw, want)
 	}
 }

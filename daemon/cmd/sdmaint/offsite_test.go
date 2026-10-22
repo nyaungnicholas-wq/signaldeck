@@ -174,3 +174,25 @@ func TestCheckOwnerOnlyACL(t *testing.T) {
 		}
 	}
 }
+
+// TestSealBindsTheHeaderAsAAD pins the format: every chunk is sealed with the
+// header bytes as additional data. Each header byte is also checked or part of
+// the nonce today, so no splice between files can show the AAD missing; open
+// the one chunk by hand instead (2026-10-22 review: dropping the AAD from both
+// seal and open passed every other test).
+func TestSealBindsTheHeaderAsAAD(t *testing.T) {
+	key := randBytes(32)
+	ct := sealBytes(t, key, []byte("pinned"))
+	hdr, body := ct[:sealHdrLen], ct[sealHdrLen:]
+	aead, err := newBackupAEAD(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := append(bytes.Clone(hdr[len(sealMagic)+1:]), 0, 0, 0, 0, 1) // prefix | counter 0 | last
+	if pt, err := aead.Open(nil, nonce, body, hdr); err != nil || string(pt) != "pinned" {
+		t.Fatalf("chunk 0 with the header as AAD: %q, %v", pt, err)
+	}
+	if _, err := aead.Open(nil, nonce, body, nil); err == nil {
+		t.Fatal("chunk 0 opened without the header as AAD: the header is not bound")
+	}
+}

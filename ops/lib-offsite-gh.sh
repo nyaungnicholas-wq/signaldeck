@@ -19,18 +19,26 @@ gh_offsite_file_size() {
 }
 
 # gh_offsite_sdmaint -> prints the path of bin/sdmaint(.exe), building it with
-# go when missing (moved here from restore-rehearsal.sh, which still uses it).
+# go when missing OR older than any daemon source (moved here from
+# restore-rehearsal.sh, which still uses it). Stale matters: the live binary
+# predated offsite-seal, so after a deploy every sealed upload and tombstone
+# replay would fail at "unknown subcommand" (2026-10-22 review). A failed
+# rebuild keeps the old binary (its unknown-subcommand guard fails closed).
 # Windows needs the .exe suffix or the binary is neither -x nor runnable.
 gh_offsite_sdmaint() {
     local root exe="" bin go
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac
     bin="$root/bin/sdmaint$exe"
-    if [ ! -x "$bin" ]; then
+    if [ ! -x "$bin" ] || [ -n "$(find "$root/daemon" \( -name '*.go' -o -name go.mod -o -name go.sum \) -newer "$bin" -print -quit 2>/dev/null)" ]; then
         go="$HOME/.local/go-sdk/go/bin/go"
         [ -x "$go" ] || go="$(command -v go || true)"
         if [ -n "$go" ] && [ -x "$go" ]; then
-            (cd "$root/daemon" && "$go" build -o "$bin" ./cmd/sdmaint) >/dev/null 2>&1
+            if (cd "$root/daemon" && "$go" build -o "$bin" ./cmd/sdmaint) >/dev/null 2>&1; then
+                touch "$bin" # go leaves an up-to-date binary unwritten; mark it checked
+            else
+                echo "sdmaint: rebuild failed; keeping the existing $bin if there is one" >&2
+            fi
         fi
     fi
     [ -x "$bin" ] || return 1

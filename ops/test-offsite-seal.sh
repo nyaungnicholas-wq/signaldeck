@@ -142,6 +142,24 @@ dl "$W/dl-g"
 check "sealed asset without a key is refused" "$([ "$rc" -ne 0 ] && echo refused)" "refused"
 check "and says no backup key is configured" "$(grep -c 'no backup key' "$W/err")" "1"
 
+echo "-- sdmaint rebuild ----------------------------------------------------"
+
+# h. The real gh_offsite_sdmaint, from a copy of the lib in a fake tree (its root
+# is that tree). The go stub sits where the lib looks first and, like go, leaves
+# an existing (up-to-date) binary unwritten.
+R="$W/root"; G="$HOME/.local/go-sdk/go/bin"; mkdir -p "$R/ops" "$R/daemon/cmd/sdmaint" "$R/bin" "$G"
+cp ops/lib-offsite-gh.sh "$R/ops/"
+printf '#!/bin/bash\necho "$*" >> "%s/go.calls"\n[ -e "$3" ] || { : > "$3"; chmod +x "$3"; }\n' "$W" > "$G/go"; chmod +x "$G/go"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) X=.exe ;; *) X= ;; esac
+B="$R/bin/sdmaint$X"; S="$R/daemon/cmd/sdmaint/main.go"; touch -d '2020-01-01' "$S"
+builds() { : > "$W/go.calls"; (. "$R/ops/lib-offsite-gh.sh"; gh_offsite_sdmaint) > "$W/sdm.out" 2>/dev/null; wc -l < "$W/go.calls" | tr -d ' '; }
+check "a missing binary is built" "$(builds)" "1"
+check "and its path is printed" "$(cat "$W/sdm.out")" "$B"
+check "a binary newer than every source is not rebuilt" "$(builds)" "0"
+touch -d '2021-01-01' "$B"; touch "$S"
+check "a binary older than a daemon source is rebuilt" "$(builds)" "1"
+check "and then counts as fresh (go left it unwritten)" "$(builds)" "0"
+
 echo "----------------------------------------------------------------------"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ] && echo "OFFSITE SEAL SELF-TEST OK"

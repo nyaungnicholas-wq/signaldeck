@@ -87,12 +87,18 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 	// restore replays the log (sdmaint replay-tombstones). No record, no
 	// delete. If the delete below then fails, the record stays and a replay
 	// errs toward erasing an account its owner asked to erase.
-	email, _, _, err := d.St.AccountEmail(ctx, uid)
+	// Keyed on the id AND the username whose password was just checked: a
+	// double-clicked delete must not record the account that took the id since.
+	email, ok, err := d.St.AccountEmailFor(ctx, uid, u.Username)
 	if err != nil {
 		httpInternal(w, err)
 		return
 	}
-	if err := tombstone.Append(uid, email); err != nil {
+	if !ok { // already gone, or the id now belongs to someone else
+		httpErr(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	if err := tombstone.Append(uid, u.Username, email); err != nil {
 		slog.Error("account delete refused: the deletion record could not be written", "uid", uid, "err", err)
 		httpErr(w, http.StatusInternalServerError, "your account could not be deleted right now and nothing was erased; please try again later")
 		return

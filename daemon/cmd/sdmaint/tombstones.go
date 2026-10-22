@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/tombstone"
@@ -28,6 +29,11 @@ func replayTombstones(args []string) error {
 	if *dbPath == "" || *logPath == "" || fs.NArg() > 0 {
 		return errors.New("usage: sdmaint replay-tombstones -db RESTORED.db [-log deletions.jsonl] [-apply]")
 	}
+	// store.Open creates a missing file: a mistyped -db would replay onto a
+	// fresh empty database and report "0 present", which reads as all clear.
+	if _, err := os.Stat(*dbPath); err != nil {
+		return fmt.Errorf("restored database: %w", err)
+	}
 	st, err := store.Open(*dbPath)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -42,11 +48,11 @@ func replayTombstones(args []string) error {
 		if err != nil || !ok {
 			return err
 		}
-		email, _, hasEmail, err := st.AccountEmail(ctx, e.UID)
+		email, _, err := st.AccountEmailFor(ctx, e.UID, u.Username)
 		if err != nil {
 			return err
 		}
-		if tombstone.EmailHash(email) != e.EmailSHA256 {
+		if tombstone.EmailHash(email) != e.EmailSHA256 || tombstone.UsernameHash(u.Username) != e.UsernameSHA256 {
 			return nil // the id now belongs to a different account
 		}
 		if u.IsAdmin {
@@ -55,8 +61,8 @@ func replayTombstones(args []string) error {
 		}
 		matched++
 		note := ""
-		if !hasEmail {
-			note = " (no address on this account: matched on uid alone)"
+		if email == "" {
+			note = " (no address on this account: matched on uid and username)"
 		}
 		if !*apply {
 			fmt.Printf("would delete uid=%d%s\n", e.UID, note)

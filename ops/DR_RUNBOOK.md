@@ -23,7 +23,7 @@ Survives (recovery inputs):
 
 | artifact | where |
 |---|---|
-| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256` — or, once a backup key exists (2026-10-22), `<backup>.db.gz.enc` (AES-256-GCM, `sdmaint offsite-seal`) + its `.sha256` + `deletions.jsonl.enc` (the account-deletion tombstone log) — newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.sha256'` or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
+| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256` — or, once a backup key exists (2026-10-22), `<backup>.db.gz.enc` (AES-256-GCM, `sdmaint offsite-seal`) + its `.sha256` + `deletions.jsonl.enc` (the account-deletion tombstone log) — newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.db.gz.enc' --pattern '*.sha256' --pattern 'deletions.jsonl.enc'` (a sealed `.enc` is then checked and opened as in section 2) or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
 | Source, ops scripts, the `.plist` files the task installer reads | GitHub: `nyaungnicholas-wq/signaldeck` |
 | External anchors, prereg chain head, accuracy registry | the public anchors repo (`anchors.log`, `prereg.log`, `accuracy_registry.json` in its git history) |
 
@@ -195,10 +195,11 @@ if (Test-Path $tomb) {
 } else { 'no tombstone log found: confirm no member ever deleted an account before skipping this' }
 ```
 
-A tombstone deletes an account only when BOTH its id and the SHA-256 of its
-stored email match, because `users.id` is reused. An account with no email
-(the legacy username-only accounts) matches on id alone; the dry run marks
-those lines, so read them before `-apply`. If you replayed the release's copy,
+A tombstone deletes an account only when its id, the SHA-256 of its stored
+email AND the SHA-256 of its username all match, because `users.id` is reused.
+For an account with no email (the username-only accounts) the username is
+what tells a reused id apart; the dry run marks those lines, so read them
+before `-apply`. If you replayed the release's copy,
 copy it to `%USERPROFILE%\.signaldeck\deletions.jsonl` so every later backup
 keeps carrying it.
 

@@ -44,6 +44,10 @@ set -uo pipefail
 
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_DIR="$SD/data/backups"
+# daemon/.env feeds this script as it feeds the daemon and the backup, in every
+# mode: SIGNALDECK_OFFSITE_DIR (below) or SIGNALDECK_TOMBSTONE_LOG (step 4) set
+# only there were ignored outside --from-github (2026-10-22 review).
+. "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
 
 # OFFSITE_DIR must resolve the SAME way ops/signaldeck-backup-offline.sh does,
 # or the rehearsal reads a different location than the backup wrote. That script
@@ -109,7 +113,6 @@ pick_newest() {
 . "$SD/ops/lib-offsite-gh.sh" # gh_offsite_* helpers, including the sdmaint lookup below
 SRC=""; SRC_LABEL="local"
 if [ "${1:-}" = "--from-github" ]; then # rehearse from the OFF-MACHINE copy (GitHub release asset), not the local dir (2026-09-07)
-  . "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
   GHDL="$(mktemp -d "${TMPDIR:-/tmp}/signaldeck-ghdl-XXXXXX")"; trap 'rm -rf "$GHDL"' EXIT
   SRC="$(gh_offsite_download_newest "${SIGNALDECK_OFFSITE_GH_REPO:-}" "$GHDL")" || { log "FAIL: could not download the newest GitHub backup release"; exit 1; }
   SRC_LABEL="github"; log "restore rehearsal: downloaded and checksum-verified $(basename "$SRC") from github ${SIGNALDECK_OFFSITE_GH_REPO:-}"
