@@ -210,9 +210,10 @@ export default function TermsPage() {
           style={{ color: "var(--dim)" }}
         >
           TradingView: member symbol pages embed TradingView&rsquo;s chart
-          widget, which your browser loads from TradingView. The operator also
-          sends alerts from his own TradingView account to SignalDeck by
-          webhook, used as one input to the forecasts.
+          widget, which your browser loads from TradingView. Alerts the
+          operator sends from his own TradingView account to SignalDeck by
+          webhook are stored for the record but are no longer used as a model
+          input since 22 October 2026 (licence review).
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"

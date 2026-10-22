@@ -44,8 +44,9 @@ func seedPredictable(t *testing.T, st *store.Store, symbol string, market md.Mar
 
 // FEATURE-VECTOR integration (featureVersion 5): fresh, gate-clearing
 // new-source data must ride the persisted vector as wiki_z and cot_spx_net.
-// StockTwits and TradingView data (retired 2026-10-21) and FINRA, Cboe and FRED
-// data (retired 22 Oct 2026) are still seeded below and must NOT appear.
+// StockTwits and TradingView data (retired 2026-10-21), FINRA, Cboe and FRED
+// data (retired 22 Oct 2026) and TradingView webhook alerts (retired
+// 2026-10-22) are still seeded below and must NOT appear.
 func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
@@ -82,6 +83,10 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 	if err := st.UpsertTVRating(ctx, store.TVRatingRow{
 		SymbolID: sym.ID, Ts: now.Unix() - 600, RecoAll: 0.4, Label: "buy",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	// TradingView webhook alert: fresh and directional (retired 2026-10-22).
+	if _, err := st.InsertTVSignal(ctx, store.TVSignal{Ticker: "NASDAQ:AAPL", Action: "buy", Ts: now.Unix() - 600}); err != nil {
 		t.Fatal(err)
 	}
 	// Market-wide: CBOE put/call (today) + COT E-mini S&P 500 (3 days old).
@@ -127,7 +132,7 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 			t.Fatalf("vec[%q] = %v, want %v (vec %+v)", k, got, want, vec)
 		}
 	}
-	for _, k := range []string{"stocktwits_bull_ratio", "tv_reco", "short_int_dtc", "short_vol_z",
+	for _, k := range []string{"stocktwits_bull_ratio", "tv_reco", "tv_webhook_signal", "short_int_dtc", "short_vol_z",
 		"pc_total", "vix_level", "vix_regime", "vix_high_vol"} {
 		if v, ok := vec[k]; ok {
 			t.Fatalf("retired source %q must not be built, got %v", k, v)
