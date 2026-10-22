@@ -2,7 +2,7 @@
 
 ## Project description
 
-SignalDeck is a self-grading market-research instrument. A Go daemon records market data for about 330 US stocks and a few crypto pairs, computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes are known, and later grades every forecast against realized prices. Verdicts are published including failures.
+SignalDeck is a self-grading market-research instrument. A Go daemon records market data for about 320 US stocks (crypto paused since 22 October 2026, history kept), computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes are known, and later grades every forecast against realized prices. Verdicts are published including failures.
 
 ## Audience and problem
 
@@ -15,11 +15,11 @@ Forecast accuracy claims can be difficult for a learner to evaluate when the ori
 
 ## Claims you may make
 
-- Provides public-facing evaluation and hash-chain verification pages on the local deployment. A publicly reachable hosted app is not yet established; confirm the live ledger count immediately before recording rather than quoting an old count.
+- Provides public evaluation and hash-chain verification pages at https://signaldeck.nicholasnyaung.com (hosted on one home PC behind a Cloudflare tunnel); confirm the live ledger count immediately before recording rather than quoting an old count.
 - Retired its own flagship directional model by a pre-registered auto-retire rule because its live record was worse than the majority-class baseline; retirement is permanent by design
-- Refuses to publish accuracy figures when the graded window contains collapsed cross-sections (days when the model gave the whole universe a handful of distinct probabilities); the public pages say so plainly and show no figures until the window clears
+- Withholds accuracy figures when the evidence is unusable (collapsed cross-sections in 2026-07/08; since 2026-10-04 the SD-30 corrected-label window); the public pages say so plainly and show no figures until the window clears
 - Volatility forecast (HAR realized-variance model versus random walk and RiskMetrics EWMA) pre-registered on 2026-09-04 (chain sequence 105) and accruing a live record; needs 60 distinct trading days before any verdict; no skill is claimed
-- Paper trading is a clearly labelled simulation: a manual market-order book with a cost model, plus the platform's own model-driven books; no real money, no brokerage connection
+- Paper trading is a clearly labelled, operator-only simulation: a manual market-order book with a cost model, plus the platform's own model-driven books; no real money, no brokerage connection
 
 ## Claims you must not make
 
@@ -36,6 +36,8 @@ Forecast accuracy claims can be difficult for a learner to evaluate when the ori
 - FirstCommit deadline: September 30, 2026, 5:00 pm EDT (separate event; see the last section).
 
 ## Demonstration sequence
+
+Superseded on 2026-10-22: the current demo script, submission text and checklist are in the owner kit (`signaldeck-owner-kit/cac-2026/`, not in this repository). Member pages no longer include `/dashboard`, `/lab/paper` or `/lab/track-record` (operator-only); the sequence below is kept as history.
 
 1. **Landing page (/)** — Show the "publication refused" banner. Say: "This banner means the honesty machinery is working: the graded window has collapsed cross-sections, so no accuracy figures are published." ~15 seconds
 2. **/accuracy** — Show the refusal notice, the plain-English summary, and the dated historical record of the 2026-07-24 retirement (no figures). Say: "The grade was computed, but the publication gate withholds it until the evidence window clears." ~15 seconds
@@ -122,7 +124,7 @@ Do not assert that all code was personally reviewed or tested, or that AI did no
 | Auto-retire rule implemented and triggered 2026-07-24 | | |
 | Volatility forecast pre-registered 2026-09-04 (sequence 105) | | |
 | Paper trading simulation with manual and model-driven books | | |
-| Data ingestion: Alpaca IEX, Kraken/TickStream, FRED VIX, SEC EDGAR, FINRA short volume | | |
+| Data ingestion: Alpaca IEX, Kraken/TickStream, FRED VIX, SEC EDGAR, FINRA short volume (Kraken/TickStream, FRED and FINRA retired 2026-10-21/22) | | |
 | Windows Task Scheduler deployment | | |
 
 ### Commit authorship

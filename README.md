@@ -1,7 +1,7 @@
 # SignalDeck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.1 · **Last reviewed:** 2026-09-08
+> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-10-22
 > **Status:** ACTIVE — repository front page and orientation
 > **Scope:** What SignalDeck is, what it publishes, how to run it, what it does not claim.
 > **Authority:** `DOCS_INDEX.md` (which documents are current), `proofs/P10_FREEZE_LIFT.md` (the 2026-08-04 P0 freeze and its lift), `docs/PRODUCT_SPEC.md` (journeys and evidence contract)
@@ -15,16 +15,18 @@ including the failures. A Next.js web app is the lens on that record.
 
 Not an auto-trader. Not financial advice. A measuring instrument.
 
-## Status (2026-09-08)
+## Status (2026-10-22)
 
 | What | State | Where to check |
 |---|---|---|
 | Directional (up/down) forecasting | **Retired 2026-07-24** by a pre-registered auto-retire rule; retirement does not lapse | `/accuracy`, `proofs/P2_LIVE_RECORD_RECONCILIATION.md` |
-| Accuracy publication | **Refused** while the graded window holds collapsed cross-sections (2026-07-17 to 2026-08-06); no figure is printed anywhere until it clears | `/`, `/accuracy`, `GET /api/accuracy` |
-| Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing, 1 of 60 required trading days; no verdict | `/volatility` |
-| Prediction ledger | Hash-chained, ~500k entries (2026-09-13; grows ~4k/day), recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
+| Accuracy publication | Directional figures **withheld** (SD-30: the old label was partly realised at issue; a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors). Structural claims are backtested numbers still accruing live blocks; no live verdict yet | `/`, `/accuracy`, `GET /api/accuracy` |
+| Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing, 32 and 28 of the 60 required distinct trading days (two horizons, 2026-10-22); no verdict | `/volatility` |
+| Prediction ledger | Hash-chained, ~765k entries (2026-10-22; grows ~4k/day), recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
 | Forecast coverage | ~6–10% of symbols receive a forecast, by design: every measured leg that ranks backwards is dropped, never down-weighted | `/lab/forecasts` |
-| Paper trading | Simulation only: a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` |
+| Paper trading | Simulation only, operator-only (not shown to visitors or members): a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` (operator) |
+| Data sources | Crypto paused 2026-10-22 (no licensed source; history kept and labelled); TradingView scanner, StockTwits, FINRA short data, Cboe put/call and FRED retired 2026-10-21/22 after a data-licence review | `DATA_SOURCES.md`, `/api/source-health` |
+| Legal pages | Privacy Notice and Terms of Use published, marked "Draft, pending legal review" (updated 2026-10-22) | `/privacy`, `/terms` |
 | Freeze history | A P0 documentation freeze was declared and lifted on 2026-08-04; four documents stay marked NOT AUTHORITATIVE and are historical | `proofs/P0_FREEZE.md`, `proofs/P10_FREEZE_LIFT.md`, `DOCS_INDEX.md` |
 
 One publication decision governs every surface: `GET /api/accuracy` applies the grader's
@@ -174,13 +176,14 @@ calling web work done.
   60 s under heavy worker load.
 - **Intraday capture runs only while this host is on.** Minute bars for sessions it sleeps
   through are not backfilled; daily bars are polled separately and are complete.
-- **Publication is refused right now** and clears only as resolved days accrue; nothing here
-  can or should hurry it.
+- **Directional figures are withheld right now** (SD-30) and return only as the corrected
+  window accrues resolved days; nothing here can or should hurry it.
 - **No demonstrated forecasting edge.** Every directional predictor tested has failed against
-  its own baseline; the volatility test has 1 of 60 required days. No return, Sharpe or
+  its own baseline; the volatility test has 32 of 60 required days (2026-10-22). No return, Sharpe or
   profitability figure exists in this product and none may be quoted from it.
-- **Congress trade feeds** depend on volunteer mirrors and a daily JSON fallback; the stored
-  history is served when both are down.
+- **Congress trade feeds**: the volunteer House/Senate Stock Watcher mirrors are offline, so
+  Kadoa's public file is the live source (its licence is an open question for counsel); the
+  stored history is served when it is down.
 - **External timestamps start on 2026-09-30.** The anchors repository,
   [github.com/nyaungnicholas-wq/signaldeck-anchors](https://github.com/nyaungnicholas-wq/signaldeck-anchors),
   is public since 2026-10-04. Since 2026-09-30 each publish commits a statement of the
