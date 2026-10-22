@@ -15,7 +15,7 @@ import (
 // the classification is deterministic regardless of the live clock: a newest
 // day older than its 3-day budget must produce exactly one source_stale dq
 // event, and a second run the same day must NOT duplicate it. crypto_perp is
-// seeded stale too, but crypto is paused (2026-10-21), so it must stay silent.
+// seeded stale too, but crypto is paused (2026-10-22), so it must stay silent.
 func TestSourceAuditorFlagsStaleAndDedups(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "sa.db"))
 	if err != nil {

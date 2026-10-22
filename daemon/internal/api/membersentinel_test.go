@@ -92,6 +92,7 @@ const (
 	sntBid, sntAsk             = 5551.19731, 5552.29731
 	sntMid, sntWMid            = 5551.74731, 5551.84731
 	sntMark, sntOI             = 4441.17731, 4417731.0
+	sntVIX, sntPCPutVol        = 6337.13731, 7317731.0 // retired FRED macro and Cboe put/call (22 Oct 2026)
 )
 
 type sentinel struct {
@@ -122,6 +123,8 @@ func vendorSentinels() []sentinel {
 		num("StockTwits counts", sntTwBull, sntTwBear),
 		num("crypto book", sntBid, sntAsk, sntMid, sntWMid),
 		num("Hyperliquid perp", sntMark, sntOI),
+		num("FRED macro series", sntVIX),
+		num("Cboe put/call", sntPCPutVol),
 		{"news headline text", []string{"SNTL_HEADLINE_Q9", "SNTL_PUBLISHER_Q9", "SNTL_NEWS_URL"}},
 		{"TradingView label", []string{"SNTL_TVRATING"}},
 		{"provider error text", []string{"SNTL_DQ_SECRET", "127.0.0.1:8321"}},
@@ -322,6 +325,9 @@ func seedSentinels(t *testing.T, st *store.Store, variant int) sentinelFixture {
 		Mid: sntMid, WMid: sntWMid, Spread: sntAsk - sntBid}))
 	must(st.InsertCryptoPerp(ctx, store.CryptoPerpRow{SymbolID: fx.sntc.ID, Ts: now, Funding: 0.0001,
 		OpenInterest: sntOI, MarkPx: sntMark}))
+	must(st.InsertMacro(ctx, "VIXCLS", day, sntVIX))
+	must(st.UpsertCboePC(ctx, store.CboePCRow{Day: time.Unix(day, 0).UTC().Format("2006-01-02"), TotalPC: 0.9,
+		PutVol: sntPCPutVol, CallVol: 8e6, TotalVol: sntPCPutVol + 8e6}))
 	// A stale-feed event drops calls minted on its trading day, so it must sit on
 	// `day` (as `now` did before the floor above), never on a floored call day.
 	dqTs := now
@@ -802,7 +808,7 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 	// POSITIVE CONTROL. The same scanner over the operator's view of the same
 	// store must find every sentinel class; otherwise the seed is not reaching
 	// the handlers (or the scanner is blind) and a clean scan means nothing.
-	// Mixed routes carry most classes. TradingView, StockTwits and Hyperliquid
+	// Mixed routes carry most classes. TradingView, StockTwits, Hyperliquid, FRED and Cboe
 	// rows reach no route but their own licence-governed one, which answers
 	// 451 to everyone on a published box, the operator included; those are
 	// read through the bare route mux (d.routes, no middleware) instead.
@@ -823,6 +829,8 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		{"/api/tv-quote?symbol=SNTL&market=stocks", true},
 		{"/api/stocktwits?symbol=SNTL&market=stocks", true},
 		{"/api/crypto-perp?symbol=SNTC/USD&market=crypto", true},
+		{"/api/macro-series?series=VIXCLS", true},
+		{"/api/cboe-pc", true},
 	} {
 		var code int
 		var body string

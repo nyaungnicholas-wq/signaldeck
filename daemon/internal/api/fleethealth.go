@@ -243,18 +243,17 @@ func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 	// status='error', never once successful, reported healthy here and absent
 	// from data/health.json at the same time.
 	statuses := map[string][]string{}
-	for _, run := range runs {
+	// Resolved ONCE and shared by the fleet filter and both rules below: the
+	// failing check needs it to recognise stream ingestors, and the staleness
+	// check needs it for cadence. One source, so the verdicts cannot disagree
+	// about what a worker is. Retired workers (rows, no registration) are not
+	// judged at all; see currentFleetRuns.
+	declared := d.declaredIntervals()
+	for _, run := range currentFleetRuns(runs, declared) {
 		starts[run.Worker] = append(starts[run.Worker], run.StartedAt)
 		statuses[run.Worker] = append(statuses[run.Worker], run.Status)
 	}
 	sys.TotalWorkers = len(starts)
-	// Resolved ONCE and shared by both rules below: the failing check needs it to
-	// recognise stream ingestors, and the staleness check needs it for cadence.
-	// One source, so the two verdicts cannot disagree about what a worker is.
-	var declared map[string]time.Duration
-	if d.WorkerIntervals != nil {
-		declared = d.WorkerIntervals()
-	}
 	longRunning := make(map[string]bool, len(declared))
 	for n, iv := range declared {
 		if iv <= 0 {
@@ -265,8 +264,9 @@ func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 
 	// Cadence comes from the worker's DECLARED interval when the fleet is
 	// wired, and only falls back to inferring one from observed gaps when it is
-	// not (tests, minimal wirings, or a name in worker_runs that is no longer a
-	// registered worker).
+	// not (tests, minimal wirings, the startup window before runner.Add). A name
+	// in worker_runs that is no longer registered never reaches here once the
+	// fleet is wired: currentFleetRuns dropped it above.
 	//
 	// Inference alone was wrong here. A restart re-runs workers at boot, so the
 	// 21 revisions deployed on 2026-08-12 left tight boot clusters: measured on

@@ -278,6 +278,9 @@ func TestVoidRetiredCryptoMirrorsResolver(t *testing.T) {
 		t.Errorf("by_horizon = %s", s)
 	}
 
+	// Paused first, as in production: rows left open as settleable must still
+	// grade with crypto active=0, or they would hang open forever.
+	vrcPause(t, path, f)
 	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -429,7 +432,8 @@ func TestVoidRetiredCryptoApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n2 != dqCount+1 || kind != "predictions_voided_source_retired" || !strings.Contains(detail, "source_retired") || !strings.Contains(detail, logPath) ||
-		!strings.Contains(detail, "pause decided 2026-10-21") || !strings.Contains(detail, "BTC/USD=2026-10-12") || !strings.Contains(detail, "XRP/USD=2026-09-15") {
+		!strings.Contains(detail, "pause decided 2026-10-21") || !strings.Contains(detail, "BTC/USD=2026-10-12") || !strings.Contains(detail, "XRP/USD=2026-09-15") ||
+		!strings.Contains(detail, "OutcomeResolver voids open crypto score_outcomes") {
 		t.Errorf("dq_events: count %d (want %d), last %q %q", n2, dqCount+1, kind, detail)
 	}
 	lf, err := os.Open(logPath)

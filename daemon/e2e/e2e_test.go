@@ -348,7 +348,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("keyless AAPL subscribe: %d %s (want 422 mentioning Alpaca)", resp.StatusCode, body)
 	}
 
-	// Crypto is paused (2026-10-21, no licensed crypto data source): a crypto
+	// Crypto is paused (2026-10-22, no licensed crypto data source): a crypto
 	// subscription is refused and never reaches the watchlist. It used to be
 	// the keyless way to put a symbol on the watchlist; the seeded MSFT takes
 	// that role below.
@@ -404,9 +404,10 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("expected a fleet of workers, saw only %v\nlast body: %s\nlogs:\n%s",
 			names, body, d.logs.String())
 	}
-	for n := range names { // retired sources: crypto 2026-10-21, StockTwits and TradingView
+	for n := range names { // retired sources: crypto 2026-10-22, StockTwits, TradingView, FINRA, Cboe, FRED
 		switch {
-		case n == "crypto-live", n == "crypto-bars", n == "crypto-perp", n == "tv-rating", n == "tv-quotes", strings.HasPrefix(n, "stocktwits"):
+		case n == "crypto-live", n == "crypto-bars", n == "crypto-perp", n == "tv-rating", n == "tv-quotes", strings.HasPrefix(n, "stocktwits"),
+			n == "finra-shorts", n == "finra-shortint", n == "cboe-pc", n == "fred-poller":
 			t.Errorf("retired-source worker %q is in the running fleet (saw %v)", n, names)
 		}
 	}
