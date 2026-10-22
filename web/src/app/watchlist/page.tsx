@@ -303,20 +303,21 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
   const matches = useMemo(() => {
     if (!query || !screenerData) return [];
     const q = query.toLowerCase();
+    // Stocks only: crypto is paused (no licensed data).
     return screenerData
       .filter(
         (r) =>
-          r.symbol.toLowerCase().includes(q) ||
-          r.name?.toLowerCase().includes(q)
+          r.market === "stocks" &&
+          (r.symbol.toLowerCase().includes(q) || r.name?.toLowerCase().includes(q))
       )
       .slice(0, 8);
   }, [query, screenerData]);
 
-  const add = async (symbol: string, market: "crypto" | "stocks") => {
+  const add = async (symbol: string) => {
     setPending(symbol);
     setError(null);
     try {
-      await api.subscribe(symbol, market);
+      await api.subscribe(symbol, "stocks");
       setQuery(""); // clearing the query empties `matches` — it is derived now
       refetch();
     } catch (e: unknown) {
@@ -367,7 +368,7 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
                 </div>
               )}
               <button
-                onClick={() => add(m.symbol, m.market)}
+                onClick={() => add(m.symbol)}
                 disabled={pending === m.symbol}
                 className="chip px-2 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.1)] disabled:opacity-50"
               >

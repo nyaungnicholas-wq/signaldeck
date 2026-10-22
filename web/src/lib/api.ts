@@ -2146,7 +2146,7 @@ export function anomalies(symbol?: string, market?: Market, kind?: string, limit
 
 // ─────────────────────────────────────────────────────────────────────────
 // SIGNAL8 WAVE — STAGE 4: HOME SURFACES (appended block; keep at END).
-// Ticker tape (index/sector ETFs + BTC + VIX), movers with best-effort mcap,
+// Ticker tape (index/sector ETFs + VIX; crypto paused), movers with best-effort mcap,
 // and the honest free-data calendar. HONESTY (render every note): tape prices
 // are STORED DAILY CLOSES on worker cadence — not live quotes; VIX is the
 // FRED VIXCLS daily close (~1 trading day lag); mcap = SEC EDGAR

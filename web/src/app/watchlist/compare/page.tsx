@@ -48,9 +48,10 @@ function TugWarRow({ label, aVal, aFmt, bVal, bFmt, higherBetter, idx }: { label
 function CompareInner() {
   const sp = useSearchParams();
   const aSymbol = (sp.get("a") ?? "NVDA").toUpperCase();
-  const aMarket = (sp.get("am") === "crypto" ? "crypto" : "stocks") as Market;
+  // Crypto paused since 22 October 2026: an old ?am=crypto / ?bm=crypto link reads as stocks.
+  const aMarket: Market = "stocks";
   const bSymbol = (sp.get("b") ?? "AMD").toUpperCase();
-  const bMarket = (sp.get("bm") === "crypto" ? "crypto" : "stocks") as Market;
+  const bMarket: Market = "stocks";
   const [draftA, setDraftA] = useState(aSymbol);
   const [draftB, setDraftB] = useState(bSymbol);
   const [draftAm, setDraftAm] = useState<Market>(aMarket);
@@ -102,7 +103,6 @@ function CompareInner() {
           <input value={val} onChange={e => setVal(e.target.value)} aria-label={`symbol ${label}`} spellCheck={false} autoCapitalize="characters" className="mono w-20 rounded border bg-transparent px-2 py-1 text-sm uppercase outline-none focus:border-[var(--accent)]" style={{ borderColor: "var(--border)" }} />
           <select value={mkt} onChange={e => setMkt(e.target.value as Market)} aria-label={`market ${label}`} className="rounded border bg-transparent px-1 py-1 text-xs" style={{ borderColor: "var(--border)", color: "var(--dim)" }}>
             <option value="stocks">stocks</option>
-            <option value="crypto">crypto</option>
           </select>
         </div>
       ))}

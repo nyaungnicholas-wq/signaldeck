@@ -80,7 +80,6 @@ export default function PortfolioBuilder({
                   color: "var(--text)",
                 }}
               >
-                <option value="crypto">crypto</option>
                 <option value="stocks">stocks</option>
               </select>
               <div className="flex items-center gap-1.5">

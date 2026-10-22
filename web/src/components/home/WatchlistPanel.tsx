@@ -165,7 +165,7 @@ export default function WatchlistPanel({
             setSym(e.target.value);
             if (actionError) setActionError(null);
           }}
-          placeholder={mkt === "crypto" ? "BTC/USD" : "AAPL"}
+          placeholder="AAPL"
           spellCheck={false}
           autoComplete="off"
         />

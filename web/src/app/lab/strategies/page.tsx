@@ -306,7 +306,7 @@ export default function StrategiesPage() {
               <EmptyState
                 className="m-4"
                 message="No strategy results yet"
-                detail="The strategy-lab worker runs once per UTC day over the streamed hot set + crypto — check back after its first pass."
+                detail="The strategy-lab worker runs once per UTC day over the streamed hot set — check back after its first pass."
               />
             ) : (
               <div className="overflow-x-auto">
@@ -466,7 +466,7 @@ export default function StrategiesPage() {
                 message={`No strategy results for ${selected.symbol} yet`}
                 detail={
                   symData.emptyNote ??
-                  "the strategy-lab worker covers the streamed hot set + crypto once per UTC day"
+                  "the strategy-lab worker covers the streamed hot set once per UTC day"
                 }
               />
             )}

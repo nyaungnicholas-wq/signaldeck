@@ -167,7 +167,7 @@ export default function UnusualPage() {
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <span className="text-[0.75rem]" style={{ color: "var(--dim)" }}>Market</span>
-          {(["crypto", "stocks"] as Market[]).map((m) => (
+          {(["stocks"] as Market[]).map((m) => (
             <button
               key={m}
               onClick={() => setMarket(market === m ? undefined : m)}

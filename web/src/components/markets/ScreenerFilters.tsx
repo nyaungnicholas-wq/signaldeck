@@ -110,7 +110,7 @@ export default function ScreenerFilters({
 
         <div className="flex items-center gap-1.5" role="group" aria-label="market filter">
           <span style={{ color: "var(--faint)" }}>market</span>
-          {(["all", "crypto", "stocks"] as MarketFilter[]).map((m) => (
+          {(["all", "stocks"] as MarketFilter[]).map((m) => (
             <FilterChip key={m} active={market === m} onClick={() => onMarket(m)}>
               {m}
             </FilterChip>
