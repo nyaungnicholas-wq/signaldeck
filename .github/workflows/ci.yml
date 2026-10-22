@@ -505,6 +505,7 @@ jobs:
           bash ops/test-offsite-prune.sh
           bash ops/test-offsite-seal.sh
           bash ops/test-publication-posture.sh
+          bash ops/test-cleanup-retention.sh
 
   docs-gate:
     runs-on: ubuntu-latest

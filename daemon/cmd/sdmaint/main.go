@@ -170,6 +170,12 @@ func main() {
 			return
 		}
 	}
+	if len(os.Args) > 1 && os.Args[1] == "waitlist-remove" {
+		if err := waitlistRemove(os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("waitlist-remove: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "storage-report" {
 		over, err := storageReport(os.Args[2:])
 		if err != nil {
@@ -206,7 +212,7 @@ func main() {
 			"split-reused-tickers, purge-bad-bars, import-delisted, ledger-verify,\n"+
 			"research-loop, "+
 			"paper-epochs, storage-report, quarantine-flat-pads, offsite-keygen,\n"+
-			"offsite-seal, offsite-open, replay-tombstones.\n"+
+			"offsite-seal, offsite-open, replay-tombstones, waitlist-remove.\n"+
 			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
 			"Refusing to fall through to the default compaction pass, which would\n"+
 			"strip blobs and VACUUM data/signaldeck.db and ignore every flag you passed.",
