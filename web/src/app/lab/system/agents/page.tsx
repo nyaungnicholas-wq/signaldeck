@@ -25,6 +25,15 @@ const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "dq-auditor", role: "flags stale/gapped data" },
 ];
 
+// Retired workers whose old runs can still appear in the run log.
+function retiredRole(name: string): string | null {
+  if (name.startsWith("crypto-")) return `retired ${CRYPTO_PAUSED_DATE} (crypto paused): last runs kept as history`;
+  if (name.startsWith("tv-") || name.startsWith("stocktwits")) return "retired 21–22 Oct 2026: last runs kept as history";
+  if (["fred-poller", "finra-shorts", "finra-shortint", "cboe-pc"].includes(name))
+    return "retired 22 Oct 2026 (licence review); stored history only";
+  return null;
+}
+
 function statusColor(status: WorkerRun["status"]): string {
   if (status === "ok") return "var(--bid)";
   if (status === "error" || status === "timeout") return "var(--ask)";
@@ -192,7 +201,7 @@ export default function AgentsPage() {
   const knownNames = new Set(KNOWN_AGENTS.map((a) => a.name));
   const extras = [...byWorker.keys()].filter((w) => !knownNames.has(w)).sort();
   for (const w of extras) {
-    cards.push({ name: w, role: "unregistered worker", runs: byWorker.get(w) ?? [] });
+    cards.push({ name: w, role: retiredRole(w) ?? "unregistered worker", runs: byWorker.get(w) ?? [] });
   }
 
   const lastByAgent = cards.map((c) => c.runs[0]).filter(Boolean) as WorkerRun[];
@@ -281,7 +290,7 @@ export default function AgentsPage() {
           </div>
           <p className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             A card with no runs means that worker hasn&apos;t completed a run recently enough to
-            survive run-log pruning (rare-cadence workers like 13f-poller / fred-poller / backup
+            survive run-log pruning (rare-cadence workers like 13f-poller / backup
             run every 6–24h) — it does not mean the worker is broken. Each worker&apos;s last runs
             are floor-protected on the current daemon build, so cards fill in after the next
             completed run.

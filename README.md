@@ -233,11 +233,14 @@ terms before hosting a copy.
 
 Built by Nicholas Nyaung. Substantial parts of the codebase, the documentation and the
 2026-09-08 release pass were produced with AI assistance: Claude Code (Anthropic) as the
-engineering agent, with additional code drafts from other large language models routed
-through a local gateway, all reviewed and run before commit. The AI-assistance disclosure
-for competition submissions is kept in [`docs/COMPETITION.md`](docs/COMPETITION.md); what
-was designed and understood personally is for the author to state, not for this file to
-assume.
+engineering agent, OpenAI Codex in some September 2026 audit, deploy and test sessions,
+and additional code drafts from other large language models routed through a local
+gateway (Google Gemini, Cloudflare Workers AI, NVIDIA-hosted and OpenRouter free models,
+and earlier Mistral devstral). That code was reviewed and tested by the AI agent and the
+repository's automated gates before commit; what the author personally designed, reviewed
+and understands is stated in the competition submission, not assumed here. The
+AI-assistance disclosure for competition submissions is kept in
+[`docs/COMPETITION.md`](docs/COMPETITION.md).
 
 Libraries and services: Go and its SQLite driver (see `daemon/go.mod`), Next.js, React,
 Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, SEC EDGAR, the CFTC,

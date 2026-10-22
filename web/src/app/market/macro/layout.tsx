@@ -8,7 +8,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Macro",
   description:
-    "Big-picture market backdrop from free official sources: breadth and volatility state, the fleet regime map, sector rotation, and FRED-based calendars, each on its own publication lag.",
+    "Big-picture market backdrop from free official sources: breadth and volatility state, the fleet regime map, sector rotation, and FRED-based calendars (FRED retired 22 Oct 2026 (licence review); stored history only), each on its own publication lag.",
 };
 
 export default function MacroLayout({ children }: { children: React.ReactNode }) {
