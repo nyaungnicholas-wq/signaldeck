@@ -157,7 +157,7 @@ export default function PrivacyPage() {
                   To spot a name under attack
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until its log file is deleted, 30 days after that file&rsquo;s last entry (see the note on logs below)
+                  Until its log file is deleted; the limit is 30 days after that file&rsquo;s last entry (see the note on logs below and the retention limits under Backups and deletion)
                 </td>
               </tr>
               <tr>
@@ -173,13 +173,13 @@ export default function PrivacyPage() {
               </tr>
               <tr>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Deletion record: the account number and a one-way (SHA-256) hash of the email address of a deleted account, and nothing else
+                  Deletion record: the account number and one one-way (SHA-256) hash of a deleted account&rsquo;s email address, username and creation time, and nothing else
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   So that restoring an older backup cannot bring a deleted account back
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Indefinitely, in a separate file outside the database
+                  Indefinitely, in a separate file outside the database; an encrypted copy is uploaded with each off-site backup
                 </td>
               </tr>
             </tbody>
@@ -195,7 +195,7 @@ export default function PrivacyPage() {
           - Your browser&rsquo;s user agent. Read to block AI crawlers; not stored.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. A log file is deleted 30 days after its last entry. Because logs rotate by size, not by date, one log file on a quiet site can cover several months, so an entry can stay in the logs for more than 30 days. Retention limits are listed under Backups and deletion.
+          Logs rotate at 20 MB with 3 old files kept, and a daily job compresses and rotates any log over 10 MB, keeping 3. The limit for a log file is 30 days after its last entry (see the status of these limits under Backups and deletion). Because logs rotate by size, not by date, one log file on a quiet site can cover several months, so an entry can stay in the logs for more than 30 days. Retention limits are listed under Backups and deletion.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Stored in your browser">
@@ -285,7 +285,7 @@ export default function PrivacyPage() {
                   GitHub (a private repository)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  A compressed copy of the whole database, made each weekday after the US market close, including every database row above, password hashes and the waitlist (not the logs). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key the operator keeps offline. Copies made before that date were not encrypted; they leave the rotation as newer copies replace them
+                  A compressed copy of the whole database, made each weekday after the US market close, including every database row above, password hashes and the waitlist (not the logs). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key that is kept on the operator&rsquo;s computer, separate from the database, and is never uploaded with the backups. Copies made before that date were not encrypted; they leave the rotation as newer copies replace them. An encrypted copy of the deletion record (see Backups and deletion) is uploaded with each copy
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Off-site backup; the 7 newest are kept (about a week and a half)
@@ -357,19 +357,19 @@ export default function PrivacyPage() {
       <section className="panel px-5 py-4" aria-label="Backups and deletion">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Backups and deletion</h2>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          On the operator&rsquo;s computer, the newest backup is kept uncompressed (at most two), and the five newest compressed backups are kept; older compressed backups are deleted. Uncompressed copies beyond the two newest move to a local holding folder, where they are kept for up to 30 days. Local backup copies are not encrypted.
+          On the operator&rsquo;s computer, the newest backup is kept uncompressed (at most two), and the five newest compressed backups are kept; older compressed backups are deleted. Uncompressed copies beyond the two newest move to a local holding folder, where the limit is 30 days. Local backup copies are not encrypted.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Off-site, one compressed copy of the database is uploaded each weekday to a private GitHub repository, and the 7 newest copies are kept (about a week and a half). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key the operator keeps offline. Copies made before 22 October 2026 were not encrypted; they leave the rotation as newer copies replace them.
+          Off-site, one compressed copy of the database is uploaded each weekday to a private GitHub repository, and the 7 newest copies are kept (about a week and a half). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key that is kept on the operator&rsquo;s computer, separate from the database, and is never uploaded with the backups. Copies made before 22 October 2026 were not encrypted; they leave the rotation as newer copies replace them.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Retention limits: a log file 30 days after its last entry; the local holding folder up to 30 days; waitlist entries up to 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand.
+          Retention limits, set on 22 October 2026: a log file 30 days after its last entry; the local holding folder 30 days; waitlist entries 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand, so logs and backup copies older than these limits may still exist for a short time. Some older local backup copies, made before these limits were set, are being removed.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          When you delete your account, its data is erased from the live database at once. It can remain in logs until the log file holding it is deleted (30 days after that file&rsquo;s last entry), and in backups until they rotate out (off-site about a week and a half; local holding folder up to 30 days).
+          When you delete your account, its data is erased from the live database at once. It can remain in logs until the log file holding it is deleted (limit: 30 days after that file&rsquo;s last entry), and in backups until they rotate out (off-site about a week and a half; local holding folder limit 30 days), subject to the note on retention limits above.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          When an account is deleted, SignalDeck records the account number and a one-way (SHA-256) hash of the account&rsquo;s email address, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back. This record is kept indefinitely.
+          When an account is deleted, SignalDeck records the account number and one one-way (SHA-256) hash of the account&rsquo;s email address, username and creation time, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back and a later sign-up is never mistaken for it. This record is kept indefinitely. An encrypted copy of it is uploaded with each off-site backup.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Your choices">

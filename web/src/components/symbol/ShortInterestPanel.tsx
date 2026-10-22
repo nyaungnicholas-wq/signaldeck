@@ -73,7 +73,7 @@ export default function ShortInterestPanel({ symbol }: { symbol: string }) {
           answer different questions and neither one is bearish by itself.
         </HelpTip>
         <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          FINRA bi-monthly (free) · ~2wk publication lag
+          FINRA bi-monthly · retired 22 October 2026, stored history only
           {latest !== null ? ` · settled ${latest.settlementDate}` : ""}
         </span>
       </div>
@@ -92,7 +92,7 @@ export default function ShortInterestPanel({ symbol }: { symbol: string }) {
       {data !== null && latest === null && (
         <p className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           {data.emptyNote ??
-            "no short interest stored yet — the finra-shortint worker probes the newest bi-monthly file each run. Honest absence, not an error."}
+            "no short interest stored for this symbol. FINRA short data was retired 22 October 2026 (licence review), so no new rows arrive. Honest absence, not an error."}
         </p>
       )}
 
