@@ -210,14 +210,14 @@ function SymbolDetail({ symbol }: { symbol: string }) {
           label="Days to cover"
           value={data.squeeze?.daysToCover}
           decimals={1}
-          sub="FINRA short interest"
+          sub="FINRA short interest · retired 22 Oct 2026; stored history only"
         />
         <StatTile
           label="Short-vol z"
           value={data.squeeze?.shortVolZ}
           decimals={1}
           suffix="σ"
-          sub="vs own 30d (Reg SHO)"
+          sub="vs own 30d (Reg SHO, retired 22 Oct 2026; stored history only)"
         />
       </div>
     </section>

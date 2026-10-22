@@ -165,7 +165,8 @@ func (d Deps) candidateAdd(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	// streaming = it got a live-ws tick slot (crypto always streams via Kraken).
+	// streaming = it got a live-ws tick slot. The crypto arm is unreachable
+	// while crypto is paused (2026-10-21): Monitor refuses crypto symbols.
 	streaming := sym.Stream || body.Market == md.Crypto
 	writeJSON(w, map[string]any{
 		"id":        sym.ID,
@@ -212,7 +213,8 @@ func (d Deps) candidateMonitorAll(w http.ResponseWriter, r *http.Request) {
 	var firstErr string
 	uid := userID(r)
 	for _, c := range cands {
-		// Bound the stock universe; crypto streams via Kraken (unbounded here).
+		// Bound the stock universe; crypto is not capped here (Monitor refuses
+		// it while crypto is paused).
 		if c.Market == md.Stocks && monitored >= cap {
 			skipped++
 			continue

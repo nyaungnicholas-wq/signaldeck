@@ -210,9 +210,10 @@ export default function TermsPage() {
           style={{ color: "var(--dim)" }}
         >
           TradingView: member symbol pages embed TradingView&rsquo;s chart
-          widget, which your browser loads from TradingView. The operator also
-          sends alerts from his own TradingView account to SignalDeck by
-          webhook, used as one input to the forecasts.
+          widget, which your browser loads from TradingView. Alerts the
+          operator sends from his own TradingView account to SignalDeck by
+          webhook are stored for the record but are no longer used as a model
+          input since 22 October 2026 (licence review).
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
@@ -222,8 +223,8 @@ export default function TermsPage() {
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           <li>the TradingView scanner and StockTwits (retired 21&ndash;22 October 2026);</li>
-          <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; crypto history stays on the public record, and open crypto forecasts were voided, never deleted);</li>
-          <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review).</li>
+          <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; crypto history stays on the public record; open crypto direction forecasts were voided, never deleted; open crypto regime calls are marked ungradable when they fall due; nothing was deleted);</li>
+          <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review). Rows already stored from FINRA short-sale data and FRED still feed two pre-registered research tests until about 27 October 2026, when those tests&rsquo; 5-day freshness gates lapse; after that they are not used at all.</li>
         </ul>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"

@@ -53,6 +53,8 @@ Total: ~2 minutes 15 seconds
 
 ## Video outline (1-3 minutes)
 
+Superseded on 2026-10-22: the current video script, submission text and checklist are in the owner kit (`signaldeck-owner-kit/cac-2026/`, not in this repository). Member pages no longer include `/dashboard`, `/lab/paper` or `/lab/track-record` (operator-only); the outline below is kept as history.
+
 | Time | Beat | Required element |
 |------|------|------------------|
 | 0:00–0:05 | Title card | App name: SignalDeck |
@@ -71,6 +73,8 @@ Total: ~2 minutes 15 seconds
 | 2:30–2:45 | Closing | "No profitability is claimed. All AI usage is disclosed in the submission." |
 
 ## Written answers — drafts and placeholders
+
+Superseded on 2026-10-22: the current written answers and submission text are in the owner kit (`signaldeck-owner-kit/cac-2026/`, not in this repository); the drafts below are kept as history.
 
 **1. Title**  
 SignalDeck
@@ -129,7 +133,7 @@ Do not assert that all code was personally reviewed or tested, or that AI did no
 
 ### Commit authorship
 
-The first 51 commits (2026-07-01 to 2026-07-06) carry the git identity `Natalie Nyaung <natalienyaung@Natalies-MacBook-Pro.local>`. They were made on a family Mac whose git name was set to Natalie, and the work in them was partly Natalie's and partly Nicholas's. Every later commit is under Nicholas's own identity. The history is deliberately not rewritten: the grader verifies each graded build against these commit IDs, and this project's claim is that its record is not retouched.
+Of the commits from 2026-07-01 to 2026-07-15, 51 carry the git identity Natalie Nyaung (`natalienyaung@Natalies-MacBook-Pro.local`); they are interleaved with commits under Nicholas's identity from 2026-07-13, and every commit after 2026-07-15 is under Nicholas's identity, apart from one automated Dependabot dependency update. They were made on a family Mac whose git name was set to Natalie, and the work in them was partly Natalie's and partly Nicholas's. The history is deliberately not rewritten: the grader verifies each graded build against these commit IDs, and this project's claim is that its record is not retouched.
 
 [NICHOLAS TO CONFIRM: what Natalie contributed. If she contributed to the app being submitted, the Congressional App Challenge rules may require listing her as a teammate (teams of up to four, at least half living or attending school in the district) or crediting her.]
 

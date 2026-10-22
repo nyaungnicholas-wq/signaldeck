@@ -518,6 +518,26 @@ func TestTVFailureDegradesToAlpacaOnly(t *testing.T) {
 	}
 }
 
+// Production runs with TV nil (scanner retired 2026-10-21): that is the
+// design, so the sweep must not report itself degraded every run.
+func TestNoTVIsAlpacaOnlyByDesign(t *testing.T) {
+	st := testStore(t)
+	f := &fakeAlpaca{
+		actives: []ActiveRow{{Symbol: "AMD", Volume: 3e7}},
+		prices:  map[string]float64{"AMD": 120},
+	}
+	w := newWorker(t, st, f) // TV left nil, as discoveryWorkers builds it
+
+	detail, err := w.Run(context.Background())
+	if err != nil {
+		t.Fatalf("alpaca-only sweep failed: %v", err)
+	}
+	if strings.Contains(detail, "degraded") || strings.Contains(detail, "failed") ||
+		!strings.Contains(detail, "alpaca-only (TradingView scanner retired 2026-10-21)") {
+		t.Fatalf("detail: %q", detail)
+	}
+}
+
 func TestTVOnlyWhenAlpacaDown(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()

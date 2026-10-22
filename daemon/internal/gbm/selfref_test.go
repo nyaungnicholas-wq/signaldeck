@@ -258,7 +258,7 @@ func TestExcludedKey_RetiredSources(t *testing.T) {
 			t.Errorf("%q is not self-referential", k)
 		}
 	}
-	for _, k := range []string{"wiki_z", "tv_webhook_signal", "comp_rsi"} {
+	for _, k := range []string{"wiki_z", "comp_rsi"} {
 		if ExcludedKey(k) {
 			t.Errorf("%q must stay trainable", k)
 		}
@@ -268,13 +268,14 @@ func TestExcludedKey_RetiredSources(t *testing.T) {
 	}
 }
 
-// FINRA, Cboe put/call and FRED keys (retired 22 Oct 2026) are excluded with
-// their presence bits; CFTC and EDGAR keys, and postmortem's macro_event code,
-// stay trainable.
+// FINRA, Cboe put/call and FRED keys (retired 22 Oct 2026) and the TradingView
+// webhook alert key (retired 2026-10-22) are excluded with their presence bits;
+// CFTC and EDGAR keys, and postmortem's macro_event code, stay trainable.
 func TestExcludedKey_LicenceRetiredSources(t *testing.T) {
 	for _, k := range []string{
 		"short_vol_z", "short_int_dtc__has", "pc_total", "vix_level", "vix_regime__has",
 		"vix_high_vol", "macro_dgs10_pct", "macro_hy_spread_chg__has", "macro_oil_pct",
+		"tv_webhook_signal", "tv_webhook_signal__has",
 	} {
 		if !ExcludedKey(k) || !RetiredSourceKey(k) {
 			t.Errorf("%q must be excluded as a retired source", k)

@@ -176,7 +176,7 @@ export default function PrivacyPage() {
                   Deletion record: the account number and one one-way (SHA-256) hash of a deleted account&rsquo;s email address, username and creation time, and nothing else
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  So that restoring an older backup cannot bring a deleted account back
+                  So that restoring an older backup cannot bring a deleted account back (with one exception, described under Backups and deletion)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Indefinitely, in a separate file outside the database; an encrypted copy is uploaded with each off-site backup
@@ -302,7 +302,7 @@ export default function PrivacyPage() {
                   Your browser loads its chart widget; TradingView receives your IP address, browser details and the symbol you view, and may set its own cookies. Separately, the operator sends alerts from his own TradingView account to SignalDeck by webhook; nothing about you is sent to TradingView for this
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Price charts, so SignalDeck shows no price data itself; the operator&rsquo;s alerts are one input to the forecasts
+                  Price charts, so SignalDeck shows no price data itself; the operator&rsquo;s alerts are stored for the record but are no longer used as a model input since 22 October 2026 (licence review)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Chart widget: member symbol pages only
@@ -363,13 +363,13 @@ export default function PrivacyPage() {
           Off-site, one compressed copy of the database is uploaded each weekday to a private GitHub repository, and the 7 newest copies are kept (about a week and a half). Since 22 October 2026 each copy is encrypted (AES-256-GCM) on the operator&rsquo;s computer before upload, with a key that is kept on the operator&rsquo;s computer, separate from the database, and is never uploaded with the backups. Copies made before 22 October 2026 were not encrypted; they leave the rotation as newer copies replace them.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          Retention limits, set on 22 October 2026: a log file 30 days after its last entry; the local holding folder 30 days; waitlist entries 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand, so logs and backup copies older than these limits may still exist for a short time. Some older local backup copies, made before these limits were set, are being removed.
+          Retention limits, set on 22 October 2026: a log file 30 days after its last entry; the local holding folder 30 days; waitlist entries 12 months, or sooner if you ask. A daily automated job checks these limits. Until automatic deletion is switched on, it lists anything past its limit and the operator removes it by hand, so logs and backup copies older than these limits may still exist for a short time. Older full copies of the database, made before these limits were set, also still exist on the operator&rsquo;s computer (in the local holding folder, in an inactive local cloud-sync folder, and a few one-off copies made during maintenance); the operator is deleting them by hand.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
           When you delete your account, its data is erased from the live database at once. It can remain in logs until the log file holding it is deleted (limit: 30 days after that file&rsquo;s last entry), and in backups until they rotate out (off-site about a week and a half; local holding folder limit 30 days), subject to the note on retention limits above.
         </p>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          When an account is deleted, SignalDeck records the account number and one one-way (SHA-256) hash of the account&rsquo;s email address, username and creation time, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back and a later sign-up is never mistaken for it. This record is kept indefinitely. An encrypted copy of it is uploaded with each off-site backup.
+          When an account is deleted, SignalDeck records the account number and one one-way (SHA-256) hash of the account&rsquo;s email address, username and creation time, and nothing else, in a separate file outside the database, so that restoring an older backup cannot bring the account back and a later sign-up is never mistaken for it. This record is kept indefinitely. An encrypted copy of it is uploaded with each off-site backup. Because the record itself is backed up with each off-site copy, an account deleted after the newest off-site copy was made could come back if the operator&rsquo;s computer were lost before the next weekday backup.
         </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Your choices">

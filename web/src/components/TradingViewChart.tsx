@@ -1,5 +1,6 @@
 "use client";
-// The widget is TradingView's free embed with its branding kept.
+// The widget is TradingView's free embed with its branding kept, including the
+// default "Track all markets on TradingView" attribution (lib/tradingviewEmbed.ts).
 // The page's Content-Security-Policy must allow script https://s3.tradingview.com
 // and frames from https://www.tradingview-widget.com and https://s.tradingview.com.
 import { useEffect, useRef } from "react";

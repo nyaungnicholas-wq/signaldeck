@@ -23,9 +23,24 @@ export function mountTradingViewWidget(container: HTMLElement, config: object, d
 
   const widget = doc.createElement("div");
   widget.className = "tradingview-widget-container__widget";
-  widget.style.height = "100%";
+  widget.style.height = "calc(100% - 32px)";
   widget.style.width = "100%";
   wrapper.appendChild(widget);
+
+  // TradingView's default attribution, exactly as its widget generator emits it
+  // for the Advanced Chart: the widget is licensed with this kept.
+  const copyright = doc.createElement("div");
+  copyright.className = "tradingview-widget-copyright";
+  const link = doc.createElement("a");
+  link.href = "https://www.tradingview.com/";
+  link.rel = "noopener nofollow";
+  link.target = "_blank";
+  const label = doc.createElement("span");
+  label.className = "blue-text";
+  label.textContent = "Track all markets on TradingView";
+  link.appendChild(label);
+  copyright.appendChild(link);
+  wrapper.appendChild(copyright);
 
   const script = doc.createElement("script");
   script.src = TV_EMBED_SRC;
