@@ -47,3 +47,39 @@ func (s *Store) CountWaitlist(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM waitlist`).Scan(&n)
 	return n, err
 }
+
+// CountWaitlistBefore counts sign-ups older than cutoffTs (unix seconds): what
+// DeleteWaitlistBefore would remove, for report-only retention.
+func (s *Store) CountWaitlistBefore(ctx context.Context, cutoffTs int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM waitlist WHERE created_ts < ?`, cutoffTs).Scan(&n)
+	return n, err
+}
+
+// DeleteWaitlistBefore removes sign-ups older than cutoffTs (unix seconds) and
+// returns how many went. Retention, not archive: keeping a copy would defeat it.
+func (s *Store) DeleteWaitlistBefore(ctx context.Context, cutoffTs int64) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `DELETE FROM waitlist WHERE created_ts < ?`, cutoffTs)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RemoveWaitlist removes one already-normalised address on its owner's request.
+// With apply=false it only reports whether the address is on the list.
+func (s *Store) RemoveWaitlist(ctx context.Context, email string, apply bool) (found bool, err error) {
+	if email == "" {
+		return false, ErrEmptyEmail
+	}
+	if !apply {
+		err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM waitlist WHERE email = ?)`, email).Scan(&found)
+		return found, err
+	}
+	res, err := s.w.ExecContext(ctx, `DELETE FROM waitlist WHERE email = ?`, email)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}

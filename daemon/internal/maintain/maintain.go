@@ -1498,6 +1498,7 @@ type DerivedRetention struct {
 	KeepInsights      time.Duration // generated insights;         default 90d  (env SIGNALDECK_INSIGHTS_RETENTION_D)
 	KeepPostmortems   time.Duration // prediction_postmortems;     default 180d (env SIGNALDECK_POSTMORTEM_RETENTION_D)
 	KeepResearchWeeks time.Duration // research_weeks window;      default 7y   (env SIGNALDECK_RESEARCH_WEEKS_RETENTION_D)
+	KeepWaitlist      time.Duration // waitlist sign-ups;          default 365d (env SIGNALDECK_WAITLIST_RETENTION_D)
 }
 
 // Name implements workers.Worker.
@@ -1604,7 +1605,34 @@ func (d *DerivedRetention) Run(ctx context.Context) (string, error) {
 	if scSkip || outSkip || featSkip || filSkip || insSkip || pmSkip || rwSkip {
 		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
 	}
-	return msg, nil
+	return msg + "; " + d.waitlistRetention(ctx, now), nil
+}
+
+// waitlistRetention ages out waitlist sign-ups past the window. REPORT-ONLY
+// unless SIGNALDECK_RETENTION_ENFORCE=1 (the owner's switch). Not archived:
+// a kept copy would defeat the deletion. Counts only, never an address.
+func (d *DerivedRetention) waitlistRetention(ctx context.Context, now time.Time) string {
+	keep := d.KeepWaitlist
+	if keep <= 0 {
+		keep = time.Duration(envIntOr("SIGNALDECK_WAITLIST_RETENTION_D", 365)) * 24 * time.Hour
+	}
+	cut := now.Add(-keep).Unix()
+	var line string
+	if os.Getenv("SIGNALDECK_RETENTION_ENFORCE") == "1" {
+		n, err := d.St.DeleteWaitlistBefore(ctx, cut)
+		if err != nil {
+			return "waitlist retention: delete failed: " + err.Error()
+		}
+		line = fmt.Sprintf("waitlist retention: removed %d", n)
+	} else {
+		n, err := d.St.CountWaitlistBefore(ctx, cut)
+		if err != nil {
+			return "waitlist retention: count failed: " + err.Error()
+		}
+		line = fmt.Sprintf("waitlist retention: would remove %d", n)
+	}
+	slog.Info(line)
+	return line
 }
 
 func (d *DerivedRetention) retentionScores() time.Duration {

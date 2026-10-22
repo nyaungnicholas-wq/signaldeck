@@ -186,6 +186,10 @@ statement, so nothing about today's format blocks that future.
 | `SIGNALDECK_INSIGHTS_RETENTION_D` | `90` | insights hot window (days) |
 | `SIGNALDECK_POSTMORTEM_RETENTION_D` | `180` | prediction_postmortems hot window (days) |
 | `SIGNALDECK_RESEARCH_WEEKS_RETENTION_D` | `2555` | research_weeks active window (days, ~7y) |
+| `SIGNALDECK_WAITLIST_RETENTION_D` | `365` | waitlist sign-ups older than this are removed (daemon derived-retention, hourly) |
+| `SIGNALDECK_LOG_RETENTION_D` | `30` | `logs/` files (`*.log`, `*.log.N[.gz]`, `*.err`, `*.out`, `*.md`, `*.jsonl`) older than this are removed (`ops/signaldeck-cleanup.sh`, daily) |
+| `SIGNALDECK_HOLDING_RETENTION_D` | `30` | retired-backup holding folder (`SIGNALDECK_TRASH`, default `~/.Trash`) files older than this are removed (`ops/signaldeck-cleanup.sh`, daily) |
+| `SIGNALDECK_RETENTION_ENFORCE` | unset | the three windows above are REPORT-ONLY (logged, nothing deleted) until this is `1` in the environment or `daemon/.env`; `ops/signaldeck-cleanup.sh --retention-only` runs just that block by hand |
 | `SIGNALDECK_VACUUM_THRESHOLD_MB` | `2048` | DB size above which the governor VACUUMs |
 | `SIGNALDECK_BUDGET_DB_MB` | `10240` | DB budget: nightly report pages above it; 1m gap-fill needs 512 MB headroom under it |
 

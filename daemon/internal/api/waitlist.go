@@ -55,6 +55,10 @@ func normaliseEmail(raw string) (string, bool) {
 	return e, true
 }
 
+// NormaliseEmail exposes normaliseEmail to the operator CLI (sdmaint
+// waitlist-remove) so a removal request matches the stored key exactly.
+func NormaliseEmail(raw string) (string, bool) { return normaliseEmail(raw) }
+
 // waitlistCap bounds the anonymous notification list; waitlistLimiter bounds
 // how fast one network can add to it. A var only so a test can lower it.
 var waitlistCap = 20000
