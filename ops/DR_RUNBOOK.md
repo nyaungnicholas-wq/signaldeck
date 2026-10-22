@@ -38,6 +38,8 @@ encrypted disk), or accept the stated consequence:
 | `%USERPROFILE%\.signaldeck\deletions.jsonl` (account-deletion tombstones, outside the database) | the copy sealed into each release (`deletions.jsonl.enc`) covers deletions up to that backup; deletions after the newest release are lost with the machine, and those accounts come back on restore |
 | everything written after the last nightly backup | gone. RPO = last offsite backup: ≤ ~24 h on weekdays, up to ~3 days across a weekend (the scheduled backup runs Mon–Fri after the close; the daemon's 30 h failsafe copy on weekends stays on this machine unless an off-site directory is configured for it); backfill workers close price-data gaps, but resolved outcomes emitted in the lost window are not reconstructable |
 
+Known plaintext gap (2026-10-22): with a backup key configured `ops/signaldeck-backup-offline.sh` refuses its unsealed `SIGNALDECK_OFFSITE_DIR` copy, but the daemon's own backup worker (`OffsiteDir`, from `SIGNALDECK_OFFSITE_BACKUP_DIR` / `SIGNALDECK_OFFSITE_DIR`) still copies the plaintext `.db` to that directory; neither variable is set on the production machine, so keep it that way until that worker seals too.
+
 ## 0. Prerequisites on the clean machine (~30 min)
 
 1. **Git for Windows** — required, and it must be Git Bash, never WSL. The ops
