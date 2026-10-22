@@ -3,14 +3,19 @@
 #
 #   signaldeck-cleanup.sh [KEEP]
 #     KEEP = how many of the newest DB backups to keep (default 2)
+#   signaldeck-cleanup.sh --retention-only
+#     run ONLY the dated retention block below (safe by hand: report-only
+#     unless SIGNALDECK_RETENTION_ENFORCE=1). SIGNALDECK_SD overrides the root.
 #
 # Old backups are MOVED TO ~/.Trash (recoverable — empty the Trash yourself to
 # reclaim the space permanently), never hard-deleted. Log files over 10 MB are
 # rotated (copy-compress-truncate, 3 gzipped generations kept) — launchd's
 # StandardOut/ErrorPath redirection never rotates anything on its own, so
 # unbounded growth lands here. Scheduled daily by com.signaldeck.cleanup.plist.
-set -u
-SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+set -uo pipefail
+SD="${SIGNALDECK_SD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+RETENTION_ONLY=0
+if [ "${1:-}" = "--retention-only" ]; then RETENTION_ONLY=1; shift; fi
 KEEP="${1:-2}"
 ROTATE_MB=10   # rotate any logs/*.log bigger than this
 ROTATE_KEEP=3  # keep this many gzipped generations (.log.1.gz … .log.3.gz)
@@ -22,6 +27,77 @@ ROTATE_KEEP=3  # keep this many gzipped generations (.log.1.gz … .log.3.gz)
 # path and the skipped storage report. The directory is created first, and a
 # failed move is now reported rather than hidden by the `&&`.
 TRASH="${SIGNALDECK_TRASH:-$HOME/.Trash}"
+
+# RETENTION (2026-10-22): dated clean-up of logs/ and the retired-backup holding
+# folder ($TRASH), 30 days each by default (SIGNALDECK_LOG_RETENTION_D,
+# SIGNALDECK_HOLDING_RETENTION_D). REPORT-ONLY -- lists, deletes nothing --
+# unless SIGNALDECK_RETENTION_ENFORCE=1 is in the environment or daemon/.env,
+# which is the owner's switch. Never touches data/ (live DB, WAL/SHM,
+# data/backups), state files in logs/ (web-release.json,
+# .restore-rehearsal-cursor, *.pid, *.json are outside the name allowlist),
+# subdirectories, or anything modified inside the window. Holding-folder age is
+# file mtime: mv keeps it, so a retired backup ages from when it was written.
+ret_enforce() {
+  [ "${SIGNALDECK_RETENTION_ENFORCE:-}" = "1" ] && return 0
+  # One key read with grep; the file is never sourced (its values are secrets).
+  [ "$(grep -m1 '^SIGNALDECK_RETENTION_ENFORCE=' "$SD/daemon/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r')" = "1" ]
+}
+# ret_sweep LABEL DIR DAYS GLOB...: regular files at maxdepth 1 of DIR older than
+# DAYS whose name matches a GLOB; one line each, removed only when enforcing.
+ret_sweep() {
+  local label="$1" dir="$2" days="$3" f name pat hit st sz age; shift 3
+  RET_N=0
+  case "$days" in ''|*[!0-9]*|0) echo "RETENTION SKIP $label: '$days' is not a whole number of days > 0"; return 0 ;; esac
+  [ -d "$dir" ] || return 0
+  while IFS= read -r -d '' f; do
+    name="${f##*/}"; hit=0
+    for pat in "$@"; do case "$name" in $pat) hit=1; break ;; esac; done
+    [ "$hit" = 1 ] || continue
+    st=$(stat -c '%s %Y' "$f" 2>/dev/null || stat -f '%z %m' "$f" 2>/dev/null) || continue
+    sz="${st% *}"; age=$(( (RET_NOW - ${st#* }) / 86400 ))
+    if [ "$RET_MODE" = enforce ]; then
+      rm -f -- "$f" || { echo "RETENTION FAILED to remove $f"; continue; }
+      echo "RETENTION removed $f ${age}d $sz"
+    else
+      echo "RETENTION would-remove $f ${age}d $sz"
+    fi
+    RET_N=$((RET_N+1)); RET_BYTES=$((RET_BYTES+sz))
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -type f -mmin +$((days*1440)) -print0 2>/dev/null)
+}
+# ret_hold_refusal DIR: prints why DIR must never be swept, or nothing.
+ret_hold_refusal() {
+  local real home sd data
+  [ -n "$1" ] || { echo "empty path"; return; }
+  [ -d "$1" ] || return 0
+  real=$(cd "$1" && pwd -P) || { echo "cannot resolve"; return; }
+  home=$(cd "$HOME" 2>/dev/null && pwd -P); sd=$(cd "$SD" && pwd -P)
+  data=$(cd "$SD/data" 2>/dev/null && pwd -P || echo "$sd/data")
+  case "$real" in
+    /) echo "it is /" ;;
+    "$home") echo "it is \$HOME" ;;
+    "$data"|"$data"/*) echo "it is inside $SD/data" ;;
+    *) case "$sd/" in "$real"/*) echo "it is the repo root or one of its parents" ;; esac ;;
+  esac
+}
+ret_run() {
+  local logs_n hold_n=0 why
+  RET_NOW=$(date +%s); RET_BYTES=0; RET_MODE=report
+  ret_enforce && RET_MODE=enforce
+  echo "== Retention ($RET_MODE): logs/ over ${SIGNALDECK_LOG_RETENTION_D:-30}d, $TRASH over ${SIGNALDECK_HOLDING_RETENTION_D:-30}d =="
+  ret_sweep logs "$SD/logs" "${SIGNALDECK_LOG_RETENTION_D:-30}" '*.log' '*.log.[0-9]' '*.log.[0-9][0-9]' \
+    '*.log.[0-9].gz' '*.log.[0-9][0-9].gz' '*.err' '*.out' '*.md' '*.jsonl'
+  logs_n=$RET_N
+  why=$(ret_hold_refusal "$TRASH")
+  if [ -n "$why" ]; then
+    echo "RETENTION SKIP holding: refusing $TRASH ($why)"
+  else
+    ret_sweep holding "$TRASH" "${SIGNALDECK_HOLDING_RETENTION_D:-30}" '*'
+    hold_n=$RET_N
+  fi
+  echo "RETENTION mode=$RET_MODE logs=$logs_n holding=$hold_n bytes=$RET_BYTES"
+}
+if [ "$RETENTION_ONLY" = 1 ]; then ret_run; exit 0; fi
+
 mkdir -p "$TRASH" 2>/dev/null || true
 echo "== DB backups: keeping $KEEP newest, moving older to $TRASH =="
 if [ ! -d "$TRASH" ]; then
@@ -127,5 +203,7 @@ while IFS= read -r lf; do
   echo "  rotated $(basename "$lf") (was $sz)"
 done < <(find "$SD/logs" -maxdepth 1 -type f -name '*.log' -size +"${ROTATE_MB}"M 2>/dev/null)
 [ "$found" -eq 0 ] && echo "  (none over ${ROTATE_MB} MB)"
+
+ret_run
 
 echo "== Disk free now: $(df -h / | awk 'NR==2{print $4}') =="
