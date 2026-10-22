@@ -116,7 +116,7 @@ func modelKeys(rows []store.LabeledFeature) []string {
 	set := map[string]struct{}{}
 	for _, r := range rows {
 		for k := range r.Vec {
-			if gbm.SelfReferentialKey(k) || strings.HasSuffix(k, gbm.PresenceSuffix) {
+			if gbm.ExcludedKey(k) || strings.HasSuffix(k, gbm.PresenceSuffix) {
 				continue
 			}
 			set[k] = struct{}{}
@@ -214,7 +214,9 @@ func main() {
 	dbPath := flag.String("db", "../data/signaldeck.db", "source SQLite DB (opened read-only)")
 	snapPath := flag.String("snapshot", "", "path for the frozen VACUUM INTO copy (required)")
 	versions := flag.String("versions", "8,10", "featureVersions to ablate the per-symbol GBM leg on")
+	keysFlag := flag.String("keys", strings.Join(ablatedKeys, ","), "comma-separated keys to ablate (default: the four A7 keys; the 2026-10-21 source retirement used tv_reco,stocktwits_bull_ratio)")
 	flag.Parse()
+	ablatedKeys = strings.Split(*keysFlag, ",")
 	if *snapPath == "" {
 		fmt.Fprintln(os.Stderr, "-snapshot is required")
 		os.Exit(2)
@@ -241,7 +243,7 @@ func main() {
 
 	fmt.Printf("# selfref ablation — %s\n", time.Now().UTC().Format("2006-01-02 15:04 MST"))
 	fmt.Printf("source=%s\nsnapshot=%s\nsnapshot_sha256=%s\n", *dbPath, *snapPath, snapSHA)
-	fmt.Printf("ablated keys (A7): %s\n\n", strings.Join(ablatedKeys, ", "))
+	fmt.Printf("ablated keys: %s\n\n", strings.Join(ablatedKeys, ", "))
 
 	syms, err := st.ListSymbols(ctx, true)
 	fatal(err, "list symbols")

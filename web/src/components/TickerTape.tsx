@@ -2,7 +2,8 @@
 
 // TICKER TAPE (Signal8 wave, Stage 4): slim auto-scrolling strip at the top
 // of the home page — index ETFs (SPY/QQQ/DIA/IWM), sector ETFs (XLK/XLF/XLE/
-// XLV), BTC, and VIX. One /api/tape call, polled every 60s.
+// XLV) and VIX. One /api/tape call, polled every 60s. Crypto items are dropped
+// (crypto paused since 22 October 2026).
 //
 // HONESTY: prices are STORED DAILY CLOSES refreshed on worker cadence — not
 // live quotes — and the strip's title tooltip + VIX chip say so (VIX is the
@@ -115,7 +116,7 @@ export default function TickerTape({
     };
   }, [driven]);
 
-  const items = driven ? itemsProp : (resp?.items ?? null);
+  const items = (driven ? itemsProp : (resp?.items ?? null))?.filter((it) => it.kind !== "crypto") ?? null;
   const note = driven ? noteProp : resp?.note;
   const failed = !driven && failCount > 0;
 

@@ -388,3 +388,30 @@ func TestMarketCtxJoin(t *testing.T) {
 		}
 	}
 }
+
+// FRED was retired 22 Oct 2026, so the stored VIX series stops. Weeks whose
+// anchor is more than vixMaxAgeSecs past the last observation must read the
+// regime as unobserved (vix_* omitted, HighVol false), never the frozen close.
+func TestMarketCtxStaleVIXOmitted(t *testing.T) {
+	spy := mkBars(t0, waveCloses(400))
+	vix := make([]Point, 200)
+	for k := range vix {
+		vix[k] = Point{Ts: t0 + int64(k)*day, Value: 30} // elevated, then stops
+	}
+	last := vix[len(vix)-1].Ts
+	fresh, stale := 0, 0
+	for _, r := range WeeklyRows(mkBars(t0, waveCloses(400)), BuildMarketCtx(spy, vix), 0) {
+		_, has := r.Vec["vix_high_vol"]
+		if r.Ts-last <= vixMaxAgeSecs {
+			fresh++
+			if !has || !r.HighVol {
+				t.Fatalf("row %d: fresh VIX must be joined", r.Ts)
+			}
+		} else if stale++; has || r.HighVol {
+			t.Fatalf("row %d: VIX %d days stale still stamped", r.Ts, (r.Ts-last)/day)
+		}
+	}
+	if fresh == 0 || stale == 0 {
+		t.Fatalf("fixture must cover both sides: fresh %d stale %d", fresh, stale)
+	}
+}

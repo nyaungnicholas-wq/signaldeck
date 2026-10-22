@@ -181,4 +181,29 @@ test.describe("release smoke", () => {
     await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
     expect(crashes.join(" | ")).toBe("");
   });
+
+  // Legal text guards. The Terms listed Kraken and Coinbase as live sources after
+  // crypto was paused, and nothing failed; the Privacy Notice must keep stating
+  // the backup encryption it promises and its draft status.
+  // Retired sources may be named in the retired list, never in the in-use sentence
+  // (the first paragraph of the Data sources section).
+  test("/terms in-use sources name no retired source", async ({ page }) => {
+    await page.goto("/terms");
+    const inUse = page.getByRole("region", { name: "data sources and third-party services" }).locator("p").first();
+    // Positive first, so the negative checks below cannot pass on an empty page.
+    await expect(inUse).toContainText("Alpaca Markets");
+    for (const retired of ["Kraken", "Coinbase", "Hyperliquid", "FINRA", "Cboe", "FRED"]) {
+      await expect(inUse).not.toContainText(retired);
+    }
+  });
+
+  test("/privacy states backup encryption, the deletion record and its draft status", async ({ page }) => {
+    await page.goto("/privacy");
+    const body = page.locator("body");
+    await expect(body).toContainText("AES-256-GCM");
+    await expect(body).toContainText("Draft, pending legal review");
+    // The deletion record's own wording: "creation time" alone also matches the
+    // collected-data table, so it would pass with the record misdescribed.
+    await expect(body).toContainText("email address, username and creation time");
+  });
 });

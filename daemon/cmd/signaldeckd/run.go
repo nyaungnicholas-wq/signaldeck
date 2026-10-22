@@ -30,18 +30,10 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cboe"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/hyperliquid"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/stocktwits"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
@@ -100,8 +92,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	} else {
 		slog.Warn("no Alpaca keys found — stock ingestion disabled (set ALPACA_KEY/SECRET or keep them in stock-trader/.env)")
 	}
-	krakenClient := cryptohist.New()
-	backfiller := pipeline.NewBackfiller(st, alpacaClient, krakenClient)
+	// Kraken is not used (2026-10-21): its terms restrict automated use and
+	// derived works, so crypto ingestion is paused and the backfiller gets no
+	// Kraken client (crypto backfills return an error instead of calling it).
+	backfiller := pipeline.NewBackfiller(st, alpacaClient, nil)
 
 	// ONE EDGAR client for the WHOLE daemon. SEC's fair-access policy caps
 	// clients at 10 req/s; the limiter that enforces that lives INSIDE
@@ -139,15 +133,21 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		return
 	}
 
-	// ── symbols: consolidated crypto always; seed stocks on first boot ──
-	cryptoSym, err := st.UpsertSymbol(ctx, cfg.CryptoSymbol, md.Crypto,
-		"Bitcoin/USD (Coinbase+Kraken consolidated via TickStream)")
-	if err != nil {
-		slog.Error("seed crypto symbol", "err", err)
+	// ── symbols: crypto is PAUSED (2026-10-22, no Kraken); seed stocks on first boot ──
+	// Every crypto symbol is set inactive on each boot, so no producer (predict,
+	// regime, composite, signals, dq-auditor) mints anything new for it. Nothing
+	// is deleted: the published history stays verifiable on /proof. Open crypto
+	// forecasts the resolver can still settle from stored bars grade; the rest
+	// are voided by `sdmaint void-retired-crypto` (reason source_retired).
+	if err := pauseCrypto(ctx, st); err != nil {
+		// Fatal on purpose: only predict has a stale-bar backstop, so regime,
+		// composite and other producers would keep minting crypto rows from
+		// frozen bars if the pause did not hold.
+		slog.Error("pause crypto", "err", err)
 		return
 	}
+	retireTVCandidates(ctx, st)
 	if seeded, _ := st.GetMeta(ctx, "seeded_v1"); seeded == "" {
-		_ = backfiller.Enqueue(cryptoSym)
 		created, failedSeeds := 0, 0
 		if alpacaClient != nil {
 			for _, s := range seedStocks {
@@ -260,8 +260,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		// to see it. This is the only thing in the fleet that notices the
 		// product's own surface going unreachable. See internal/pipeline/apiprobe.go.
 		&pipeline.APIProbe{Addr: cfg.HTTPAddr},
-		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
-		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
+		// cryptolive (TickStream merges Coinbase + Kraken) and CryptoBars (Kraken
+		// OHLC) are not wired while crypto is paused (2026-10-22).
 		backfiller,
 		&pipeline.BackfillReconciler{St: st, BF: backfiller},
 		&pipeline.SignalRunner{St: st},
@@ -380,7 +380,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// own findings past `shadow`.
 	fleet = append(fleet, &pipeline.ResearchLoop{St: st})
 	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
-	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
+	// edgar-fetcher (fred-poller retired 22 Oct 2026, licence) (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);
 	// BEFORE the watchdog spec snapshot so both are health-audited.
 	fleet = append(fleet, freeDataWorkers(cfg, st, edgarClient)...)
@@ -445,7 +445,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// spec snapshot so both are health-audited like every other worker.
 	fleet = append(fleet, weeklyProofWorkers(st, llmClient)...)
 	// Stage 5 — FINRA Reg SHO wave (constructor appended at the END of this
-	// file) — finra-shorts (6h tick): free, registration-less daily short sale
+	// file) — RETIRED 22 Oct 2026 (FINRA terms; the constructor returns nil).
+	// Was: finra-shorts (6h tick): free, registration-less daily short sale
 	// volume files (cdn.finra.org Consolidated NMS), NY ~18:30 publish gate +
 	// meta day-key dedup, ~30-trading-day first-run backfill, universe-scoped
 	// storage. Missing/late files degrade to a dq event, never a fleet
@@ -480,7 +481,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// resolved history and writes findings to self_audit + insights, every check
 	// gated at n>=30. BEFORE the watchdog spec snapshot so it's health-audited.
 	fleet = append(fleet, selfAuditWorkers(st)...)
-	// DATA-EXPANSION wave (constructor appended at the END of this file) — six
+	// DATA-EXPANSION wave (constructor appended at the END of this file). Only
+	// cot-poller and wiki-attention remain wired; finra-shortint and cboe-pc
+	// were retired 22 Oct 2026 (licence). Originally six
 	// free, keyless external context pollers: finra-shortint (bi-monthly short
 	// interest), crypto-perp (Hyperliquid funding/OI), cot-poller (CFTC weekly
 	// positioning), stocktwits-fetcher + wiki-attention (watchlist/hot-set
@@ -787,11 +790,7 @@ func registerSymbol(ctx context.Context, st *store.Store, ac *alpaca.Client,
 		}
 		name = n
 	case md.Crypto:
-		// Kraken pairs are BASE/QUOTE; a quick shape check — the backfill
-		// itself is the real validation (unknown pairs error visibly).
-		if !strings.Contains(symbol, "/") {
-			return md.Symbol{}, fmt.Errorf("crypto symbols are BASE/QUOTE, e.g. ETH/USD")
-		}
+		return md.Symbol{}, fmt.Errorf("crypto is paused: SignalDeck has no licensed crypto data source")
 	}
 
 	// MONITOR path (stock, stream=false): register as a broad-universe daily
@@ -888,10 +887,9 @@ func alertBriefingWorkers(st *store.Store, llmClient llm.Client, remote *notify.
 func discoveryWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 ) []workers.Worker {
-	// WHOLE-MARKET extension: TradingView's public scanner needs no keys, so
-	// the TV source is always wired — each sweep also screens the entire US
-	// market (top volume + top |change|) into the same candidates pipeline.
-	w := &discovery.Worker{St: st, TV: tvscanner.New()}
+	// TV is left nil (Alpaca-only discovery): TradingView's terms bar
+	// non-display use of its scanner data, so it was removed on 2026-10-21.
+	w := &discovery.Worker{St: st}
 	if cfg.HasAlpaca() {
 		w.Client = discovery.NewClient(cfg.AlpacaKey, cfg.AlpacaSecret)
 		w.Subscribe = func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
@@ -1015,11 +1013,8 @@ func perSymbolWorkers(st *store.Store) []workers.Worker {
 
 // ─────────────────────────────────────────────────────────────────────────
 // FREE-DATA WAVE / STAGE 2 (appended block).
-// freeDataWorkers returns the wave's two zero-cost, no-vendor context workers:
-//   - fred-poller (6h): pulls the FRED macro set (VIXCLS/DGS10/T10Y2Y/DFF) via
-//     the KEYLESS CSV endpoint so it always runs; an optional
-//     SIGNALDECK_FRED_KEY switches the client to the JSON API. Feeds
-//     macro_series (LatestMacro / LatestVIX) for the Stage-6 feature layer.
+// freeDataWorkers returns the wave's one zero-cost, no-vendor context worker
+// (fred-poller left on 22 Oct 2026, see below):
 //   - edgar-fetcher (24h): pulls SEC EDGAR company-facts (Revenues/EPS/shares/
 //     latest-filing) for the equity universe, rate-limited (<=10 req/s) with a
 //     descriptive User-Agent and 429/503 backoff, sweeping the universe over
@@ -1031,13 +1026,16 @@ func perSymbolWorkers(st *store.Store) []workers.Worker {
 // mutex-serialized limiter spaces this fetcher's requests against the
 // signal8 pollers' too, keeping the whole process under SEC's 10 req/s.
 func freeDataWorkers(cfg config.Config, st *store.Store, ec *edgar.Client) []workers.Worker {
-	fp := &pipeline.FredPoller{St: st, Client: fred.New(os.Getenv("SIGNALDECK_FRED_KEY"))}
+	// fred-poller removed 22 Oct 2026: FRED's terms grant a personal,
+	// non-commercial licence and bar storing its content in a database without
+	// written consent (some series, e.g. VIXCLS and BAMLH0A0HYM2, are
+	// third-party copyrighted). Stored macro_series rows are kept, not deleted.
 	ef := &pipeline.EdgarFetcher{St: st}
 	if cfg.HasAlpaca() {
 		// Only fetch fundamentals when there's a stock universe to fetch for.
 		ef.Client = ec
 	}
-	return []workers.Worker{fp, ef}
+	return []workers.Worker{ef}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1189,8 +1187,8 @@ func anomalyWorkers(st *store.Store) []workers.Worker {
 // for members with zero daily bars — a single free multi-symbol request at
 // most. Once registered, the regular universe-poller refreshes them with the
 // rest of the daily universe, so the steady-state run is a no-op sweep.
-// BTC and VIX complete the strip in the API layer (/api/tape) from crypto
-// bars + the stored FRED VIXCLS series — no equity seeding needed for them.
+// BTC completes the strip in the API layer (/api/tape) from crypto bars while
+// crypto is active; VIX (FRED) left the strip on 22 Oct 2026.
 // Without Alpaca keys the worker still registers the symbols and reports
 // honestly that it cannot backfill.
 func tapeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []workers.Worker {
@@ -1419,9 +1417,11 @@ func sicBulkWorkers(st *store.Store, ec *edgar.Client) []workers.Worker {
 // short interest; it includes market-maker activity and a high ratio is NOT
 // directly bearish. /api/shorts and the UI carry that caveat verbatim.
 func finraShortsWorkers(st *store.Store) []workers.Worker {
-	return []workers.Worker{
-		&pipeline.ShortVolPoller{St: st, Client: finra.New()},
-	}
+	// finra-shorts removed 22 Oct 2026: finra.org's Terms of Use bar building
+	// a database, derivative works and automated extraction from its files.
+	// /api/shorts now serves only rows written before then, and the licence
+	// guard refuses it on a published deployment (datalicense.RestrictedRoutes).
+	return nil
 }
 
 // runSICBulkOnce is the MANUAL one-shot entry behind `signaldeckd
@@ -1478,9 +1478,10 @@ func compositeWorkers(st *store.Store) []workers.Worker {
 // an EXTERNAL, independent signal, NOT SignalDeck's model and NOT advice.
 // /api/tv-rating and the UI carry that caveat verbatim.
 func tvRatingWorkers(st *store.Store) []workers.Worker {
-	return []workers.Worker{
-		&pipeline.TVRatingPoller{St: st, TV: tvscanner.New()},
-	}
+	// The TradingView scanner poller was removed on 2026-10-21: TradingView's
+	// terms bar non-display use of its data. /api/tv-rating now serves only
+	// rows written before then.
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1569,19 +1570,23 @@ func selfAuditWorkers(st *store.Store) []workers.Worker {
 // httptest coverage (NO live-network tests).
 func dataExpansionWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
-		&pipeline.ShortInterestPoller{St: st, Client: finra.NewSI()},
-		&pipeline.CryptoPerpPoller{St: st, Client: hyperliquid.New()},
+		// ShortInterestPoller (finra-shortint) removed 22 Oct 2026: FINRA's
+		// terms, as for finra-shorts above.
+		// CryptoPerpPoller is not wired while crypto is paused (2026-10-22).
 		&pipeline.COTPoller{St: st, Client: cftc.New()},
-		&pipeline.StocktwitsFetcher{St: st, Client: stocktwits.New()},
+		// StocktwitsFetcher removed 2026-10-21: StockTwits' terms bar automated
+		// extraction without written authorization.
 		&pipeline.WikiAttention{St: st, Client: wikimedia.New()},
-		&pipeline.CboePCPoller{St: st, Client: cboe.New()},
+		// CboePCPoller (cboe-pc) removed 22 Oct 2026: Cboe's website terms bar
+		// storing its market statistics in a retrieval system, displaying them
+		// and deriving from them.
 		// tv-quotes (60s, market-hours gated; crypto 24/7): near-real-time
 		// quote tape from TradingView's public scanner — rtc real-time Cboe
 		// One composite when present, else the 15-min-delayed close, per-row
 		// flagged; full-market day volume. A TAPE (rows >2h pruned inline) —
 		// bars stay the durable record. CAVEAT: descriptive supplement to the
 		// bar record, not a replacement.
-		&pipeline.TVQuotesPoller{St: st, TV: tvscanner.New()},
+		// TVQuotesPoller removed 2026-10-21 (TradingView terms, see above).
 	}
 }
 
@@ -2139,4 +2144,43 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 		kept = append(kept, w)
 	}
 	return kept
+}
+
+// pauseCrypto sets every crypto symbol inactive. It runs on every boot because
+// earlier builds re-activated BTC/USD at startup; a symbol that is already
+// inactive is left alone. Any error is returned and the daemon refuses to start.
+//
+// It deliberately does NOT stamp delisted_at. `sdmaint void-retired-crypto
+// -apply` dates the exit (survivorship_clean needs it) in the same transaction
+// as the source_retired void; a stamp here would let maintain's
+// VoidDeadPredictions void those rows first under a different reason.
+func pauseCrypto(ctx context.Context, st *store.Store) error {
+	syms, err := st.ListSymbols(ctx, true)
+	if err != nil {
+		return fmt.Errorf("list symbols: %w", err)
+	}
+	for _, s := range syms {
+		if s.Market != md.Crypto {
+			continue
+		}
+		if err := st.SetSymbolActive(ctx, s.ID, false); err != nil {
+			return fmt.Errorf("deactivate %s: %w", s.Symbol, err)
+		}
+		slog.Info("crypto paused", "symbol", s.Symbol)
+	}
+	return nil
+}
+
+// retireTVCandidates records, once, when this build first booted. Discovery
+// candidates last seen before then may come from TradingView's scanner, so
+// store.Candidates("new") hides them until an Alpaca sweep sees them again
+// (which moves last_seen_ts past the mark). Nothing is deleted or dismissed.
+func retireTVCandidates(ctx context.Context, st *store.Store) {
+	if v, _ := st.GetMeta(ctx, store.CandidatesFreshSinceKey); v != "" {
+		return
+	}
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	if err := st.SetMeta(ctx, store.CandidatesFreshSinceKey, now); err != nil {
+		slog.Error("retire TradingView candidates", "err", err)
+	}
 }

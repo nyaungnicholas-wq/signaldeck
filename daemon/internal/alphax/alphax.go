@@ -131,7 +131,7 @@ type Dataset struct {
 // alphax on forecast_prob and forecast_lift. The shared predicate also trims the
 // presence suffix itself, so pred_raw__has is excluded with its base key.
 func excludedKey(k string) bool {
-	return gbm.SelfReferentialKey(k)
+	return gbm.ExcludedKey(k)
 }
 
 // hasSuffix marks the DERIVED per-feature presence indicators (M2): for every

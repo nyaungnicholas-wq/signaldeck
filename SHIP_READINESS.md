@@ -45,6 +45,18 @@ solved by writing more of it.
 
 ## BLOCKING — legal
 
+### Release order for the 22 October 2026 legal pages (`fullfix/p4-legal`) — OPEN, 2026-10-22
+
+The updated /privacy and /terms describe work that lives on other branches. Do not merge or deploy `fullfix/p4-legal`, or run its web release, until every line below is true.
+
+1. `fullfix/p5-backup` is merged and deployed: off-site encryption and the deletion record (`daemon/internal/tombstone`). Merged on the integration branch 2026-10-22 (8b50dcc6); deploy pending.
+2. The p5 upload refuses to run without a key. On 2026-10-22 it printed a warning and uploaded the backup UNENCRYPTED when no key was set (`ops/signaldeck-backup-offline.sh:448`, `ops/lib-offsite-gh.sh:84` on `fullfix/p5-backup`). If p5 keeps that fallback, replace "each copy is encrypted" on /privacy (Who else handles your data, Backups and deletion, Security) with "the backup job encrypts each copy (AES-256-GCM) on the operator's computer before upload when its key is present, and the operator checks that each new copy is encrypted".
+3. The key is configured, and the newest asset in the off-site GitHub release ends in `.enc`.
+4. `fullfix/p7-retire` is merged and deployed: FRED, FINRA and Cboe are unwired, and `/api/source-health` shows them paused. Merged on the integration branch 2026-10-22 (6f6fe6c9; `daemon/cmd/signaldeckd/run.go` no longer wires their pollers); deploy pending.
+5. `fullfix/p2-crypto` is merged and deployed: crypto paused, open crypto forecasts voided.
+6. `fullfix/p6-retention` is merged and its daily job has run once (report-only is enough), because /privacy says a daily automated job checks the retention limits.
+7. Owner only: the Terms promise members an email before a material change takes effect. This update changes who the Terms bind, the data sources and the "Ask the data" wording. Send that email before the web release, or get counsel's answer that it is not needed (counsel packet version 3, decision 11).
+
 ### 1. No LICENSE file — CLEARED 2026-09-19
 `LICENSE` exists and is a Source-Available License, "Copyright (c) 2026
 Nicholas Nyaung. All rights reserved." A reader can now tell what they are
@@ -64,10 +76,11 @@ engineering check settles them.
 
 | source | how it is accessed | exposure |
 |---|---|---|
-| `tvscanner` | TradingView's public scanner endpoint, no account | automated access is against TradingView's terms; their ratings are their IP |
-| `stocktwits` | undocumented public JSON stream, no key | same class — tolerated for personal use, not a commercial supply chain |
-| `alpaca` | licensed market data | redistribution is prohibited by the agreement |
-| `edgar`, `fred`, `finra`, `cftc`, `cboe` | US government / public | genuinely free to use and redistribute |
+| `tvscanner` | TradingView's public scanner endpoint, no account | retired 2026-10-21/22 (no longer collected); was: automated access is against TradingView's terms; their ratings are their IP |
+| `stocktwits` | undocumented public JSON stream, no key | retired 2026-10-21/22 (no longer collected); was: tolerated for personal use, not a commercial supply chain |
+| `alpaca` | licensed market data | redistribution is prohibited by the agreement; derived-data consent is an open counsel question (2026-10-22) |
+| `edgar`, `cftc` | US government / public | free to access and reuse |
+| `fred`, `finra`, `cboe` | public websites | retired 2026-10-22: licence review (their terms do not allow this use) |
 
 SignalDeck is a bring-your-own-keys platform. The public surface serves derived analytics only (grades, the hash-chained ledger, the volatility record, calibration). No raw bar, quote, headline, or vendor rating leaves the host. The code already enforces this: every licensed raw route in `daemon/internal/datalicense/datalicense.go` `RestrictedRoutes` answers 451 on a published deployment; `BarsRedistributable()` is always false because every price feed in use is licensed; `SIGNALDECK_ALLOW_RAW_EXPORT` records an operator assertion and grants no right. This is a packaging decision, not a legal review, and `DATA_SOURCES.md` section "Not a legal review" still applies; if the platform is ever sold commercially, that paragraph is the trigger for a real one. A source-scan test (`TestEveryRegisteredVendorRouteIsGoverned`) now fails CI when a new `/api` route that looks like it serves vendor rows is not classified.
 
@@ -107,47 +120,53 @@ This is the question a serious evaluator asks first, and the current answer is:
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-10-04T14:05:12) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-10-21T17:33:35) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 
 | Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
 |---|---|---|---|---|---|---|---|
-| filingsdrift21 | all | 199 | withheld — no null | — | — | 26 | withheld |
-| liquidity21 | all | 12,151 | 69.8% | 70.7% | -0.9pp | 28 | withheld |
-| liquidity21#persist | all | 11,863 | withheld — no null | — | — | 27 | withheld |
-| liquidity21-crypto | all | 261 | 51.3% | 48.3% | +3.0pp | 39 | withheld |
-| liquidity21-crypto#persist | all | 240 | withheld — no null | — | — | 36 | withheld |
-| trend21 | all | 12,239 | 78.3% | 78.6% | -0.3pp | 28 | withheld |
-| trend21#persist | all | 11,955 | withheld — no null | — | — | 27 | withheld |
-| trend21-crypto | all | 261 | 53.6% | 50.4% | +3.2pp | 39 | withheld |
-| trend21-crypto#persist | all | 240 | withheld — no null | — | — | 36 | withheld |
-| vol21 | all | 12,252 | 49.5% | 48.0% | +1.4pp | 28 | withheld |
-| vol21#persist | all | 11,961 | withheld — no null | — | — | 27 | withheld |
+| directional-ensemble (1d) | all | 2,423 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 18 | withheld (SD-30) |
+| prequential-majority (1d) | all | 1,792 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 16 | withheld (SD-30) |
+| directional-ensemble (1w) | all | 2,279 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 12 | withheld (SD-30) |
+| prequential-majority (1w) | all | 365 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 4 | withheld (SD-30) |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 724 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 12 | withheld (SD-30) |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 1,334 | withheld (SD-30) | withheld (SD-30) | withheld (SD-30) | 11 | withheld (SD-30) |
+| filingsdrift21 | all | 210 | withheld — no null | — | — | 33 | withheld |
+| liquidity21 | all | 21,483 | 70.2% | 70.8% | -0.6pp | 40 | withheld |
+| liquidity21#persist | all | 21,195 | withheld — no null | — | — | 39 | withheld |
+| liquidity21-crypto | all | 366 | 65.0% | 64.1% | +1.0pp | 54 | withheld |
+| liquidity21-crypto#persist | all | 345 | withheld — no null | — | — | 51 | withheld |
+| trend21 | all | 21,649 | 79.6% | 79.8% | -0.2pp | 40 | withheld |
+| trend21#persist | all | 21,365 | withheld — no null | — | — | 39 | withheld |
+| trend21-crypto | all | 366 | 62.3% | 60.9% | +1.4pp | 54 | withheld |
+| trend21-crypto#persist | all | 345 | withheld — no null | — | — | 51 | withheld |
+| vol21 | all | 21,691 | 53.2% | 53.0% | +0.2pp | 40 | withheld |
+| vol21#persist | all | 21,400 | withheld — no null | — | — | 39 | withheld |
 
-Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+**Directional 1d/1w figures withheld: label partly realised at issue (SD-30); a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors.** These rows are scored against a label that is mostly realised when the call is issued, so their accuracy, null, skill, interval and verdict are not published; n and distinct days describe the sample only.
 
 Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
 
 - `filingsdrift21` — NO BASELINE — naive-persistence null not frozen for these calls
-- `liquidity21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `liquidity21` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `liquidity21#persist` — BENCHMARK — the frozen naive-persistence null itself
 - `liquidity21-crypto` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `liquidity21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
-- `trend21` — INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `trend21` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `trend21#persist` — BENCHMARK — the frozen naive-persistence null itself
 - `trend21-crypto` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `trend21-crypto#persist` — BENCHMARK — the frozen naive-persistence null itself
-- `vol21` — INSUFFICIENT BLOCKS (3/10 non-overlapping horizon blocks) — no interval, so no verdict
+- `vol21` — INSUFFICIENT BLOCKS (4/10 non-overlapping horizon blocks) — no interval, so no verdict
 - `vol21#persist` — BENCHMARK — the frozen naive-persistence null itself
 
 ### Backtested claims with no live record yet
 
-- `trend63` — registered claim 70.0%, 28,914 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 38,016 forecasts recorded, 0 graded. Not a live result.
 
-**Multiplicity:** family_size=18, looks=77, divisor=1386, corrected_alpha=3.6075036075036075e-05.
+**Multiplicity:** family_size=18, looks=94, divisor=1692, corrected_alpha=2.955082742316785e-05.
 
-**Survivorship:** epoch 2026-07-24; listing status resolvable for 304/889 graded symbols (34.2%): 585 inactive symbol(s) with no delisted_at; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
+**Survivorship:** epoch 2026-07-24; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -205,7 +224,7 @@ referred to does not exist, and picking a host is still an open decision.
 
 ### 6. Free-tier data — NOT A BLOCKER, corrected 2026-09-20
 
-The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which remain crypto-only. The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
+The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which were crypto-only (crypto paused 2026-10-22). The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
 
 ---
 

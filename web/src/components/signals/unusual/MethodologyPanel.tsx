@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 import { SEVERITY_COLOR } from "./measure";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 
 interface MethodEntry {
   label: string;
@@ -24,7 +25,7 @@ const ENTRIES: MethodEntry[] = [
   {
     label: "IMBALANCE",
     color: "var(--bid)",
-    scope: "crypto — real order-book data",
+    scope: `crypto — order-book data, history only (${CRYPTO_PAUSED_LABEL})`,
     lines: [
       "mean signed order-book imbalance over the last 5m of 1Hz snapshots, z-scored against the means of the 12 trailing 5m windows across the preceding 60m baseline",
       "a window needs ≥30 snapshots for its mean to count; ≥6 usable trailing window means required — feed gaps yield NO signal",

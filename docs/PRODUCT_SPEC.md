@@ -2,7 +2,7 @@
 
 ## Purpose and positioning
 
-SignalDeck is a self-grading market-research instrument. A Go daemon records US stock and crypto market data, computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes exist, grades them against realized bars, and publishes verdicts including failures. The ambition is rigor and clarity, not a claim of institutional equivalence or a trading edge. It is not an auto-trader and does not provide advice.
+SignalDeck is a self-grading market-research instrument. A Go daemon records US stock market data (crypto paused 2026-10-22), computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes exist, grades them against realized bars, and publishes verdicts including failures. The ambition is rigor and clarity, not a claim of institutional equivalence or a trading edge. It is not an auto-trader and does not provide advice.
 
 ## Primary journeys
 
@@ -11,7 +11,7 @@ SignalDeck is a self-grading market-research instrument. A Go daemon records US 
 **Intended user:** Anyone scanning the public record or a signed-in workspace for a validated, regime-aware view of current conditions.  
 **Starting question:** What is the market regime today, which symbols show pressure, and where is the evidence?  
 **Entry page(s):** `/` (landing), `/market/overview`, `/dashboard` (session).  
-**Required data:** Alpaca IEX daily bars (stocks), Kraken/TickStream (crypto), FRED VIX, daemon-computed pressure scores, regime classifications, publication status from `/api/accuracy`.  
+**Required data:** Alpaca IEX daily bars (stocks); Kraken/TickStream crypto and FRED VIX until 2026-10-22 (crypto paused, FRED retired 2026-10-22: licence review); daemon-computed pressure scores, regime classifications, publication status from `/api/accuracy`.  
 **Useful output:** Ranked screener by pressure score, movers list, regime label, today's validated volatility-regime signal, top insight, market gauges, publication verdict or refusal reason.  
 **Necessary explanation:** Regime definitions, pressure score composition, why publication may be refused (collapsed window), what "no qualified read today" means.  
 **Failure and insufficient-evidence states:** Refusal notice with summarized reason and full grader text behind details; "no qualified read today" on dashboard; daemon unreachable state; licence refusal (HTTP 451) for raw data.  
@@ -22,7 +22,7 @@ SignalDeck is a self-grading market-research instrument. A Go daemon records US 
 **Intended user:** A researcher or practitioner drilling into a single symbol.  
 **Starting question:** What does the price structure show, which validated signals apply, what is the measured walk-forward accuracy per conviction band, and what usually happens next?  
 **Entry page(s):** `/s/[market]/[symbol]` (symbol research page).  
-**Required data:** Daily bars, indicators, patterns, structural signals with walk-forward accuracy per band, pressure decomposition, news, unusual activity, SEC EDGAR filings, FINRA short volume, insider/institution/congress trades, the symbol's own agent record, experimental directional P(up) marked experimental.  
+**Required data:** Daily bars, indicators, patterns, structural signals with walk-forward accuracy per band, pressure decomposition, news, unusual activity, SEC EDGAR filings, FINRA short volume (retired 2026-10-22: licence review), insider/institution/congress trades, the symbol's own agent record, experimental directional P(up) marked experimental.  
 **Useful output:** Price chart with indicators and patterns, validated signals with measured accuracy, "why it's moving" evidence, pressure decomposition, historical conditional outcomes, agent record, experimental forecast clearly labelled.  
 **Necessary explanation:** Conviction bands and how accuracy is measured walk-forward; why experimental P(up) is withheld from the flagship record; data licensing limits (raw data never redistributed anonymously).  
 **Failure and insufficient-evidence states:** "Insufficient" cards where evidence floors are not met; experimental label on directional probability; licence refusal (HTTP 451) for raw data download.  

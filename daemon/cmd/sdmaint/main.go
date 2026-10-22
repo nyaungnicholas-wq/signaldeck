@@ -40,6 +40,16 @@
 //	                                      nightly by ops/signaldeck-refresh.sh so
 //	                                      growth regressions page instead of
 //	                                      being discovered at 13GB)
+//	sdmaint offsite-keygen [-key P]     — new owner-only off-site backup key
+//	sdmaint offsite-seal|offsite-open -key K -in X -out Y
+//	                                    — chunked AES-256-GCM for the off-site
+//	                                      backup (offsite.go, lib-offsite-gh.sh)
+//	sdmaint replay-tombstones -db D [-log L] [-apply]
+//	                                    — re-apply logged account deletions to
+//	                                      a restored copy (tombstones.go)
+//	sdmaint void-retired-crypto [flags] — void open crypto forecasts no stored bar
+//	                                      can ever settle (crypto paused
+//	                                      2026-10-21); see voidretiredcrypto.go
 //
 // apply-delistings exists so the Python planner can stay strictly read-only
 // (mode=ro, like accuracy_registry.py): every write goes through
@@ -143,9 +153,35 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "void-retired-crypto" {
+		if err := voidRetiredCrypto(os.Args[2:]); err != nil {
+			log.Fatalf("void-retired-crypto: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "quarantine-flat-pads" {
 		if err := quarantineFlatPadsCmd(os.Args[2:]); err != nil {
 			log.Fatalf("quarantine-flat-pads: %v", err)
+		}
+		return
+	}
+	// Off-site backup sealing (offsite.go) and deletion replay (tombstones.go).
+	if len(os.Args) > 1 {
+		if run, ok := map[string]func([]string) error{
+			"offsite-keygen":    offsiteKeygen,
+			"offsite-seal":      func(a []string) error { return offsiteSeal(a, false) },
+			"offsite-open":      func(a []string) error { return offsiteSeal(a, true) },
+			"replay-tombstones": replayTombstones,
+		}[os.Args[1]]; ok {
+			if err := run(os.Args[2:]); err != nil {
+				log.Fatalf("%s: %v", os.Args[1], err)
+			}
+			return
+		}
+	}
+	if len(os.Args) > 1 && os.Args[1] == "waitlist-remove" {
+		if err := waitlistRemove(os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("waitlist-remove: %v", err)
 		}
 		return
 	}
@@ -183,8 +219,9 @@ func main() {
 		log.Fatalf("unknown subcommand %q.\n"+
 			"This binary knows: apply-delistings, repair-added-at, build-universe,\n"+
 			"split-reused-tickers, purge-bad-bars, import-delisted, ledger-verify,\n"+
-			"research-loop, "+
-			"paper-epochs, storage-report, quarantine-flat-pads.\n"+
+			"research-loop, paper-epochs, storage-report, quarantine-flat-pads,\n"+
+			"refetch-cohort, confluence-repair, adjudicate-delistings, void-retired-crypto,\n"+
+			"offsite-keygen, offsite-seal, offsite-open, replay-tombstones, waitlist-remove.\n"+
 			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
 			"Refusing to fall through to the default compaction pass, which would\n"+
 			"strip blobs and VACUUM data/signaldeck.db and ignore every flag you passed.",

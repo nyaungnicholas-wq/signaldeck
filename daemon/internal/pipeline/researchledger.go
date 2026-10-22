@@ -310,6 +310,10 @@ type ledgerObs struct {
 	win     bool
 	nullWin bool // same obs under the null-matched (randomized) direction
 	high    bool // vix_high_vol regime flag at prediction time
+	// regime: the row carries vix_high_vol at all. The key is FRED-derived and
+	// was retired 22 Oct 2026, so newer rows lack it: their regime is
+	// unobserved, not calm.
+	regime bool
 }
 
 // insertLedgerEvidence appends e to its hypothesis's chain and links the
@@ -422,12 +426,14 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		lastKept[r.SymbolID] = r.Ts
 		up := r.Up == 1
 		week := r.Ts / weekSecs
+		_, hasRegime := r.Vec["vix_high_vol"]
 		os = append(os, ledgerObs{
-			ts:   r.Ts,
-			week: week,
-			up:   up,
-			win:  g.call(r.Vec) == up,
-			high: r.Vec["vix_high_vol"] == 1,
+			ts:     r.Ts,
+			week:   week,
+			up:     up,
+			win:    g.call(r.Vec) == up,
+			high:   r.Vec["vix_high_vol"] == 1,
+			regime: hasRegime,
 			// nullWin is the SAME observation graded by the null-matched
 			// direction (deterministic hash parity of symbol+week, the rule
 			// researchx uses), so the no-skill week-win rate is measured on
@@ -457,9 +463,12 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		if o.high {
 			wa.hi++
 		}
+		if o.regime {
+			wa.reg++
+		}
 	}
 	var weeks []*weekAgg
-	totalObs, highs := 0, 0
+	totalObs, highs, regObs := 0, 0, 0
 	for _, wa := range byWeek {
 		if wa.n < minWeekObs {
 			continue // a near-empty week is not a measurable cross-section
@@ -467,6 +476,7 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		weeks = append(weeks, wa)
 		totalObs += wa.n
 		highs += wa.hi
+		regObs += wa.reg
 	}
 	sort.Slice(weeks, func(i, j int) bool { return weeks[i].week < weeks[j].week })
 	if len(weeks) < minNewWeeks || totalObs < w.MinNewObs {
@@ -508,7 +518,7 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 	// the cursor (max window_to over experiment/replication rows) has NOT
 	// advanced, the next run re-grades the window, and any orphaned penalty
 	// rows bias conservative — never optimistic.
-	evidence := w.attacks(g.hypID, now, weeks, k, n, highs, winFrom, winTo)
+	evidence := w.attacks(g.hypID, now, weeks, k, n, highs, regObs, winFrom, winTo)
 	evidence = append(evidence, rl.Evidence{
 		HypID: g.hypID, Ts: now, Kind: kind, K: k, N: n, P0: null.P0(), BF: bf,
 		Note: note, WindowFrom: winFrom, WindowTo: winTo,
@@ -533,8 +543,8 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 // outcome: the cross-sectional win rate strictly beats the week's own folded
 // naive baseline.
 type weekAgg struct {
-	week                       int64
-	n, wins, ups, hi, nullWins int
+	week                            int64
+	n, wins, ups, hi, reg, nullWins int
 }
 
 func (wa *weekAgg) winsTrial() bool { return wa.beats(wa.wins) }
@@ -553,7 +563,7 @@ func (wa *weekAgg) beats(wins int) bool {
 // attacks runs the self-attack battery over one graded window of week trials.
 // Passed attacks are recorded at BF=1 (they count as runs in lethality stats
 // without moving the posterior); failed ones carry their documented penalty.
-func (w *ResearchLedgerWorker) attacks(hypID string, now int64, weeks []*weekAgg, k, n, highs int, winFrom, winTo int64) []rl.Evidence {
+func (w *ResearchLedgerWorker) attacks(hypID string, now int64, weeks []*weekAgg, k, n, highs, regObs int, winFrom, winTo int64) []rl.Evidence {
 	var out []rl.Evidence
 	add := func(bf float64, note string) {
 		out = append(out, rl.Evidence{
@@ -588,10 +598,16 @@ func (w *ResearchLedgerWorker) attacks(hypID string, now int64, weeks []*weekAgg
 	}
 
 	// [2] regime coverage: a window without a MEANINGFUL stressed sample has
-	// never been tested under stress (token high-vol obs do not count).
-	if highs >= minHighVolObs {
+	// never been tested under stress (token high-vol obs do not count). Only
+	// rows carrying vix_high_vol are counted. With none (the key's FRED source
+	// was retired 22 Oct 2026) the regime was not observed, so no row is
+	// written: a calm-only penalty would be false, and a BF=1 "single-regime"
+	// row would supersede the last measured one in rl.EffectiveChain.
+	switch {
+	case regObs == 0:
+	case highs >= minHighVolObs:
 		add(1, fmt.Sprintf("single-regime: window includes %d high-vol obs (>=%d)", highs, minHighVolObs))
-	} else {
+	default:
 		add(rl.PenaltySingleRegime, fmt.Sprintf("single-regime: %d high-vol obs (<%d) — effectively calm-vol only, untested under stress", highs, minHighVolObs))
 	}
 

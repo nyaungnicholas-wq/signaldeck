@@ -5,8 +5,9 @@
 import { useEffect, useRef } from "react";
 import { mountTradingViewWidget } from "@/lib/tradingviewEmbed";
 
-export default function TradingViewChart({ symbol, market, height = 420 }: { symbol: string; market: "crypto" | "stocks"; height?: number }) {
-  const tvSymbol = market === "stocks" ? symbol.toUpperCase() : `COINBASE:${symbol.replace(/\//g, "").toUpperCase()}`;
+// US stocks only: crypto is paused (since 22 October 2026) and members never reach a crypto page.
+export default function TradingViewChart({ symbol, height = 420 }: { symbol: string; height?: number }) {
+  const tvSymbol = symbol.toUpperCase();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

@@ -1,8 +1,10 @@
 "use client";
 
-// MICROSTRUCTURE (crypto only) — live book snapshot: bid/ask/mid/wmid,
+// MICROSTRUCTURE (crypto only) — book snapshot: bid/ask/mid/wmid,
 // order-book imbalance mini-gauge, spread and apply latency, plus a
 // 5-minute imbalance sparkline polled from /api/snaps.
+// NOT MOUNTED: crypto paused since 22 October 2026 (no licensed data source).
+// The symbol page re-mounts it if crypto ever comes back.
 
 import { useEffect, useState } from "react";
 import { api, pollMs, POLL_LIVE, type Market, type Snap } from "@/lib/api";

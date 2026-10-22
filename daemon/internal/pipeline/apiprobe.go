@@ -78,6 +78,12 @@ func (w *APIProbe) Run(ctx context.Context) (string, error) {
 		// THE case this worker exists for. Returning a plain error files the run
 		// as status="error", which is the only status FailingWorkers counts, so
 		// a listener that stays down finally reaches /api/ready and health.json.
+		// A timeout is not "unreachable": on 2026-10-11 the connection was open
+		// and the handler was still running when the client gave up, and the old
+		// wording sent the reader looking for a dead listener.
+		if te, ok := err.(interface{ Timeout() bool }); ok && te.Timeout() {
+			return "", fmt.Errorf("api at %s gave no response within %s (slow handler or stalled reads, or listener not accepting): %w", w.Addr, c.Timeout, err)
+		}
 		return "", fmt.Errorf("api listener unreachable at %s: %w", w.Addr, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck

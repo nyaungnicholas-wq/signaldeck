@@ -27,7 +27,7 @@ export interface Row {
 export const DEFAULT_NOTIONAL = 100000;
 
 let ROW_SEQ = 1;
-const newRow = (symbol = "", market: Market = "crypto", weight = ""): Row => ({
+const newRow = (symbol = "", market: Market = "stocks", weight = ""): Row => ({
   id: ROW_SEQ++,
   symbol,
   market,
@@ -105,7 +105,9 @@ export default function useRisk(): RiskState {
     };
   }, []);
 
-  const picker = useMemo(() => watch ?? [], [watch]);
+  // Crypto is paused (no licensed data): a stale crypto subscription never
+  // reaches the picker or the equal-weight shortcut.
+  const picker = useMemo(() => (watch ?? []).filter((r) => r.market === "stocks"), [watch]);
 
   const totalWeight = useMemo(
     () =>

@@ -73,6 +73,9 @@ func (d Deps) paperOrder(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "market must be stocks or crypto")
 		return
 	}
+	if refuseCrypto(w, body.Market) {
+		return
+	}
 	ctx := r.Context()
 	sym, err := d.St.GetSymbol(ctx, strings.ToUpper(strings.TrimSpace(body.Symbol)), body.Market)
 	if err != nil {

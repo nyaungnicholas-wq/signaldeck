@@ -20,9 +20,10 @@ func (p proxyKeyRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// TestMemberFINRAOperatorOnlyByDefault: FINRA's terms may not permit passing
-// its short data on to members (owner's call, 2026-10-02), so /api/shorts and
-// /api/short-interest are operator-only unless SIGNALDECK_MEMBER_FINRA=1. The
+// TestMemberFINRAOperatorOnlyByDefault: FINRA was retired on 22 Oct 2026
+// because its terms do not permit this use. /api/shorts and /api/short-interest
+// are no longer member routes, so SIGNALDECK_MEMBER_FINRA=1 no longer opens them,
+// and on a published box the licence guard refuses them to the operator too. The
 // tunnel-proxied posture is the live one: a stranger's request reaches the
 // daemon on loopback carrying the proxy key, and must still meet the member
 // gate (published(), not ReachablePrivately(), decides).
@@ -60,20 +61,18 @@ func TestMemberFINRAOperatorOnlyByDefault(t *testing.T) {
 					if code, body := getAs(t, anon, srv.URL+u); code != http.StatusUnauthorized {
 						t.Errorf("anonymous %s: %d %.300s, want 401", u, code, body)
 					}
-					if code, body := getAs(t, owner, srv.URL+u); code != http.StatusOK {
-						t.Errorf("operator %s: %d %.300s, want 200", u, code, body)
+					if code, body := getAs(t, owner, srv.URL+u); code != http.StatusUnavailableForLegalReasons ||
+						!strings.Contains(body, "finra licence") {
+						t.Errorf("operator %s: %d %.300s, want 451 under the finra licence", u, code, body)
 					}
-					code, body := getAs(t, member, srv.URL+u)
-					switch {
-					case !flag && (code != http.StatusForbidden || !strings.Contains(body, "not available to member accounts")):
-						t.Errorf("member %s with the flag off: %d %.300s, want 403", u, code, body)
-					case flag && code != http.StatusOK:
-						t.Errorf("member %s with the flag on: %d %.300s, want 200", u, code, body)
+					if code, body := getAs(t, member, srv.URL+u); code != http.StatusForbidden ||
+						!strings.Contains(body, "not available to member accounts") {
+						t.Errorf("member %s (flag %v): %d %.300s, want 403", u, flag, code, body)
 					}
 				}
 				if code, body := getAs(t, member, srv.URL+"/api/auth/me"); code != http.StatusOK ||
-					!strings.Contains(body, fmt.Sprintf(`"memberFinra":%v`, flag)) {
-					t.Errorf("member /api/auth/me: %d %.300s, want memberFinra %v", code, body, flag)
+					!strings.Contains(body, `"memberFinra":false`) {
+					t.Errorf("member /api/auth/me (flag %v): %d %.300s, want memberFinra false", flag, code, body)
 				}
 				// The refusal is specific to the FINRA routes, not a broken session.
 				if code, body := getAs(t, member, srv.URL+"/api/watchlist"); code != http.StatusOK {

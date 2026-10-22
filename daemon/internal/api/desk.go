@@ -32,9 +32,11 @@ const peerPE = 20.0
 
 // ── World Model ──────────────────────────────────────────────────────────
 
+// The stored FRED values that used to classify the drivers are not read since
+// 22 Oct 2026: FRED's licence terms do not permit this use, and the last stored
+// value would read as "the live value". Build(nil) leaves every driver unknown.
 func (d Deps) deskWorldModel(w http.ResponseWriter, r *http.Request) {
-	macro := d.liveMacro(r.Context())
-	g := worldmodel.Build(macro)
+	g := worldmodel.Build(nil)
 	writeJSON(w, map[string]any{
 		"asOf":    time.Now().Unix(),
 		"drivers": g.Drivers,
@@ -56,21 +58,6 @@ func (d Deps) deskPropagate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, p)
-}
-
-// liveMacro reads the latest FRED value per series into a plain series→value
-// map for worldmodel.Build. A read error just yields an empty map (drivers
-// classify as unknown — never fabricated).
-func (d Deps) liveMacro(ctx context.Context) map[string]float64 {
-	out := map[string]float64{}
-	all, err := d.St.LatestMacroAll(ctx)
-	if err != nil {
-		return out
-	}
-	for series, pt := range all {
-		out[series] = pt.Value
-	}
-	return out
 }
 
 // macroSummary is a one-line live-state digest for the Economist agent view.
@@ -234,13 +221,13 @@ func (d Deps) recInputs(ctx context.Context, s md.Symbol, row store.CompositeSco
 			in.HasRank, in.RankPct = true, pct
 		}
 	}
-	in.MacroSummary = macroSummary(worldmodel.Build(d.liveMacro(ctx)))
+	in.MacroSummary = macroSummary(worldmodel.Build(nil)) // FRED retired 22 Oct 2026 (see deskWorldModel)
 	return in
 }
 
 // recSources lists the data sources that actually fed this recommendation.
 func (d Deps) recSources(in recommendation.Inputs) []string {
-	src := []string{"composite_scores", "prediction_outcomes (measured accuracy)", "adaptive_attribution", "fred_macro"}
+	src := []string{"composite_scores", "prediction_outcomes (measured accuracy)", "adaptive_attribution"}
 	if in.HasPrice {
 		src = append(src, "bars(1d)")
 	}

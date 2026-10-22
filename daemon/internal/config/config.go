@@ -176,7 +176,8 @@ type Config struct {
 	// MemberFINRA (SIGNALDECK_MEMBER_FINRA, default false) opens the FINRA
 	// short-data routes (/api/shorts, /api/short-interest) to member accounts.
 	// Off, they are operator-only: FINRA's terms may not permit passing its
-	// data on to members (owner's call, 2026-10-02).
+	// data on to members (owner's call, 2026-10-02). NO EFFECT since 22 Oct
+	// 2026: FINRA was retired and neither route is a member route any more.
 	MemberFINRA bool
 
 	// MCP server (internal/mcp) — advisory methodology + current regime

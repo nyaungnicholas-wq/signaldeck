@@ -310,9 +310,9 @@ func TestBuildFactors(t *testing.T) {
 	})
 
 	t.Run("tvrating: absent → gated; unmeasured → context-only; measured → scores", func(t *testing.T) {
-		// No rating stored: gated absent.
+		// No rating fed (the scorer stopped on 21 Oct 2026): gated as retired.
 		fs := BuildFactors(Inputs{Components: ensemble.Components{PressureScore: 0}})
-		if f := byKey(fs, FactorTVRating); !f.Gated || !strings.Contains(f.GateReason, "no TradingView rating") {
+		if f := byKey(fs, FactorTVRating); !f.Gated || f.GateReason != TVRatingRetiredReason {
 			t.Errorf("tvrating absent: %+v, want gated with reason", f)
 		}
 

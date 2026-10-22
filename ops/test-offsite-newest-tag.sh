@@ -26,8 +26,22 @@ if [ "${2:-}" = "list" ]; then
         case "${tag:-}" in backup-*) printf '%s %s\n' "$created" "$tag" ;; esac
     done
 elif [ "${2:-}" = "view" ]; then
-    var="ASSETS_$(printf '%s' "${3:-}" | sed 's/[^[:alnum:]]/_/g')"
-    printf '%s\n' "${!var:-0}"
+    var="NAMES_$(printf '%s' "${3:-}" | sed 's/[^[:alnum:]]/_/g')"
+    if [ -n "${!var+x}" ]; then
+        # NAMES_<tag> lists asset names; count those ending in a suffix the
+        # caller's own --jq filter selects, so the real filter text is tested.
+        filt="" prev="" n=0
+        for a in "$@"; do [ "$prev" = "--jq" ] && filt="$a"; prev="$a"; done
+        for a in ${!var}; do
+            for s in $(printf '%s' "$filt" | grep -o 'endswith("[^"]*")' | sed 's/^endswith("//; s/")$//'); do
+                case "$a" in *"$s") n=$((n+1)); break ;; esac
+            done
+        done
+        printf '%s\n' "$n"
+    else
+        var="ASSETS_$(printf '%s' "${3:-}" | sed 's/[^[:alnum:]]/_/g')"
+        printf '%s\n' "${!var:-0}"
+    fi
 else
     exit 1
 fi
@@ -47,7 +61,7 @@ check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; 
 # empty -- which silently PASSES the two cases that expect empty. That failure
 # mode is why reset_fixtures() unsets everything between cases.
 reset_fixtures() {
-    unset "${!ASSETS_@}" 2>/dev/null
+    unset "${!ASSETS_@}" "${!NAMES_@}" 2>/dev/null
     export RELEASES=""
 }
 
@@ -88,6 +102,15 @@ reset_fixtures
 export RELEASES=$'2026-09-18T13:10:09Z backup-20260918-131009\n2026-09-17T12:00:00Z backup-20260917-120000\n2026-09-19T00:00:00Z v2.0.0'
 export ASSETS_backup_20260917_120000=1 ASSETS_backup_20260918_131009=1 ASSETS_v2_0_0=1
 check "non-backup newer tag ignored" "$(gh_offsite_newest_tag o/r)" "backup-20260918-131009"
+
+# g. A sealed backup (.db.gz.enc, 2026-10-22) is a backup; a release with only
+#    the sealed sidecar and tombstone log is not.
+reset_fixtures
+export RELEASES=$'2026-10-01T13:10:00Z backup-20261001-131000\n2026-10-02T13:10:00Z backup-20261002-131000\n2026-10-03T13:10:00Z backup-20261003-131000'
+export NAMES_backup_20261001_131000="signaldeck-20261001-131000.db.gz signaldeck-20261001-131000.db.gz.sha256"
+export NAMES_backup_20261002_131000="signaldeck-20261002-131000.db.gz.enc signaldeck-20261002-131000.db.gz.enc.sha256"
+export NAMES_backup_20261003_131000="signaldeck-20261003-131000.db.gz.enc.sha256 deletions.jsonl.enc"
+check "newest sealed release with a .db.gz.enc is taken" "$(gh_offsite_newest_tag o/r)" "backup-20261002-131000"
 
 echo ""
 echo "offsite-newest-tag self-test: $pass passed, $fail failed"

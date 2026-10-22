@@ -221,7 +221,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	d.registerConfidence(mux)     // GET /api/confidence?symbol&horizon — one gated object per prediction: probability + state-conditional expected return + measured adverse excursion (expected drawdown, labeled unconditional) + confidence and Wilson uncertainty, each null with a stated reason when unmeasurable
 	// ── DATA-EXPANSION wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
-	d.registerDataExpansion(mux) // six free external context reads, every payload carrying its caveat verbatim: /api/short-interest (FINRA bi-monthly SI, ~2wks lagged), /api/crypto-perp (Hyperliquid funding/OI — one DEX venue), /api/cot (CFTC weekly positioning, not prediction), /api/stocktwits (retail page-snapshot sentiment), /api/wiki-attention (page views — attention proxy, not a signal), /api/cboe-pc (market-wide put/call — hedging gauge); DESCRIPTIVE context only, nothing here is a scored factor
+	d.registerDataExpansion(mux) // external context reads, every payload carrying its caveat verbatim: /api/cot (CFTC weekly positioning, not prediction) and /api/wiki-attention (page views — attention proxy, not a signal) are live; /api/short-interest (FINRA), /api/cboe-pc (Cboe), /api/stocktwits and /api/crypto-perp serve only rows stored before their sources were retired or paused, and are licence-governed (datalicense.RestrictedRoutes); DESCRIPTIVE context only, nothing here is a scored factor
 	// ── NEWS-TRENDS + STRATEGY-LAB wave (appended — keep new routes at the
 	// END of this block so parallel route edits by other agents never collide) ─
 	d.registerNewsTrends(mux)  // news trends: GET /api/news-trends — per-symbol 30d headline-volume series + own-baseline z (null w/ stated gate reason below 10 active prior days) + fleet top-10 trending headline tokens; caveat verbatim: headline-frequency trend — descriptive attention, not a forecast
@@ -546,13 +546,24 @@ func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 
 // ── basic ───────────────────────────────────────────────────────────────
 
+// healthReadBudget bounds the reads behind /api/health, well inside the
+// api-probe's 10s client timeout.
+const healthReadBudget = 4 * time.Second
+
 func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// schemaContract: workers the daemon REFUSED to register at boot because
 	// the database lacks a table/column they read or write. Non-empty means
 	// those workers are not running AND were never going to record anything —
 	// surfaced here so the absence is not mistaken for a healthy quiet fleet.
 	refusals := map[string][]string{}
-	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
+	// BOUNDED READS (2026-10-11). The api-probe gives up at 10s, and twice that
+	// day these two reads stalled ~10s on the read pool, so the probe filed
+	// "listener unreachable" while the daemon was answering everything else and
+	// the stall's cause was logged nowhere. A health answer must come back fast;
+	// a read that cannot finish in time is itself the degradation to report.
+	hctx, hcancel := context.WithTimeout(r.Context(), healthReadBudget)
+	defer hcancel()
+	if raw, err := d.St.GetMeta(hctx, store.SchemaContractMetaKey); err == nil && raw != "" {
 		// A CORRUPT BLOB IS NOT AN EMPTY ONE. Discarding this error made
 		// /api/health report schemaContract:{} -- "no worker was refused at
 		// boot" -- from a value nobody could parse, and the whole point of the
@@ -568,7 +579,18 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// had failed 43 times that day (tickstream down) and hud-sync 26 (trader-hud
 	// down). Any monitor pointed here reported 100% uptime through both. A
 	// health endpoint that cannot go unhealthy is decoration.
-	failing, werr := d.failingWorkers(r.Context())
+	failing, werr := d.failingWorkers(hctx)
+	if werr == nil && hctx.Err() != nil {
+		// The schema-contract read above drops its error by design (absent key
+		// = no refusals), so a read that ran out of budget must not pass as a
+		// clean answer.
+		werr = fmt.Errorf("health reads exceeded %s: %w", healthReadBudget, hctx.Err())
+	}
+	if werr != nil && !d.isOperator(r) {
+		// The operator branch below logs this too; the anonymous answer only
+		// says degraded, so without this line the cause was never recorded.
+		slog.Warn("health: worker fleet unreadable (anonymous probe)", "err", werr)
+	}
 
 	// Off-machine alert delivery. A local Windows toast is built in and always
 	// available, but it only reaches someone sitting at this desk — and the
@@ -673,7 +695,34 @@ func (d Deps) failingWorkers(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return failingFromRuns(runs, time.Now().Unix()), nil
+	return failingFromRuns(currentFleetRuns(runs, d.declaredIntervals()), time.Now().Unix()), nil
+}
+
+// declaredIntervals is the registered fleet's declared cadence by name; nil when
+// the fleet is not wired (tests, minimal wirings).
+func (d Deps) declaredIntervals() map[string]time.Duration {
+	if d.WorkerIntervals == nil {
+		return nil
+	}
+	return d.WorkerIntervals()
+}
+
+// currentFleetRuns keeps only rows of workers in the registered fleet. A retired
+// worker keeps its pruned rows in worker_runs forever (crypto-live's last run is
+// marked "orphaned" at the boot that stops wiring it), so judging every name with
+// rows left health red with nothing anyone could fix. An empty registry (unwired,
+// or the startup window before runner.Add) filters nothing.
+func currentFleetRuns(runs []md.WorkerRun, declared map[string]time.Duration) []md.WorkerRun {
+	if len(declared) == 0 {
+		return runs
+	}
+	out := make([]md.WorkerRun, 0, len(runs))
+	for _, r := range runs {
+		if _, ok := declared[r.Worker]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // failingFromRuns is the decision itself, split out so the rule can be tested

@@ -39,17 +39,17 @@ import (
 )
 
 // A missing feature and an observed zero must not produce the same model input.
-// This is the finding, reproduced with the live DB's own worst case: a row where
-// the Fed funds change was MEASURED at 0.0 against a row where the FRED read
-// failed and the key is absent.
+// The finding was a Fed funds change MEASURED at 0.0 against a failed FRED read;
+// FRED keys are retired (22 Oct 2026), so a live key with the same shape stands
+// in: an insider ratio measured at 0 against a symbol with no Form 4 trades.
 func TestFlattenSeparatesAbsentFromMeasuredZero(t *testing.T) {
 	measuredZero := map[string]float64{
-		"pressure_score":     0.4,
-		"macro_fedfunds_chg": 0, // FRED answered: the policy rate held
+		"pressure_score":    0.4,
+		"insider_net_ratio": 0, // measured: open-market buys equalled sells
 	}
 	fredDown := map[string]float64{
 		"pressure_score": 0.4,
-		// macro_fedfunds_chg omitted: the read failed, so the pipeline left it out
+		// insider_net_ratio omitted: no Form 4 trades, so the pipeline left it out
 	}
 
 	rows := []store.LabeledFeature{{Vec: measuredZero}, {Vec: fredDown}}
@@ -77,12 +77,12 @@ func TestFlattenSeparatesAbsentFromMeasuredZero(t *testing.T) {
 	// by some incidental key-order difference.
 	idx := -1
 	for i, k := range keys {
-		if k == "macro_fedfunds_chg"+gbm.PresenceSuffix {
+		if k == "insider_net_ratio"+gbm.PresenceSuffix {
 			idx = i
 		}
 	}
 	if idx < 0 {
-		t.Fatalf("no presence indicator for macro_fedfunds_chg in %v", keys)
+		t.Fatalf("no presence indicator for insider_net_ratio in %v", keys)
 	}
 	if a[idx] != 1 || b[idx] != 0 {
 		t.Fatalf("presence bit = %v (observed) / %v (absent), want 1 / 0", a[idx], b[idx])
@@ -90,7 +90,7 @@ func TestFlattenSeparatesAbsentFromMeasuredZero(t *testing.T) {
 	// The base value still flattens to 0 in both — the bit is what differs.
 	base := -1
 	for i, k := range keys {
-		if k == "macro_fedfunds_chg" {
+		if k == "insider_net_ratio" {
 			base = i
 		}
 	}
@@ -107,14 +107,14 @@ func TestFlattenSeparatesAbsentFromMeasuredZero(t *testing.T) {
 func TestModelFeatureKeysPairsEveryBaseWithAnIndicator(t *testing.T) {
 	rows := []store.LabeledFeature{
 		{Vec: map[string]float64{"pressure_score": 0.1, "micro_spread_bps": 0}},
-		{Vec: map[string]float64{"vix_high_vol": 0, "pressure_score": 0.2}},
+		{Vec: map[string]float64{"trend_class": 0, "pressure_score": 0.2}},
 	}
 	keys := modelFeatureKeys(rows)
 
 	want := []string{
 		"micro_spread_bps", "micro_spread_bps__has",
 		"pressure_score", "pressure_score__has",
-		"vix_high_vol", "vix_high_vol__has",
+		"trend_class", "trend_class__has",
 	}
 	if len(keys) != len(want) {
 		t.Fatalf("got %v, want %v", keys, want)

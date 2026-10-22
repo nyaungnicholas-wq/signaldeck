@@ -36,13 +36,17 @@ scheduler · integrity checks · model health · alerts · reporting
 
 ## Stage occupancy
 
-**Ingest** — `stock-streamer`, `crypto-live`, `backfiller` (long-running, no
-interval); `tv-quotes`, `universe-live` (1m); `crypto-bars`, `crypto-perp`,
-`stocktwits-fetcher`, `tv-rating` (15m); `news-fetcher`, `backfill-reconciler`
-(20m); `news-backfiller` (30m); `filings-poller` (2h); `stock-bars`,
-`hist-backfill`, `fred-poller`, `cboe-pc`, `universe-discovery`,
-`universe-poller`, `tape-seeder` (6h); `sic-bulk-sync` (12h); `companies-sync`,
-`edgar-fetcher`, `delisting-detector` (24h); and the CALENDAR workers below.
+**Ingest** — `stock-streamer`, `backfiller` (long-running, no interval);
+`universe-live` (1m); `news-fetcher`, `backfill-reconciler` (20m);
+`news-backfiller` (30m); `filings-poller` (2h); `stock-bars`, `hist-backfill`,
+`universe-discovery`, `universe-poller`, `tape-seeder` (6h); `sic-bulk-sync`
+(12h); `companies-sync`, `edgar-fetcher`, `delisting-detector` (24h); and the
+CALENDAR workers below.
+
+Retired 2026-10-21/22 (no longer wired): `crypto-live`, `crypto-bars`,
+`crypto-perp` (crypto paused 2026-10-22); `tv-quotes`, `tv-rating` (TradingView
+scanner) and `stocktwits-fetcher`. Retired 2026-10-22 (licence review):
+`fred-poller`, `cboe-pc`, `finra-shorts`, `finra-shortint`.
 
 **Feature build** — `signal-runner` (1m); `sentiment-tagger` (10m);
 `sentiment-lex-scorer`, `breakout-runner` (15m); `sentiment-aggregator`,
@@ -81,8 +85,8 @@ retained only to size the per-run timeout.
 
 | Worker | Fires | Upstream reality |
 |---|---|---|
-| `finra-shorts` | trading days 18:30 ET | daily Reg SHO file, published by ~18:00 ET |
-| `finra-shortint` | trading days 18:45 ET | semi-monthly, ~8 business days after settlement |
+| `finra-shorts` (retired 2026-10-22: licence review) | trading days 18:30 ET | daily Reg SHO file, published by ~18:00 ET |
+| `finra-shortint` (retired 2026-10-22: licence review) | trading days 18:45 ET | semi-monthly, ~8 business days after settlement |
 | `cot-poller` | Saturday 09:00 ET | CFTC COT, Friday 15:30 ET, Tuesday's positions |
 | `13f-poller` | daily 20:00 ET | quarterly filings, manager list rotated by cursor |
 | `congress-poller` | daily 09:00 ET, backing off to 7d while mirrors are dead | STOCK Act allows 45 days to file |

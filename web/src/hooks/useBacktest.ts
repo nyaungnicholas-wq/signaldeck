@@ -62,7 +62,7 @@ export default function useBacktest(): BacktestState {
   // form state
   const [text, setText] = useState("");
   const [symbol, setSymbol] = useState<string | null>(null);
-  const [market, setMarket] = useState<Market>("crypto");
+  const [market, setMarket] = useState<Market>("stocks");
 
   // run state
   const [running, setRunning] = useState(false);
@@ -87,8 +87,10 @@ export default function useBacktest(): BacktestState {
     const load = () =>
       api
         .watchlist()
-        .then((r) => {
+        .then((all) => {
           if (!alive) return;
+          // Crypto is paused (no licensed data): stocks rows only.
+          const r = all.filter((row) => row.market === "stocks");
           const firstLoad = !hasLoadedRef.current;
           hasLoadedRef.current = true;
           setWatch(r);
@@ -113,7 +115,8 @@ export default function useBacktest(): BacktestState {
               .then((all) => {
                 if (!alive) return;
                 hasLoadedRef.current = true;
-                const top = [...all]
+                const top = all
+                  .filter((row) => row.market === "stocks")
                   .sort(
                     (a, b) =>
                       Math.abs(b.scores?.["1d"]?.score ?? 0) -

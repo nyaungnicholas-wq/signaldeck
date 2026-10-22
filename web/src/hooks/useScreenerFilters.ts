@@ -102,7 +102,8 @@ export function useScreenerFilters(
       setMinScore(Math.max(-1, Math.min(1, s.minScore)));
     if (s.direction === "all" || s.direction === "buy" || s.direction === "sell")
       setDirection(s.direction);
-    if (s.market === "all" || s.market === "crypto" || s.market === "stocks") setMarket(s.market);
+    // A saved "crypto" filter (crypto paused since 22 October 2026) falls back to "all".
+    if (s.market === "all" || s.market === "stocks") setMarket(s.market);
     if (typeof s.search === "string") setSearch(s.search);
     if (s.view === "cards" || s.view === "table" || s.view === "heatmap" || s.view === null)
       setView(s.view ?? null);

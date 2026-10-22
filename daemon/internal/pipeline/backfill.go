@@ -224,6 +224,9 @@ func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {
 		_ = nm
 		return nil
 	case md.Crypto:
+		if b.Kraken == nil {
+			return fmt.Errorf("crypto ingestion is paused (no licensed crypto source)")
+		}
 		_, err := b.Kraken.Backfill(ctx, b.St, s.ID, s.Symbol)
 		return err
 	default:

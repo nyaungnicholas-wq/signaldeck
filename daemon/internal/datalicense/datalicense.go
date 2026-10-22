@@ -86,21 +86,38 @@ var Sources = map[string]Source{
 		Name: "news", Class: Licensed, Provider: "Alpaca news",
 		Note: "headlines are publisher IP; store and display, never republish", Redistrib: false,
 	},
+	// ── retired 22 Oct 2026: their terms do not permit SignalDeck's use ─────
+	// Pollers unwired, feature keys retired (gbm.RetiredSourceKey); stored rows
+	// are kept and their routes are governed below.
+	"fred": {Name: "fred", Class: Restricted, Provider: "St. Louis Fed (FRED)",
+		Note: "RETIRED 22 Oct 2026: personal, non-commercial licence only; storing FRED " +
+			"content in a database needs written consent, and some series are third-party " +
+			"copyrighted (VIXCLS by Cboe, BAMLH0A0HYM2 by ICE)",
+		Redistrib: false},
+	"finra": {Name: "finra", Class: Restricted, Provider: "FINRA",
+		Note: "RETIRED 22 Oct 2026: finra.org's Terms of Use bar building a database, " +
+			"derivative works, automated extraction and use beyond one's own non-commercial use",
+		Redistrib: false},
+	"cboe": {Name: "cboe", Class: Restricted, Provider: "Cboe",
+		Note: "RETIRED 22 Oct 2026: Cboe's website terms bar storing its market statistics " +
+			"in a retrieval system, displaying them and deriving from them",
+		Redistrib: false},
+	// The congress-poller's fallback when the Stock Watcher mirrors fail. Its own
+	// terms are unverified, so only the underlying public disclosure facts may be
+	// passed on, never the compilation.
+	"kadoa": {Name: "kadoa", Class: Restricted, Provider: "Kadoa (congress trades dataset)",
+		Note: "third-party aggregation of STOCK Act disclosures; licence status unclear, so " +
+			"not redistributable beyond the disclosure facts themselves",
+		Redistrib: false},
 	// ── genuinely free ────────────────────────────────────────────────────
 	"edgar": {Name: "edgar", Class: Public, Provider: "SEC EDGAR",
-		Note: "US government, public domain", Redistrib: true},
-	"fred": {Name: "fred", Class: Public, Provider: "St. Louis Fed",
-		Note: "public domain; attribution requested", Redistrib: true},
-	"finra": {Name: "finra", Class: Public, Provider: "FINRA",
-		Note: "public regulatory disclosure", Redistrib: true},
+		Note: "free to access and reuse (SEC); fair-access rate limits apply", Redistrib: true},
 	"cftc": {Name: "cftc", Class: Public, Provider: "CFTC",
 		Note: "public regulatory disclosure", Redistrib: true},
-	"cboe": {Name: "cboe", Class: Public, Provider: "Cboe",
-		Note: "free public statistics", Redistrib: true},
 	"congress": {Name: "congress", Class: Public, Provider: "STOCK Act disclosures",
 		Note: "public filings", Redistrib: true},
 	"wikimedia": {Name: "wikimedia", Class: Public, Provider: "Wikimedia",
-		Note: "CC-licensed pageview counts", Redistrib: true},
+		Note: "pageview counts released under CC0", Redistrib: true},
 }
 
 // PriceBarSources are the sources that produce the stored `bars` table. Any
@@ -162,7 +179,8 @@ func RawDataNotice() string {
 // tvscanner and stocktwits are class Restricted -- automated access is against
 // those providers' terms and the ratings are their IP -- so they are governed
 // here even though they are not price bars and BarsRedistributable does not
-// speak to them.
+// speak to them. FINRA, Cboe and FRED joined them on 22 Oct 2026, when their
+// terms were found not to permit storing, deriving from or displaying their data.
 //
 // THE LICENCE LINE, for every route a member or an anonymous caller reaches:
 //   - RAW is a vendor price, OHLC, volume, quote, rating, headline or message
@@ -210,7 +228,17 @@ var RestrictedRoutes = map[string]string{
 	// push socket instead of a poll. Found 2026-09-20 by the route scan
 	// (TestEveryRegisteredVendorRouteIsGoverned); a second door for the same
 	// vendor rows with no policy on it, exactly the shape the CSV exports had.
-	"/api/stream/snaps":        "cryptolive",
+	"/api/stream/snaps": "cryptolive",
+	// Retired 22 Oct 2026 (licence): these serve only rows stored before then.
+	"/api/shorts":         "finra",
+	"/api/short-interest": "finra",
+	"/api/cboe-pc":        "cboe",
+	"/api/macro-series":   "fred",
+	// /api/scenario fits a symbol's beta to a stored FRED series (VIXCLS by
+	// default); it has no non-FRED factor to fall back to. /api/calendar,
+	// /api/world-model, /api/recommendation and /api/options/vol-edge mixed
+	// FRED into other data, so their FRED parts were removed instead.
+	"/api/scenario":            "fred",
 	"/api/tv-quote":            "tvscanner",
 	"/api/tv-rating":           "tvscanner",
 	"/api/tv-signals":          "tvscanner",

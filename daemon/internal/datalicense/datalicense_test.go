@@ -54,11 +54,35 @@ func TestEverySourceCarriesProviderAndNote(t *testing.T) {
 func TestGovernmentSourcesAreRedistributable(t *testing.T) {
 	// The flip side: over-restricting is also wrong. Public-domain regulatory
 	// data must stay usable.
-	for _, n := range []string{"edgar", "fred", "finra", "cftc"} {
+	for _, n := range []string{"edgar", "cftc"} {
 		s, ok := Sources[n]
 		if !ok || s.Class != Public || !s.Redistrib {
-			t.Fatalf("%s should be public-domain and redistributable: %+v", n, s)
+			t.Fatalf("%s should be public and redistributable: %+v", n, s)
 		}
+	}
+}
+
+// FINRA, Cboe and FRED were retired on 22 Oct 2026 and the Kadoa congress
+// dataset's terms are unverified: none may be described as public or
+// redistributable. EDGAR is free to reuse but is not called public domain, and
+// the Wikimedia pageview counts are CC0.
+func TestLicenceRetiredSourcesAreNotRedistributable(t *testing.T) {
+	for _, n := range []string{"fred", "finra", "cboe", "kadoa"} {
+		s, ok := Sources[n]
+		if !ok || s.Class == Public || s.Redistrib {
+			t.Errorf("%s must be classified non-public and not redistributable: %+v", n, s)
+		}
+	}
+	for _, n := range []string{"fred", "finra", "cboe"} {
+		if !contains(Sources[n].Note, "RETIRED 22 Oct 2026") {
+			t.Errorf("%s note must record the retirement: %q", n, Sources[n].Note)
+		}
+	}
+	if n := Sources["edgar"].Note; contains(n, "public domain") || !contains(n, "free to access and reuse") {
+		t.Errorf("edgar note = %q, want the SEC's reuse wording, not public domain", n)
+	}
+	if n := Sources["wikimedia"].Note; !contains(n, "CC0") {
+		t.Errorf("wikimedia note = %q, want CC0", n)
 	}
 }
 
@@ -92,6 +116,7 @@ func TestRestrictedRoutesGovernTheRightThings(t *testing.T) {
 	for _, path := range []string{
 		"/api/bars", "/api/snaps", "/api/news", "/api/stocktwits",
 		"/api/tv-quote", "/api/tv-rating",
+		"/api/shorts", "/api/short-interest", "/api/cboe-pc", "/api/macro-series",
 		"/api/export/bars.csv", "/api/export/scores.csv", "/api/export/outcomes.csv",
 	} {
 		src, ok, governed := RouteRedistributable(path)
@@ -165,6 +190,10 @@ func TestEveryNonRedistributableSourceWithARouteIsGoverned(t *testing.T) {
 		"stocktwits":  "/api/stocktwits",
 		"tvscanner":   "/api/tv-rating",
 		"hyperliquid": "/api/crypto-perp",
+		"finra":       "/api/short-interest",
+		"cboe":        "/api/cboe-pc",
+		"fred":        "/api/macro-series",
+		// kadoa: no route of its own; /api/congress serves the disclosure facts.
 		// cryptohist: no route of its own. It is a PriceBarSources member and
 		// reaches users only through /api/bars, which is governed as alpaca.
 	}

@@ -195,7 +195,6 @@ export default function QualityPage() {
                                     </span>
                                     <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                                       {s.market}
-                                      {s.market === "crypto" ? " · 24/7" : ""}
                                       {!s.active ? " · inactive" : ""}
                                     </span>
                                   </span>

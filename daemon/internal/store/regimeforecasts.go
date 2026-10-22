@@ -42,7 +42,7 @@ func (s *Store) RegimeForecastsForSymbol(ctx context.Context, symbolID int64) ([
 		SELECT s.symbol, s.market, r.ts, r.kind, r.horizon_days, r.regime,
 		       r.conviction, r.historical_accuracy, r.tier, r.rank, r.n
 		FROM regime_forecasts r JOIN symbols s ON s.id=r.symbol_id
-		WHERE r.symbol_id=? ORDER BY r.kind`, symbolID)
+		WHERE r.symbol_id=? AND s.active = 1 ORDER BY r.kind`, symbolID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +70,7 @@ func (s *Store) RegimeForecasts(ctx context.Context) ([]RegimeForecast, error) {
 		SELECT s.symbol, s.market, r.ts, r.kind, r.horizon_days, r.regime,
 		       r.conviction, r.historical_accuracy, r.tier, r.rank, r.n
 		FROM regime_forecasts r JOIN symbols s ON s.id=r.symbol_id
+		WHERE s.active = 1
 		ORDER BY r.kind, r.conviction DESC, s.symbol`)
 	if err != nil {
 		return nil, err

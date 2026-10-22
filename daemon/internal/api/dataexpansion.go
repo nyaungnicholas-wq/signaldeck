@@ -58,7 +58,7 @@ func (d Deps) shortInterest(w http.ResponseWriter, r *http.Request) {
 		out["latest"] = rows[0]
 	} else {
 		out["latest"] = nil
-		out["emptyNote"] = "no short interest stored yet — the finra-shortint worker probes the newest bi-monthly file each run (publication lags settlement ~9 business days)"
+		out["emptyNote"] = "no short interest stored — FINRA short interest was retired 22 Oct 2026: licence terms do not permit this use, so nothing new is ingested"
 	}
 	if len(rows) > 1 {
 		out["previous"] = rows[1]
@@ -99,7 +99,7 @@ func (d Deps) cryptoPerp(w http.ResponseWriter, r *http.Request) {
 		out["latest"] = series[len(series)-1]
 	} else {
 		out["latest"] = nil
-		out["emptyNote"] = "no perp snapshots stored yet — the crypto-perp worker polls Hyperliquid every 15m"
+		out["emptyNote"] = "no perp snapshots stored — crypto is paused (2026-10-22), so the crypto-perp worker is not wired"
 	}
 	writeJSON(w, out)
 }
@@ -170,7 +170,7 @@ func (d Deps) stocktwitsSentiment(w http.ResponseWriter, r *http.Request) {
 		out["latest"] = series[len(series)-1]
 	} else {
 		out["latest"] = nil
-		out["emptyNote"] = "no snapshots stored yet — the stocktwits-fetcher covers watchlist + hot-set stocks every 15m"
+		out["emptyNote"] = "no snapshots stored — StockTwits was retired on 21 Oct 2026 (its terms do not clearly permit this use), so nothing new is ingested"
 	}
 	writeJSON(w, out)
 }
@@ -250,7 +250,7 @@ func (d Deps) cboePC(w http.ResponseWriter, r *http.Request) {
 		out["latest"] = series[len(series)-1]
 	} else {
 		out["latest"] = nil
-		out["emptyNote"] = "no put/call data stored yet — the cboe-pc worker ingests each trade date's statistics after ~6:30pm ET and backfills ~30 trading days on first run"
+		out["emptyNote"] = "no put/call data stored — Cboe put/call statistics were retired 22 Oct 2026: licence terms do not permit this use, so nothing new is ingested"
 	}
 	writeJSON(w, out)
 }
@@ -275,7 +275,7 @@ func (d Deps) tvQuote(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		out["available"] = false
-		out["emptyNote"] = "no quote stored yet — the tv-quotes worker tapes stocks each minute while the market is open (crypto 24/7) and keeps only a trailing ~2h window"
+		out["emptyNote"] = "no quote stored — the TradingView scanner was retired on 21 Oct 2026 (its terms bar non-display use), so nothing new is ingested"
 		writeJSON(w, out)
 		return
 	}

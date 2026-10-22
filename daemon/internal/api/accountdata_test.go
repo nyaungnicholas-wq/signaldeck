@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/tombstone"
 )
 
 // TestMemberCanExportAndDeleteTheirAccount pins AUD-05 (2026-10-05): a member
@@ -21,6 +25,8 @@ func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
 	old := loginFailures
 	loginFailures = &failCounter{fails: map[string]*failState{}}
 	t.Cleanup(func() { loginFailures = old })
+	tombLog := filepath.Join(t.TempDir(), "deletions.jsonl")
+	t.Setenv("SIGNALDECK_TOMBSTONE_LOG", tombLog)
 	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
 		mux := http.NewServeMux()
 		d.registerAuth(mux)
@@ -109,6 +115,40 @@ func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
 	}
 	if code, _ := acctPostWith(t, admin, srv.URL+"/api/account/delete", map[string]string{"password": "adminpass123"}); code != http.StatusForbidden {
 		t.Fatalf("operator self-delete: %d, want 403", code)
+	}
+	// Exactly one tombstone, for dora alone, holding only the id and the one
+	// hash of her stored address, name and created_ts: the wrong password and
+	// the refused operator wrote none.
+	raw, _ = os.ReadFile(tombLog)
+	if u.CreatedTs == 0 {
+		t.Fatal("dora's row has no created_ts to bind the tombstone to")
+	}
+	if want := `{"uid":` + strconv.FormatInt(u.ID, 10) + `,"account_sha256":"` + tombstone.AccountHash("dora@gmail.com", "dora", u.CreatedTs) + `"}` + "\n"; string(raw) != want {
+		t.Fatalf("tombstone log = %q, want %q", raw, want)
+	}
+}
+
+// TestAccountDeleteRefusedWhenTheTombstoneCannotBeWritten: the record is
+// write-ahead, so when it cannot be written nothing is erased and the member
+// gets a 500 rather than a deletion a restore would silently undo.
+func TestAccountDeleteRefusedWhenTheTombstoneCannotBeWritten(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SIGNALDECK_TOMBSTONE_LOG", filepath.Join(blocker, "deletions.jsonl"))
+	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
+		mux := http.NewServeMux()
+		d.registerAuth(mux)
+		d.registerAccountData(mux)
+		return d.secure(mux)
+	})
+	member := signupVerified(t, srv, mb, "eve", "eve@gmail.com")
+	if code, body := acctPostWith(t, member, srv.URL+"/api/account/delete", map[string]string{"password": "correcthorse1"}); code != http.StatusInternalServerError {
+		t.Fatalf("delete without a tombstone: %d %s, want 500", code, body)
+	}
+	if _, ok, _ := st.GetUserByName(context.Background(), "eve"); !ok {
+		t.Fatal("the account was erased although its tombstone was never written")
 	}
 }
 

@@ -91,5 +91,29 @@ GUARDED="$(awk '/^ *#/{next} /if s3_upload_verified /{g=1} /^    elif same_volum
 check "backup_last_offsite is only written behind a verified S3 upload or the same_volume check" \
   "$([ -z "$GUARDED" ] && echo 1 || echo 0)"
 
+# A configured backup key refuses the PLAINTEXT directory copy (2026-10-22).
+# The real offsite if/elif chain runs with S3 and GitHub unset and its side
+# effects stubbed, once with a key and once without (the copy must then land,
+# or the keyed case would pass without the copy path ever running).
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+CHAIN="$(sed -n '/^if \[ -n "${SIGNALDECK_OFFSITE_S3:-}" \]; then$/,/^fi$/p' "$SRC")"
+echo data > "$W/signaldeck-1.db"
+dir_copy() { # $1 = key file or ""; $2 = run name. Prints what landed.
+  ( unset SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_GH_REPO SIGNALDECK_OFFSITE_KEY_FILE
+    export USERPROFILE="$W/home" HOME="$W/home"; [ -n "$1" ] && export SIGNALDECK_OFFSITE_KEY_FILE="$1"
+    . "$SD/ops/lib-offsite-gh.sh"
+    log() { echo "$*" >> "$LOG"; }; sd_sqlite() { :; }; sd_nosleep() { "$@"; }; compress_and_prune() { :; }
+    DB="$W/sd.db" TARGET="$W/signaldeck-1.db" OFFSITE="$W/off-$2" TS=1 LOG="$W/log-$2"
+    eval "$CHAIN"; ls "$OFFSITE" 2>/dev/null )
+}
+check "the offsite chain was extracted from the real script" \
+  "$(printf '%s' "$CHAIN" | grep -q 'if s3_upload_verified ' && printf '%s' "$CHAIN" | grep -q 'mkdir -p "$OFFSITE"' && echo 1 || echo 0)"
+check "with no key the plaintext directory copy still lands" \
+  "$([ "$(dir_copy "" nokey)" = "signaldeck-1.db" ] && echo 1 || echo 0)"
+check "with a key the plaintext directory copy is refused" \
+  "$([ -z "$(dir_copy "$W/backup.key" key)" ] && echo 1 || echo 0)"
+check "the refusal is logged as a WARNING" \
+  "$(grep -q '^WARNING: offsite dir copy skipped: key configured and directory copies are not sealed' "$W/log-key" 2>/dev/null && echo 1 || echo 0)"
+
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all offsite-honesty checks passed"

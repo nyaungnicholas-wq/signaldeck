@@ -23,6 +23,9 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # this script (21 days with no off-machine copy). Environment still wins; .env fills
 # the gaps; values are never logged. Selftest: ops/test-offsite-env.sh
 . "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
+# Off-site helpers (GitHub upload, backup-key lookup, sdmaint), used by both the
+# S3 and GitHub paths below.
+. "$SD/ops/lib-offsite-gh.sh"
 
 # python3 on Windows/Git Bash is a Microsoft Store alias stub that resolves,
 # prints "Python was not found", and exits 0 — so `command -v` is not enough,
@@ -411,9 +414,10 @@ fi
 # reported success while writing a short file, and a same-disk copy that logged
 # "offsite OK" nightly for twelve days.
 s3_upload_verified() {
-  local src="$1" uri="$2" tmp="$3" gz_bytes remote bucket key
+  local src="$1" uri="$2" tmp="$3" gz_bytes remote bucket key bkey sdm
   S3_VERIFIED_BYTES=0
   S3_FAIL_REASON=""
+  S3_UPLOADED_URI="$uri"
   # AWS_PAGER='' or the CLI can block an unattended run waiting on a pager.
   export AWS_PAGER=''
 
@@ -427,6 +431,21 @@ s3_upload_verified() {
     rm -f "$tmp"
     S3_FAIL_REASON="compressed to 0 bytes"
     return 1
+  fi
+  # The GitHub path's rule (lib-offsite-gh.sh): with a backup key configured
+  # the object is sealed as <uri>.enc, and a sealing failure aborts the upload.
+  bkey="$(gh_offsite_key_file)"
+  if [ -n "$bkey" ]; then
+    if ! sdm="$(gh_offsite_sdmaint)" || ! "$sdm" offsite-seal -key "$bkey" -in "$tmp" -out "$tmp.enc" >/dev/null 2>>"$LOG"; then
+      rm -f "$tmp" "$tmp.enc"
+      S3_FAIL_REASON="could not seal the backup with the configured key; refusing to upload it unencrypted"
+      return 1
+    fi
+    mv -f "$tmp.enc" "$tmp"
+    uri="$uri.enc"; S3_UPLOADED_URI="$uri"
+    gz_bytes="$(file_size "$tmp")"
+  else
+    echo "WARNING: no off-site backup key (SIGNALDECK_OFFSITE_KEY_FILE or ~/.signaldeck/backup.key); uploading the backup UNENCRYPTED" | tee -a "$LOG" >&2
   fi
 
   if ! sd_nosleep aws s3 cp "$tmp" "$uri" --only-show-errors >>"$LOG" 2>&1; then
@@ -490,14 +509,14 @@ if [ -n "${SIGNALDECK_OFFSITE_S3:-}" ]; then
     if s3_upload_verified "$TARGET" "$S3_KEY" "$DIR/.s3-$TS.db.gz"; then
       sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
       sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_offsite_dir','$S3_DEST');" 2>>"$LOG"
-      log "offsite OK: $S3_KEY ($S3_VERIFIED_BYTES bytes verified by head-object)"
+      log "offsite OK: $S3_UPLOADED_URI ($S3_VERIFIED_BYTES bytes verified by head-object)"
     else
       log "WARN: off-machine upload to $S3_KEY did not verify ($S3_FAIL_REASON) — backup_last_offsite NOT updated"
       sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_s3_failed','$S3_KEY: $S3_FAIL_REASON; no trustworthy off-machine copy for this run');" 2>>"$LOG"
     fi
   fi
 elif [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then # GitHub release asset on the private repo (lib-offsite-gh.sh, 2026-09-07); counted only after the API reports the bytes back
-  . "$SD/ops/lib-offsite-gh.sh"; GH_REPO="$SIGNALDECK_OFFSITE_GH_REPO"; GH_TAG="backup-$TS"
+  GH_REPO="$SIGNALDECK_OFFSITE_GH_REPO"; GH_TAG="backup-$TS"
   if command -v gh >/dev/null 2>&1 && gh_offsite_upload_verified "$TARGET" "$GH_REPO" "$GH_TAG" "$DIR/.gh-$TS.db.gz"; then
     sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"; sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_offsite_dir','github:$GH_REPO');" 2>>"$LOG"
     log "offsite OK: github $GH_REPO release $GH_TAG ($GH_VERIFIED_BYTES bytes verified by the release API)"; gh_offsite_prune "$GH_REPO" "${SIGNALDECK_OFFSITE_GH_KEEP:-7}" >>"$LOG" 2>&1
@@ -506,6 +525,11 @@ elif [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then # GitHub release asset on th
   fi
 elif [ -z "$OFFSITE" ]; then
   log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume, SIGNALDECK_OFFSITE_S3 to an s3:// URI, or SIGNALDECK_OFFSITE_GH_REPO to a private owner/repo)"
+elif [ -n "$(gh_offsite_key_file)" ]; then
+  # Once a backup key exists no plaintext copy may leave the machine, and the
+  # directory copy below is the plain .db, often into a cloud-synced folder
+  # (2026-10-22 review). Refuse it rather than seal it: use S3 or GitHub.
+  log "WARNING: offsite dir copy skipped: key configured and directory copies are not sealed ($OFFSITE)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
   if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
     COPY="$OFFSITE/$(basename "$TARGET")"

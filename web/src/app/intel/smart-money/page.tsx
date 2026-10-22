@@ -219,15 +219,6 @@ function SymbolDetail({ symbol }: { symbol: string }) {
           suffix="σ"
           sub="vs own 30d (Reg SHO)"
         />
-        {data.market === "crypto" ? (
-          <StatTile
-            label="Perp funding"
-            value={data.squeeze?.funding}
-            decimals={4}
-            suffix="%/hr"
-            sub="Hyperliquid"
-          />
-        ) : null}
       </div>
     </section>
   );

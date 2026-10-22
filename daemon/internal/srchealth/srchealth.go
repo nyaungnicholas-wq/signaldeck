@@ -41,6 +41,10 @@ type spec struct {
 	// webhook secret is configured AND the market is open — the case that
 	// catches a silently-dead tunnel/webhook while trading is live.
 	webhook bool
+	// paused names why a source is deliberately not collected any more. A
+	// paused source is still reported, but never judged stale: its silence is
+	// a decision, not an outage.
+	paused string
 }
 
 // registry is the canonical source list. Budgets are deliberately generous
@@ -48,12 +52,18 @@ type spec struct {
 // alarms — only a source that has gone genuinely quiet does. Date-only tables
 // (settlement_date/report_date/day) resolve to that day's UTC midnight, which
 // only makes the reported age SMALLER (more conservative), never larger.
+const (
+	pausedTradingView = "TradingView's terms bar non-display use of scanner data (2026-10-21)"
+	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-22)"
+	pausedLicence     = "retired 22 Oct 2026: licence terms do not permit this use"
+)
+
 var registry = []spec{
 	{source: "tv_quotes", query: `SELECT MAX(ts) FROM tv_quotes`,
-		budget: 30 * time.Minute, gated: true,
+		budget: 30 * time.Minute, gated: true, paused: pausedTradingView,
 		note: "TradingView quote tape (60s worker, market hours)"},
 	{source: "tv_ratings", query: `SELECT MAX(ts) FROM tv_ratings`,
-		budget: 6 * time.Hour, gated: true,
+		budget: 6 * time.Hour, gated: true, paused: pausedTradingView,
 		note: "TradingView TA ratings (15m worker, market hours)"},
 	{source: "short_volume", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM short_volume`,
 		// 6d, gated. FINRA publishes this file EVERY session at 18:30 ET, so the
@@ -68,7 +78,7 @@ var registry = []spec{
 		// short_interest cannot cover this failure for us, because ITS honest
 		// age reaches ~28d and no budget that tolerates that can see a
 		// week-old daily-feed outage (SD-H35).
-		budget: 6 * 24 * time.Hour, gated: true,
+		budget: 6 * 24 * time.Hour, gated: true, paused: pausedLicence,
 		note: "FINRA Reg SHO daily short-sale volume (per-session file, published 18:30 ET)"},
 	{source: "short_interest", query: `SELECT CAST(strftime('%s', MAX(settlement_date)) AS INTEGER) FROM short_interest`,
 		// 35d, not 20d: settlement is bi-monthly (~15d apart) AND publication
@@ -76,23 +86,26 @@ var registry = []spec{
 		// legitimately up to ~28d old just before the next one publishes. A 20d
 		// budget false-flags near every cycle boundary — the auditor must not
 		// cry wolf when the worker already holds the newest available file.
-		budget: 35 * 24 * time.Hour, gated: false,
+		budget: 35 * 24 * time.Hour, gated: false, paused: pausedLicence,
 		note: "FINRA bi-monthly short interest (settlement-dated, ~2wk publication lag)"},
 	{source: "crypto_perp", query: `SELECT MAX(ts) FROM crypto_perp`,
-		budget: 2 * time.Hour, gated: false,
+		budget: 2 * time.Hour, gated: false, paused: pausedCrypto,
 		note: "Hyperliquid perp funding/OI (15m worker, crypto 24/7)"},
 	{source: "cot_reports", query: `SELECT CAST(strftime('%s', MAX(report_date)) AS INTEGER) FROM cot_reports`,
 		budget: 10 * 24 * time.Hour, gated: false,
 		note: "CFTC Commitments of Traders (weekly, Fri publish of Tue positions)"},
 	{source: "stocktwits_sentiment", query: `SELECT MAX(ts) FROM stocktwits_sentiment`,
-		budget: 6 * time.Hour, gated: true,
+		budget: 6 * time.Hour, gated: true, paused: "StockTwits' terms bar automated extraction without written authorization (2026-10-21)",
 		note: "StockTwits page-snapshot sentiment (15m worker, market hours)"},
 	{source: "wiki_views", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM wiki_views`,
 		budget: 3 * 24 * time.Hour, gated: false,
 		note: "Wikipedia daily page views (24h worker, attention proxy)"},
 	{source: "cboe_pc", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM cboe_pc`,
-		budget: 3 * 24 * time.Hour, gated: true,
+		budget: 3 * 24 * time.Hour, gated: true, paused: pausedLicence,
 		note: "CBOE market-wide put/call (6h worker, ~3 trading-day budget)"},
+	{source: "macro_series", query: `SELECT MAX(ts) FROM macro_series`,
+		budget: 4 * 24 * time.Hour, gated: false, paused: pausedLicence,
+		note: "FRED macro series incl. VIXCLS (6h worker, daily/weekly prints)"},
 	{source: "news", query: `SELECT MAX(ts) FROM news`,
 		budget: 12 * time.Hour, gated: true,
 		note: "Alpaca news headlines (market hours)"},
@@ -100,7 +113,7 @@ var registry = []spec{
 		budget: 30 * time.Minute, gated: true,
 		note: "streamed hot-set 1m bars (live ws, market hours)"},
 	{source: "snapshots_1s", query: `SELECT MAX(ts) FROM snapshots_1s`,
-		budget: 10 * time.Minute, gated: false,
+		budget: 10 * time.Minute, gated: false, paused: pausedCrypto,
 		note: "1s microstructure snapshots (crypto 24/7)"},
 	{source: "tv_signals", query: `SELECT MAX(ts) FROM tv_signals`,
 		budget: 6 * time.Hour, gated: true, webhook: true,
@@ -152,6 +165,8 @@ func Evaluate(ctx context.Context, st Store, now time.Time, webhookSecretSet boo
 		}
 
 		switch {
+		case s.paused != "":
+			r.Note = "paused: " + s.paused + " — not checked"
 		case s.webhook && !webhookSecretSet:
 			// Webhook disabled (no secret) — its silence is by design.
 			r.Note = "webhook disabled (no secret configured) — not checked"

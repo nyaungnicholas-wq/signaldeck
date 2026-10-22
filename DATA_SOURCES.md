@@ -22,22 +22,27 @@ Authoritative classification lives in code at
 it — this file is the readable mirror, not the source of truth. Tests fail if a
 Licensed or Restricted source is ever flagged redistributable.
 
-| Source | Class | Provider | Raw redistribution |
-|---|---|---|---|
-| `alpaca` | Licensed | Alpaca Markets | **No** — prohibited by agreement |
-| `cryptohist` | Licensed | Kraken | **No** — derived works included |
-| `cryptolive` | Licensed | Coinbase / Kraken | **No** |
-| `hyperliquid` | Licensed | Hyperliquid | **No** — commercial terms unestablished |
-| `news` | Licensed | Alpaca news | **No** — headlines are publisher IP |
-| `tvscanner` | Restricted | TradingView | **No** — automated access is against their terms; ratings are their IP |
-| `stocktwits` | Restricted | StockTwits | **No** — undocumented endpoint, personal use only |
-| `edgar` | Public | SEC | Yes — US government, public domain |
-| `fred` | Public | St. Louis Fed | Yes — attribution requested |
-| `finra` | Public | FINRA | Yes |
-| `cftc` | Public | CFTC | Yes |
-| `cboe` | Public | Cboe | Yes |
-| `congress` | Public | STOCK Act disclosures | Yes |
-| `wikimedia` | Public | Wikimedia | Yes — CC-licensed |
+The Status column was added 2026-10-22 after the data-licence review. It is not
+mirrored in `datalicense.go`, which still lists every source below. The `fred`,
+`finra` and `cboe` rows are Restricted in `datalicense.go` since the 22 October
+2026 retirement.
+
+| Source | Class | Provider | Raw redistribution | Status (2026-10-22) |
+|---|---|---|---|---|
+| `alpaca` | Licensed | Alpaca Markets | **No** — prohibited by agreement | In use. Open licence question: Alpaca's staff forum says derived data may not be provided to third parties (counsel packet) |
+| `cryptohist` | Licensed | Kraken | **No** — derived works included | Paused 2026-10-22: crypto paused; history stays on the record, open crypto forecasts voided (never deleted) |
+| `cryptolive` | Licensed | Coinbase / Kraken | **No** | Paused 2026-10-22: crypto paused |
+| `hyperliquid` | Licensed | Hyperliquid | **No** — commercial terms unestablished | Paused 2026-10-22: crypto paused |
+| `news` | Licensed | Alpaca news | **No** — headlines are publisher IP | In use. Headlines also go to NVIDIA for sentiment tagging (open licence question) |
+| `tvscanner` | Restricted | TradingView | **No** — automated access is against their terms; ratings are their IP | Retired 2026-10-21/22 |
+| `stocktwits` | Restricted | StockTwits | **No** — undocumented endpoint, personal use only | Retired 2026-10-21/22 |
+| `edgar` | Public | SEC | Yes — SEC data is free to access and reuse | In use |
+| `fred` | Restricted | St. Louis Fed | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review (forecasts before then used FRED data) |
+| `finra` | Restricted | FINRA | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review |
+| `cftc` | Public | CFTC | Yes | In use |
+| `cboe` | Restricted | Cboe | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review |
+| `congress` | Public | STOCK Act disclosures, via third-party datasets (Kadoa's congress-trades file; older rows House/Senate Stock Watcher) | Unclear (counsel): Kadoa's permission pending | In use. Open question: the Ethics in Government Act commercial-use restriction (SignalDeck is free and non-commercial) |
+| `wikimedia` | Public | Wikimedia | Yes — page-view counts are CC0 | In use |
 
 ## What the guard does
 

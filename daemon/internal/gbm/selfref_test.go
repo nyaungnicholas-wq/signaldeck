@@ -234,15 +234,55 @@ func TestSelfReferentialKey_LiveKeysAllCensused(t *testing.T) {
 }
 
 func TestFilterSelfReferential_DropsOutputsKeepsOrder(t *testing.T) {
-	in := []string{"adx14", "pred_raw", "forecast_prob", "meanrev_prob", "vix_level", "pred_cal__has", "forecast_lift", "n_used"}
+	in := []string{"adx14", "pred_raw", "forecast_prob", "meanrev_prob", "wiki_z", "pred_cal__has", "forecast_lift", "n_used"}
 	got := FilterSelfReferential(in)
-	want := []string{"adx14", "vix_level"}
+	want := []string{"adx14", "wiki_z"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+}
+
+// Retired sources are excluded from training with their presence indicators,
+// while staying off the self-reference list they do not belong to.
+func TestExcludedKey_RetiredSources(t *testing.T) {
+	for _, k := range []string{"tv_reco", "tv_reco__has", "stocktwits_bull_ratio", "stocktwits_bull_ratio__has"} {
+		if !ExcludedKey(k) || !RetiredSourceKey(k) {
+			t.Errorf("%q must be excluded as a retired source", k)
+		}
+		if SelfReferentialKey(k) {
+			t.Errorf("%q is not self-referential", k)
+		}
+	}
+	for _, k := range []string{"wiki_z", "tv_webhook_signal", "comp_rsi"} {
+		if ExcludedKey(k) {
+			t.Errorf("%q must stay trainable", k)
+		}
+	}
+	if got := FilterSelfReferential([]string{"wiki_z", "tv_reco", "pred_raw"}); len(got) != 1 || got[0] != "wiki_z" {
+		t.Errorf("FilterSelfReferential = %v, want [wiki_z]", got)
+	}
+}
+
+// FINRA, Cboe put/call and FRED keys (retired 22 Oct 2026) are excluded with
+// their presence bits; CFTC and EDGAR keys, and postmortem's macro_event code,
+// stay trainable.
+func TestExcludedKey_LicenceRetiredSources(t *testing.T) {
+	for _, k := range []string{
+		"short_vol_z", "short_int_dtc__has", "pc_total", "vix_level", "vix_regime__has",
+		"vix_high_vol", "macro_dgs10_pct", "macro_hy_spread_chg__has", "macro_oil_pct",
+	} {
+		if !ExcludedKey(k) || !RetiredSourceKey(k) {
+			t.Errorf("%q must be excluded as a retired source", k)
+		}
+	}
+	for _, k := range []string{"cot_spx_net", "insider_net_ratio", "macro_event", "vol_pct", "mkt_trend"} {
+		if ExcludedKey(k) {
+			t.Errorf("%q must stay trainable", k)
 		}
 	}
 }

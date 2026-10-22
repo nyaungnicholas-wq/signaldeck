@@ -29,6 +29,61 @@ better:
 returns is the exact string the process writes onto every ledger row, so a row
 can be tied to a commit without trusting the deployment.
 
+### One time, right after the crypto-pause deploy: `sdmaint void-retired-crypto`
+
+The first deployed build that pauses crypto (no licensed crypto data source,
+2026-10-22) sets every crypto symbol `active=0` at boot (`pauseCrypto`) and, on
+purpose, leaves `delisted_at` NULL. Until the step below has run, every
+`ops/accuracy-registry.sh` run counts those symbols as undated exits and
+publishes `survivorship_clean=false`. Run it from the repo root (Git Bash) as
+soon as the deploy prints `deploy VERIFIED`, before the next registry run (the
+`SignalDeck Accuracy` task runs it daily at 14:05 local). Record each output.
+
+```
+# (a) Back up first. The offline backup SKIPs while signaldeckd runs, so stop,
+#     back up, restart. With a backup key configured it also makes the
+#     encrypted off-site copy. Check logs/backup-offline.log shows the new
+#     data/backups/signaldeck-<ts>.db and its sha256 line, not "SKIP".
+bash ops/signaldeck-ctl.sh stop && bash ops/signaldeck-backup-offline.sh; bash ops/signaldeck-ctl.sh up
+#     If a stop is not acceptable, name the newest backup and its sha instead:
+#     ls -t data/backups/signaldeck-*.db* | head -2; cat data/backups/<newest>.sha256
+# (b) Build sdmaint from the DEPLOYED HEAD (git rev-parse HEAD must equal the
+#     revision in curl -s http://127.0.0.1:8322/api/version).
+(cd daemon && go build -o ../bin/sdmaint.exe ./cmd/sdmaint)
+# (c) Dry run, read-only: must print active_crypto=0. Record voided/by_horizon/delisted_stamped.
+bin/sdmaint.exe void-retired-crypto
+# (d) Apply, keeping the CSV of old values.
+bin/sdmaint.exe void-retired-crypto -apply -log logs/void-retired-crypto-$(date -u +%Y%m%dT%H%M%SZ).csv
+# (e) Dry run again: must print voided=0 ... delisted_stamped=0.
+bin/sdmaint.exe void-retired-crypto
+```
+
+`-apply` voids the open crypto forecasts the resolver can never settle, stamps
+`delisted_at` at each crypto symbol's last stored daily bar, and records one
+`dq_events` row (`predictions_voided_source_retired`) naming the CSV of old
+values, all in one transaction. It refuses while any crypto symbol is still
+`active=1` (the paused build is not running) and refuses a `-log` file that
+already exists. Keep the CSV. A second run changes nothing.
+
+The `delisted_at` stamp has one effect outside the CSV: on its next pass,
+maintain's OutcomeResolver voids open crypto `score_outcomes` past their target
+with no forward bar (the `dq_events` detail says so too). Restoring the stamp
+from the CSV does not restore those rows; the backup from (a) does.
+
+```
+# (f) Verify, from the repo root:
+bin/sdmaint.exe ledger-verify      # must print "chain: intact" and "anchors: N/N verify", exit 0
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8322/api/accuracy   # must print 200
+powershell -NoProfile -File ops/check-grader-health.ps1   # last line must be "RESULT: ok"
+```
+
+**Rollback means rolling forward.** `ops/signaldeck-ctl.sh` keeps the previous
+binary, but that build (c8e18a2c) re-wires every retired source (Kraken,
+TickStream, TradingView, StockTwits, FINRA, Cboe, FRED) and, before the void has
+stamped `delisted_at`, re-activates BTC/USD through `UpsertSymbol`. Do not swap
+it in: fix forward and redeploy HEAD. If an emergency rollback happens anyway,
+stop it as soon as the incident is contained and redeploy HEAD.
+
 
 Everything below is prepared; the two ★ steps need YOUR accounts/credentials —
 Claude cannot (and should not) do them for you.

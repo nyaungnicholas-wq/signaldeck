@@ -61,9 +61,13 @@ func TestHistBackfillComputesLabeledWeeks(t *testing.T) {
 	seedHistDailyBars(t, st, dndn.ID, start, nDays, false)
 	// SHLW gets no bars: shallow, and far too thin for rows.
 
-	// One VIX print before the window ⇒ every anchor joins high-vol context.
-	if err := st.InsertMacro(ctx, "VIXCLS", start-86400, 30); err != nil {
-		t.Fatalf("macro: %v", err)
+	// A daily VIX print across the window ⇒ every anchor joins high-vol
+	// context. One stale print no longer does: histfeat drops VIX older than
+	// its staleness bound (FRED retired 22 Oct 2026; no frozen carry-forward).
+	for d := int64(-1); d < nDays; d++ {
+		if err := st.InsertMacro(ctx, "VIXCLS", start+d*86400, 30); err != nil {
+			t.Fatalf("macro: %v", err)
+		}
 	}
 
 	w := &HistoryBackfillWorker{St: st, Now: func() time.Time { return time.Unix(1_600_000_000, 0) }}

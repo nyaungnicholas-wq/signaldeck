@@ -18,17 +18,78 @@ gh_offsite_file_size() {
     printf '%s\n' "$size"
 }
 
+# gh_offsite_sdmaint -> prints the path of bin/sdmaint(.exe), building it with
+# go when missing OR older than any daemon source (moved here from
+# restore-rehearsal.sh, which still uses it). Stale matters: the live binary
+# predated offsite-seal, so after a deploy every sealed upload and tombstone
+# replay would fail at "unknown subcommand" (2026-10-22 review). A failed
+# rebuild keeps the old binary (its unknown-subcommand guard fails closed).
+# Windows needs the .exe suffix or the binary is neither -x nor runnable.
+gh_offsite_sdmaint() {
+    local root exe="" bin go
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac
+    bin="$root/bin/sdmaint$exe"
+    if [ ! -x "$bin" ] || [ -n "$(find "$root/daemon" \( -name '*.go' -o -name go.mod -o -name go.sum \) -newer "$bin" -print -quit 2>/dev/null)" ]; then
+        go="$HOME/.local/go-sdk/go/bin/go"
+        [ -x "$go" ] || go="$(command -v go || true)"
+        if [ -n "$go" ] && [ -x "$go" ]; then
+            if (cd "$root/daemon" && "$go" build -o "$bin" ./cmd/sdmaint) >/dev/null 2>&1; then
+                touch "$bin" # go leaves an up-to-date binary unwritten; mark it checked
+            else
+                echo "sdmaint: rebuild failed; keeping the existing $bin if there is one" >&2
+            fi
+        fi
+    fi
+    [ -x "$bin" ] || return 1
+    printf '%s\n' "$bin"
+}
+
+# gh_offsite_key_file -> prints the off-site backup key path, or nothing when
+# none is configured: SIGNALDECK_OFFSITE_KEY_FILE (configured even if the file
+# is missing, so a lost key fails CLOSED), else ~/.signaldeck/backup.key when
+# that file exists. Never reads the key.
+gh_offsite_key_file() {
+    local d="${USERPROFILE:-$HOME}/.signaldeck/backup.key"
+    if [ -n "${SIGNALDECK_OFFSITE_KEY_FILE:-}" ]; then
+        printf '%s\n' "$SIGNALDECK_OFFSITE_KEY_FILE"
+    elif [ -f "$d" ]; then
+        printf '%s\n' "$d"
+    fi
+}
+
 # gh_offsite_upload_verified SRC REPO TAG TMPGZ
 # Returns 0 on verified success, 1 on failure.
 # Sets GH_VERIFIED_BYTES (0 unless verified) and GH_FAIL_REASON ("" on success).
+# With a key configured the asset is <name>.db.gz.enc (sdmaint offsite-seal,
+# chunked AES-256-GCM) and a sealing failure ABORTS: once a key exists a
+# plaintext upload is refused. The account-deletion tombstone log goes up
+# sealed beside it as deletions.jsonl.enc so a new machine can replay it.
 gh_offsite_upload_verified() {
     local src="$1" repo="$2" tag="$3" tmpgz="$4"
-    local gz_bytes name gzpath hash sha256path remote
+    local gz_bytes name gzpath hash sha256path remote key sdm tomb tdir
 
     # compress
     if ! gzip -c "$src" >"$tmpgz" 2>>"${LOG:-/dev/null}"; then
         GH_FAIL_REASON="could not compress the backup for upload"
         return 1
+    fi
+
+    name=$(basename "$src").gz
+    key=$(gh_offsite_key_file)
+    if [ -n "$key" ]; then
+        # $tmpgz.enc keeps the dot-prefixed temp name, which the local prune
+        # globs (signaldeck-[0-9]*.db.gz) never match.
+        if ! sdm=$(gh_offsite_sdmaint) || ! "$sdm" offsite-seal -key "$key" -in "$tmpgz" -out "$tmpgz.enc" >/dev/null 2>>"${LOG:-/dev/null}"; then
+            rm -f "$tmpgz" "$tmpgz.enc"
+            GH_FAIL_REASON="could not seal the backup with the configured key; refusing to upload it unencrypted"
+            return 1
+        fi
+        rm -f "$tmpgz"
+        tmpgz="$tmpgz.enc"
+        name="$name.enc"
+    else
+        echo "WARNING: no off-site backup key (SIGNALDECK_OFFSITE_KEY_FILE or ~/.signaldeck/backup.key); uploading the backup UNENCRYPTED" | tee -a "${LOG:-/dev/null}" >&2
     fi
 
     gz_bytes=$(gh_offsite_file_size "$tmpgz")
@@ -41,7 +102,6 @@ gh_offsite_upload_verified() {
         return 1
     fi
 
-    name=$(basename "$src").gz
     gzpath=$(dirname "$tmpgz")/$name
     mv "$tmpgz" "$gzpath"
 
@@ -49,7 +109,7 @@ gh_offsite_upload_verified() {
     if ! gh release view "$tag" --repo "$repo" >/dev/null 2>>"${LOG:-/dev/null}"; then
         if ! gh release create "$tag" --repo "$repo" \
             --title "SignalDeck DB backup $tag" \
-            --notes "Automated off-machine backup of data/signaldeck.db (gzip). Private repo. Restore: gh release download $tag --repo $repo." >/dev/null 2>>"${LOG:-/dev/null}"; then
+            --notes "Automated off-machine backup of data/signaldeck.db (gzip; a .enc asset is sealed with sdmaint offsite-seal). Private repo. Restore: ops/DR_RUNBOOK.md section 2." >/dev/null 2>>"${LOG:-/dev/null}"; then
             GH_FAIL_REASON="could not create release $tag"
             rm -f "$gzpath"
             return 1
@@ -84,6 +144,19 @@ gh_offsite_upload_verified() {
         return 1
     fi
 
+    # tombstone log, sealed (GCM authenticates it; no sidecar needed)
+    tomb="${SIGNALDECK_TOMBSTONE_LOG:-${USERPROFILE:-$HOME}/.signaldeck/deletions.jsonl}"
+    if [ -n "$key" ] && [ -f "$tomb" ]; then
+        tdir=$(mktemp -d)
+        if ! "$sdm" offsite-seal -key "$key" -in "$tomb" -out "$tdir/deletions.jsonl.enc" >/dev/null 2>>"${LOG:-/dev/null}" ||
+            ! gh release upload "$tag" "$tdir/deletions.jsonl.enc" --repo "$repo" --clobber >/dev/null 2>>"${LOG:-/dev/null}"; then
+            GH_FAIL_REASON="could not seal or upload the deletion tombstone log"
+            rm -rf "$tdir" "$gzpath" "$sha256path"
+            return 1
+        fi
+        rm -rf "$tdir"
+    fi
+
     GH_VERIFIED_BYTES=$remote
     GH_FAIL_REASON=""
     rm -f "$gzpath" "$sha256path"
@@ -91,7 +164,8 @@ gh_offsite_upload_verified() {
 }
 
 # gh_offsite_prune REPO KEEP
-# Delete backup-* releases beyond the newest KEEP that carry a .db.gz; always
+# Delete backup-* releases beyond the newest KEEP that carry a .db.gz (or a
+# sealed .db.gz.enc); always
 # returns 0. Until 2026-10-03 this deleted NOTHING: `IFS= read -r created tag`
 # never splits, so tag was always empty and `gh release delete ""` failed while
 # the next line printed "deleted" anyway (12 releases, 11.8 GB, against KEEP 7).
@@ -106,7 +180,7 @@ gh_offsite_prune() {
     while read -r created tag; do
         [ -z "$tag" ] && continue
         n=$(gh release view "$tag" --repo "$repo" --json assets \
-            --jq '[.assets[].name | select(endswith(".db.gz"))] | length' 2>>"${LOG:-/dev/null}")
+            --jq '[.assets[].name | select(endswith(".db.gz") or endswith(".db.gz.enc"))] | length' 2>>"${LOG:-/dev/null}")
         if ! [ "${n:-0}" -gt 0 ] 2>/dev/null; then
             echo "gh prune: kept $tag (no .db.gz asset, not counted)"
             continue
@@ -139,7 +213,7 @@ gh_offsite_newest_tag() {
     while read -r tag; do
         [ -z "$tag" ] && continue
         n=$(gh release view "$tag" --repo "$repo" --json assets \
-            --jq '[.assets[].name | select(endswith(".db.gz"))] | length' 2>>"${LOG:-/dev/null}")
+            --jq '[.assets[].name | select(endswith(".db.gz") or endswith(".db.gz.enc"))] | length' 2>>"${LOG:-/dev/null}")
         if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
             printf '%s\n' "$tag"
             return 0
@@ -151,9 +225,11 @@ gh_offsite_newest_tag() {
 
 # gh_offsite_download_newest REPO DESTDIR
 # Downloads newest backup-* release, verifies sidecar, prints path of .db.gz.
+# A sealed .db.gz.enc is checksum-verified, then opened with the configured key
+# (and a sealed deletions.jsonl.enc beside it becomes DESTDIR/deletions.jsonl).
 # Returns 0 on success, 1 on failure (message on stderr).
 gh_offsite_download_newest() {
-    local repo="$1" destdir="$2" tag gzfile base sha256file
+    local repo="$1" destdir="$2" tag gzfile base sha256file key sdm
     tag=$(gh_offsite_newest_tag "$repo")
     if [[ -z "$tag" ]]; then
         echo "No backup-* release found" >&2
@@ -161,13 +237,15 @@ gh_offsite_download_newest() {
     fi
     mkdir -p "$destdir"
     if ! gh release download "$tag" --repo "$repo" --dir "$destdir" \
-        --pattern '*.db.gz' --pattern '*.sha256' --clobber >/dev/null 2>>"${LOG:-/dev/null}"; then
+        --pattern '*.db.gz' --pattern '*.db.gz.enc' --pattern '*.sha256' --pattern 'deletions.jsonl.enc' \
+        --clobber >/dev/null 2>>"${LOG:-/dev/null}"; then
         echo "gh release download failed" >&2
         return 1
     fi
-    gzfile=$(find "$destdir" -maxdepth 1 -name '*.db.gz' -print -quit)
+    gzfile=$(find "$destdir" -maxdepth 1 -name '*.db.gz.enc' -print -quit)
+    [[ -z "$gzfile" ]] && gzfile=$(find "$destdir" -maxdepth 1 -name '*.db.gz' -print -quit)
     if [[ -z "$gzfile" ]]; then
-        echo "No .db.gz downloaded" >&2
+        echo "No .db.gz or .db.gz.enc downloaded" >&2
         return 1
     fi
     base=$(basename "$gzfile")
@@ -180,6 +258,28 @@ gh_offsite_download_newest() {
     if [[ $? -ne 0 ]]; then
         echo "checksum mismatch" >&2
         return 1
+    fi
+    if [[ "$gzfile" == *.enc ]]; then
+        key=$(gh_offsite_key_file)
+        if [[ -z "$key" ]]; then
+            echo "$base is sealed but no backup key is configured (SIGNALDECK_OFFSITE_KEY_FILE or ~/.signaldeck/backup.key)" >&2
+            return 1
+        fi
+        if ! sdm=$(gh_offsite_sdmaint); then
+            echo "sdmaint is missing and could not be rebuilt; cannot open $base" >&2
+            return 1
+        fi
+        if ! "$sdm" offsite-open -key "$key" -in "$gzfile" -out "${gzfile%.enc}" >/dev/null 2>>"${LOG:-/dev/null}"; then
+            echo "could not open $base with the configured key (wrong key, or the file is damaged)" >&2
+            return 1
+        fi
+        if [[ -f "$destdir/deletions.jsonl.enc" ]] && ! "$sdm" offsite-open -key "$key" \
+            -in "$destdir/deletions.jsonl.enc" -out "$destdir/deletions.jsonl" >/dev/null 2>>"${LOG:-/dev/null}"; then
+            echo "could not open the release's deletions.jsonl.enc" >&2
+            return 1
+        fi
+        rm -f "$gzfile"
+        gzfile="${gzfile%.enc}"
     fi
     printf '%s\n' "$gzfile"
     return 0

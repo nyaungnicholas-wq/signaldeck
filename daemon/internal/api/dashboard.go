@@ -18,7 +18,8 @@
 // below the resolved-N gate, mirroring /honesty's independent-N rule); heatmap
 // cells without EDGAR shares carry mcap=null ("sized: mcap unavailable" in the
 // UI, never a fabricated size); every price is a stored daily close on worker
-// cadence, not a live quote; VIX is the FRED daily close (~1 trading day lag).
+// cadence, not a live quote. The VIX gauge is empty since FRED's retirement
+// (22 Oct 2026).
 package api
 
 import (
@@ -30,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
@@ -55,8 +55,6 @@ const (
 	confNote      = "Mean |calibrated p − 0.5| × 2 over each symbol's latest 1d prediction — calibration is backtested, not a live track record."
 )
 
-// vixRegimeLabels maps macrofeat's ordinal VIX bands to display labels.
-var vixRegimeLabels = [4]string{"calm", "normal", "elevated", "stressed"}
 
 // ── payload rows ─────────────────────────────────────────────────────────
 
@@ -395,28 +393,11 @@ func (d Deps) buildDashGauges(ctx context.Context, universeN, advancers, decline
 		"caption": fmtBreadthCaption(universeN),
 	}
 
-	// VIX: FRED daily close + the conventional regime bands (macrofeat owns
-	// the thresholds; ordinal 0..3 = calm..stressed).
+	// VIX: no longer served (22 Oct 2026). It came from FRED's VIXCLS series,
+	// whose terms do not permit this use, and with fred-poller unwired the
+	// stored close would read as current while frozen. The tile stays in the
+	// payload so the page can say why it is empty.
 	vix := map[string]any{"hasData": false, "caption": vixNote}
-	if pts, err := d.St.MacroSeries(ctx, "VIXCLS", 2); err != nil {
-		return nil, err
-	} else if len(pts) > 0 {
-		last := pts[len(pts)-1]
-		ord := int(math.Round(macrofeat.FromVIX(last.Value).Regime * 3))
-		if ord < 0 {
-			ord = 0
-		} else if ord > 3 {
-			ord = 3
-		}
-		v := map[string]any{
-			"level": last.Value, "regime": vixRegimeLabels[ord], "regimeOrdinal": ord,
-			"ts": last.Ts, "hasData": true, "caption": vixNote,
-		}
-		if len(pts) > 1 {
-			v["dayChangePct"] = pctChange(last.Value, pts[0].Value)
-		}
-		vix = v
-	}
 
 	// Anomalies in the last 24h (hour-deduped, descriptive).
 	anomN, err := d.St.AnomalyCountSince(ctx, now-86400)
@@ -638,24 +619,18 @@ func (d Deps) buildTape(ctx context.Context) []tapeItem {
 	}
 
 	// BTC (the consolidated crypto symbol) from its daily bars.
-	btc := tapeItem{Symbol: d.Cfg.CryptoSymbol, Label: "Bitcoin", Kind: "crypto", Market: string(md.Crypto)}
-	if s, err := d.St.GetSymbol(ctx, d.Cfg.CryptoSymbol, md.Crypto); err == nil {
+	// Skipped while crypto is paused (inactive), so the tape never shows a
+	// frozen price as if it were current.
+	if s, err := d.St.GetSymbol(ctx, d.Cfg.CryptoSymbol, md.Crypto); err == nil && s.Active {
+		btc := tapeItem{Symbol: d.Cfg.CryptoSymbol, Label: "Bitcoin", Kind: "crypto", Market: string(md.Crypto)}
 		if last, prev, ts, ok := d.lastTwoClosesCtx(ctx, s.ID); ok {
 			btc.Price, btc.DayChangePct, btc.Ts, btc.HasData = last, pctChange(last, prev), ts, true
 		}
+		items = append(items, btc)
 	}
-	items = append(items, btc)
 
-	// VIX from the stored FRED VIXCLS series (daily close, ~1 day lag).
-	vix := tapeItem{Symbol: "VIX", Label: "CBOE Volatility Index", Kind: "vix", Note: vixNote}
-	if pts, err := d.St.MacroSeries(ctx, "VIXCLS", 2); err == nil && len(pts) > 0 {
-		n := len(pts)
-		vix.Price, vix.Ts, vix.HasData = pts[n-1].Value, pts[n-1].Ts, true
-		if n > 1 {
-			vix.DayChangePct = pctChange(pts[n-1].Value, pts[n-2].Value)
-		}
-	}
-	items = append(items, vix)
+	// VIX left the tape on 22 Oct 2026: it came from FRED (see the dashboard's
+	// VIX tile for why).
 	return items
 }
 

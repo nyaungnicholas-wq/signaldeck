@@ -186,8 +186,31 @@ statement, so nothing about today's format blocks that future.
 | `SIGNALDECK_INSIGHTS_RETENTION_D` | `90` | insights hot window (days) |
 | `SIGNALDECK_POSTMORTEM_RETENTION_D` | `180` | prediction_postmortems hot window (days) |
 | `SIGNALDECK_RESEARCH_WEEKS_RETENTION_D` | `2555` | research_weeks active window (days, ~7y) |
+| `SIGNALDECK_WAITLIST_RETENTION_D` | `365` | waitlist sign-ups older than this are removed (daemon derived-retention, hourly) |
+| `SIGNALDECK_LOG_RETENTION_D` | `30` | `logs/` files (`*.log`, `*.log.N[.gz]`, `*.err`, `*.out`; research journals such as `*.md`/`*.jsonl` are kept) older than this are removed (`ops/signaldeck-cleanup.sh`, daily) |
+| `SIGNALDECK_HOLDING_RETENTION_D` | `30` | retired backups (`signaldeck-*.db` and their `.sha256`, nothing else) in the holding folder (`SIGNALDECK_TRASH`, default `~/.Trash`) are removed this many days after the cleanup task retired them (`ops/signaldeck-cleanup.sh`, daily) |
+| `SIGNALDECK_RETENTION_ENFORCE` | unset | the three windows above are REPORT-ONLY (logged, nothing deleted) until this is `1`; `ops/signaldeck-cleanup.sh --retention-only` runs just the file part by hand |
+
 | `SIGNALDECK_VACUUM_THRESHOLD_MB` | `2048` | DB size above which the governor VACUUMs |
 | `SIGNALDECK_BUDGET_DB_MB` | `10240` | DB budget: nightly report pages above it; 1m gap-fill needs 512 MB headroom under it |
+
+The four retention keys above work from the environment or from `daemon/.env`,
+read the way the daemon reads it: a non-empty environment value wins, and in
+`daemon/.env` the LAST line for a key wins, with quotes and a trailing ` # comment`
+stripped. The daily cleanup task does not load `daemon/.env`; it reads just these
+keys from it.
+
+**Restore limit (waitlist).** A waitlist address removed on request
+(`sdmaint waitlist-remove -email <addr> -apply`) or by the 365-day window leaves
+no record, by design: nothing stores the address. Restoring a database backup
+taken before the removal brings it back. The 365-day window removes expired
+sign-ups again within the hour once enforcing; an on-request removal does not
+come back off by itself. Keep each removal request until no backup from before
+it remains (local, holding folder, offsite), and after any restore re-run
+`sdmaint waitlist-remove ... -apply` for every request newer than that backup.
+
+Set in `daemon/.env`, the waitlist part takes effect after the next daemon
+restart (the daemon reads `.env` at boot); the file sweep reads it at each daily run.
 
 Daily bars have no retention knob by design: `store.PruneBars` refuses `tf=1d`,
 so the permanent record cannot be pruned by any caller, present or future.

@@ -21,6 +21,7 @@ import RefusalNotice from "@/components/RefusalNotice";
 import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
 import { classifyPublicationFetch, unavailableReason } from "@/lib/publicationfetch";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 
 export const dynamic = "force-dynamic";
 
@@ -580,6 +581,7 @@ export default async function AccuracyPage() {
               status={r.publication_status}
               reasons={[
                 `${r.predictor}${r.horizon ? ` (${r.horizon}${r.variant ? `, ${r.variant}` : ""})` : ""}`,
+                ...(isCryptoPredictor(r.predictor) ? [CRYPTO_PAUSED_LABEL] : []),
                 ...(r.reasons ?? []),
               ]}
               evidenceRefs={r.evidence_refs}
@@ -676,7 +678,14 @@ export default async function AccuracyPage() {
               <tbody>
                 {structural.map((r) => (
                   <tr key={r.predictor}>
-                    <td className="tnum pr-4 py-1">{r.predictor}</td>
+                    <td className="tnum pr-4 py-1">
+                      {r.predictor}
+                      {isCryptoPredictor(r.predictor) && (
+                        <span className="block text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                          {CRYPTO_PAUSED_LABEL}
+                        </span>
+                      )}
+                    </td>
                     <td className="tnum pr-4">{pct(r.claimed)}</td>
                     <td style={{ color: verdictTone(verdictOf(r)) }}>{verdictOf(r)}</td>
                   </tr>

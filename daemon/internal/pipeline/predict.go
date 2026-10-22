@@ -16,7 +16,6 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/micro"
@@ -757,24 +756,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			learned = adaptive.Weights{}
 		}
 	}
-	// STAGE 6 — FRED VIX cross-asset feature, loaded ONCE per pass (the VIX level
-	// is market-wide, identical for every symbol at this ts). Present for ALL
-	// symbols when a VIX observation exists; absent (nil) otherwise. Best-effort:
-	// a read error or no data simply means the vix_* features are omitted.
-	var vixMap map[string]float64
-	if vix, ok, err := w.St.LatestVIX(ctx); err == nil && ok && vix > 0 {
-		vixMap = macrofeat.FromVIX(vix).Map()
-	}
-	// MACRO-BREADTH WAVE (featureVersion 11) — the rest of the free FRED panel
-	// (curve/policy/credit/conditions/oil), loaded ONCE per pass for the same
-	// reason vix_* is: these are market-wide levels, identical for every symbol
-	// at this ts. Best-effort throughout — an unreadable or thin series simply
-	// contributes no keys this pass. Revised series are excluded at the
-	// macrofeat layer, not here, so the admissibility rule lives with the
-	// encoding it protects.
-	macroMap := macroPanelFeatures(ctx, w.St)
+	// FRED features (vix_* from Stage 6, macro_* from the macro-breadth wave)
+	// were removed on 22 Oct 2026: FRED's terms grant a personal,
+	// non-commercial licence and bar storing its content in a database without
+	// written consent. Both maps stay nil, so the keys are absent from every new
+	// vector; gbm.RetiredSourceKey drops them from older labeled rows.
+	var vixMap, macroMap map[string]float64
 	// CROSS-SECTIONAL ALPHA wave (featureVersion 5) — market-wide new-source
-	// features (pc_total / cot_spx_net), loaded ONCE per pass like vix_*.
+	// features (cot_spx_net; pc_total retired 22 Oct 2026), loaded ONCE per pass.
 	// Best-effort + gate-honoring: stale or absent sources mean the fields are
 	// simply absent from every vector this pass (see alphaxfeat.go).
 	alphaMktMap := alphaMarketFeatures(ctx, w.St, time.Now())
@@ -842,6 +831,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// rows after the fact (stale-feed quarantine: 2,464 graded observations over
 		// 465 symbols on 2026-09-09); minting them was the defect, not grading them.
 		if s.Market == md.Stocks && len(daily) > 0 && marketcal.DailyBarStale(daily[len(daily)-1].Ts, time.Now()) {
+			staleFeed++
+			continue
+		}
+		// Crypto trades every day, so the session calendar does not apply. A
+		// crypto series whose newest settled daily bar is older than
+		// cryptoStaleAfter has stopped updating (crypto ingestion was paused on
+		// 2026-10-21); forecasting it would mint fresh-looking rows on frozen data.
+		if s.Market == md.Crypto && (len(daily) == 0 || cryptoBarStale(daily[len(daily)-1].Ts, time.Now())) {
 			staleFeed++
 			continue
 		}
@@ -1666,40 +1663,6 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%d event(s) logged", inserted), nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// MACRO-BREADTH WAVE (appended block).
-
-// macroPanelLookback is how many observations of each FRED series are loaded.
-// Enough to cover macrofeat's trailing percentile window with room for the
-// change lookback, and small enough that eight series cost one cheap read each.
-const macroPanelLookback = macrofeat.PercentileWindow + 60
-
-// macroPanelFeatures loads the admissible FRED series and encodes them as
-// market-wide model features.
-//
-// Best-effort by design: this runs inside the prediction pass, and a macro read
-// failing must degrade the vector, never the prediction. A series that errors,
-// is missing, or is too thin contributes no keys — absence is already
-// distinguished from zero everywhere downstream.
-func macroPanelFeatures(ctx context.Context, st *store.Store) map[string]float64 {
-	hist := make(map[string][]macrofeat.Point, len(macrofeat.AdmissibleSeries))
-	for _, s := range macrofeat.AdmissibleSeries {
-		pts, err := st.MacroSeries(ctx, s.ID, macroPanelLookback)
-		if err != nil || len(pts) == 0 {
-			continue
-		}
-		conv := make([]macrofeat.Point, 0, len(pts))
-		for _, p := range pts {
-			conv = append(conv, macrofeat.Point{Ts: p.Ts, Value: p.Value})
-		}
-		hist[s.ID] = conv
-	}
-	if len(hist) == 0 {
-		return nil
-	}
-	return macrofeat.FromSeries(hist)
-}
-
 // gateReadFailed records that the cross-section collapse gate could not read its
 // own evidence for one horizon.
 //
@@ -1719,4 +1682,15 @@ func (w *PredictionRunner) gateReadFailed(ctx context.Context, h md.Horizon, wha
 		Detail: "horizon " + string(h) + " published without the collapse gate: " + what +
 			": " + err.Error(),
 	})
+}
+
+// cryptoStaleAfter bounds the age of a crypto series' newest SETTLED daily bar
+// (its open time). With the forming bar trimmed, a healthy series reads up to
+// ~48h old late in the UTC day, so the bound sits a full day above that.
+const cryptoStaleAfter = 72 * time.Hour
+
+// cryptoBarStale reports whether a crypto daily bar opening at barTs (unix
+// seconds) is too old to forecast from at now.
+func cryptoBarStale(barTs int64, now time.Time) bool {
+	return now.Sub(time.Unix(barTs, 0)) > cryptoStaleAfter
 }

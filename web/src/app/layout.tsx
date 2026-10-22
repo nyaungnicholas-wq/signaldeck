@@ -44,7 +44,7 @@ export const metadata: Metadata = {
     default: "Dashboard — SignalDeck",
   },
   description:
-    "Continuously records crypto + stock market data, computes decomposable pressure scores, and grades itself against realized returns.",
+    "Continuously records US stock market data, computes decomposable pressure scores, and grades itself against realized returns.",
   // PWA install surface (static manifest + SVG icon in /public). No service
   // worker yet — installability/offline caching is deliberately out of scope.
   manifest: "/manifest.webmanifest",

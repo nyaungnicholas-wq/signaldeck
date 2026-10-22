@@ -115,6 +115,20 @@ func (s *Store) AccountEmail(ctx context.Context, uid int64) (email string, veri
 	return e.String, v == 1, e.Valid && e.String != "", err
 }
 
+// AccountEmailFor is AccountEmail keyed on the id AND username pair that
+// DeleteAccount checks: users.id is reused, so a read by id alone can return
+// the address of an account that took the id since the caller checked it.
+// ok is false when no such account exists. createdTs comes from the same row
+// read: the deletion tombstone hashes both, so they must describe one account.
+func (s *Store) AccountEmailFor(ctx context.Context, uid int64, username string) (email string, createdTs int64, ok bool, err error) {
+	var e sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT email, COALESCE(created_ts,0) FROM users WHERE id=? AND username=?`, uid, username).Scan(&e, &createdTs)
+	if err == sql.ErrNoRows {
+		return "", 0, false, nil
+	}
+	return e.String, createdTs, err == nil, err
+}
+
 // SetPassword replaces an account's hash and ends every session it holds, so a
 // reset also evicts whoever had the old password. One transaction: as three
 // autocommits, a deadline between them left the new hash in place with the

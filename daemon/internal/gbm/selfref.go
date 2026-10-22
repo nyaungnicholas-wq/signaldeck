@@ -82,13 +82,42 @@ func SelfReferentialKey(k string) bool {
 // indicators agree on one spelling.
 const PresenceSuffix = "__has"
 
+// RetiredSourceKey reports feature keys built from data sources SignalDeck no
+// longer uses because their terms do not clearly permit it (2026-10-21): the
+// TradingView scanner (tv_reco) and the StockTwits stream
+// (stocktwits_bull_ratio). New vectors no longer carry them, but labeled rows
+// written before the change still do, so every trainer must drop them too, or
+// a model would learn a key that is always absent at prediction time.
+//
+// Retired 22 Oct 2026 because their licences do not permit this use: FINRA
+// (short_vol_z, short_int_dtc), Cboe put/call (pc_total) and FRED (vix_level,
+// vix_regime, vix_high_vol, and every macro_<series>_pct / macro_<series>_chg
+// key macrofeat.FromSeries builds).
+func RetiredSourceKey(k string) bool {
+	base := strings.TrimSuffix(k, PresenceSuffix)
+	switch base {
+	case "tv_reco", "stocktwits_bull_ratio",
+		"short_vol_z", "short_int_dtc", "pc_total",
+		"vix_level", "vix_regime", "vix_high_vol":
+		return true
+	}
+	return strings.HasPrefix(base, "macro_") &&
+		(strings.HasSuffix(base, "_pct") || strings.HasSuffix(base, "_chg"))
+}
+
+// ExcludedKey is every key a model must not train on: self-referential keys
+// and keys from retired sources.
+func ExcludedKey(k string) bool {
+	return SelfReferentialKey(k) || RetiredSourceKey(k)
+}
+
 // FilterSelfReferential returns the subset of keys safe to train on, preserving
 // order. Builders assembling a feature layout should run their key union through
 // this rather than re-deriving the exclusion list.
 func FilterSelfReferential(keys []string) []string {
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
-		if SelfReferentialKey(k) {
+		if ExcludedKey(k) {
 			continue
 		}
 		out = append(out, k)

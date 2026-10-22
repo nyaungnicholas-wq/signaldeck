@@ -27,8 +27,10 @@ func TestSourceHealthShape(t *testing.T) {
 	ctx := context.Background()
 	// A 3h-old crypto perp snapshot (24/7 source, budget 2h) ⇒ stale regardless
 	// of the live clock, so the shape test always sees a nonzero staleCount.
-	btc, _ := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
-	if err := st.InsertCryptoPerp(ctx, store.CryptoPerpRow{SymbolID: btc.ID, Ts: time.Now().Unix() - 3*3600, MarkPx: 1}); err != nil {
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "")
+	if err := st.UpsertWikiViews(ctx, []store.WikiViewRow{{
+		SymbolID: aapl.ID, Day: time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02"), Views: 1,
+	}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,17 +62,17 @@ func TestSourceHealthShape(t *testing.T) {
 	if len(body.Sources) == 0 {
 		t.Fatal("no sources in payload")
 	}
-	var perp *int
+	var wiki *int
 	for i, s := range body.Sources {
-		if s.Source == "crypto_perp" {
-			perp = &i
+		if s.Source == "wiki_views" {
+			wiki = &i
 		}
 	}
-	if perp == nil {
-		t.Fatal("crypto_perp not reported")
+	if wiki == nil {
+		t.Fatal("wiki_views not reported")
 	}
-	if p := body.Sources[*perp]; !p.Stale || p.StaleBudgetSecs != int64((2*time.Hour)/time.Second) {
-		t.Errorf("crypto_perp report wrong: %+v", p)
+	if p := body.Sources[*wiki]; !p.Stale || p.StaleBudgetSecs != int64((3*24*time.Hour)/time.Second) {
+		t.Errorf("wiki_views report wrong: %+v", p)
 	}
 	if body.Overall.StaleCount < 1 {
 		t.Errorf("staleCount = %d, want >=1", body.Overall.StaleCount)

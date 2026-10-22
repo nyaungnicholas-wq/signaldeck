@@ -1,21 +1,24 @@
 "use client";
 import { useState, type FormEvent } from "react";
-import { api, ApiError, type Market } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
 
 export default function OrderForm({ onFilled }: { onFilled: () => void }) {
   const [symbol, setSymbol] = useState("");
-  const [market, setMarket] = useState<Market>("stocks");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [qty, setQty] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // A pair like BTC/USD is crypto, which is paused: say so, never submit it.
+  const cryptoPaused = symbol.includes("/");
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (cryptoPaused) return;
     setBusy(true);
     setStatus(null);
     try {
-      const r = await api.paperOrder(symbol.trim().toUpperCase(), market, side, Number(qty));
+      const r = await api.paperOrder(symbol.trim().toUpperCase(), "stocks", side, Number(qty));
       setStatus({
         kind: "ok",
         text: `Filled ${r.fill.Side} ${r.fill.Qty} ${symbol.trim().toUpperCase()} @ ${r.fill.Px.toFixed(2)} (cost ${r.fill.Cost.toFixed(2)}${r.fill.Capped ? ", size capped by liquidity" : ""}). Cash ${r.cash.toFixed(2)}, equity ${r.equity.toFixed(2)}. Quote bar ${r.quoteAgeS}s old.`,
@@ -40,26 +43,10 @@ export default function OrderForm({ onFilled }: { onFilled: () => void }) {
             className="mono rounded-lg px-3 py-1 text-[0.8rem]"
             style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--text)" }}
             value={symbol}
-            onChange={e => {
-              const val = e.target.value.toUpperCase();
-              setSymbol(val);
-              if (val.includes("/")) setMarket("crypto");
-            }}
-            placeholder="SPY or BTC/USD"
+            onChange={e => setSymbol(e.target.value.toUpperCase())}
+            placeholder="SPY"
             required
           />
-        </label>
-        <label className="flex flex-col gap-1 text-[0.7rem]" style={{ color: "var(--faint)" }}>
-          Market
-          <select
-            className="mono rounded-lg px-3 py-1 text-[0.8rem]"
-            style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--text)" }}
-            value={market}
-            onChange={e => setMarket(e.target.value as Market)}
-          >
-            <option value="stocks">stocks</option>
-            <option value="crypto">crypto</option>
-          </select>
         </label>
         <label className="flex flex-col gap-1 text-[0.7rem]" style={{ color: "var(--faint)" }}>
           Side
@@ -88,13 +75,18 @@ export default function OrderForm({ onFilled }: { onFilled: () => void }) {
         </label>
         <button
           type="submit"
-          disabled={busy || symbol.trim() === "" || qty === ""}
+          disabled={busy || cryptoPaused || symbol.trim() === "" || qty === ""}
           className="mono rounded-lg px-3 py-1 text-[0.8rem]"
           style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--text)" }}
         >
           PLACE SIMULATED ORDER
         </button>
       </form>
+      {cryptoPaused && (
+        <p className="px-4 pb-2 text-[0.75rem]" style={{ color: "var(--ask)" }}>
+          Stocks only: {CRYPTO_PAUSED_LABEL}.
+        </p>
+      )}
       {status && (
         <p className="px-4 pb-2 text-[0.75rem]" style={{ color: status.kind === "ok" ? "var(--ok)" : "var(--ask)" }}>
           {status.text}
