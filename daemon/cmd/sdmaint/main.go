@@ -47,6 +47,9 @@
 //	sdmaint replay-tombstones -db D [-log L] [-apply]
 //	                                    — re-apply logged account deletions to
 //	                                      a restored copy (tombstones.go)
+//	sdmaint void-retired-crypto [flags] — void open crypto forecasts no stored bar
+//	                                      can ever settle (crypto paused
+//	                                      2026-10-21); see voidretiredcrypto.go
 //
 // apply-delistings exists so the Python planner can stay strictly read-only
 // (mode=ro, like accuracy_registry.py): every write goes through
@@ -150,6 +153,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "void-retired-crypto" {
+		if err := voidRetiredCrypto(os.Args[2:]); err != nil {
+			log.Fatalf("void-retired-crypto: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "quarantine-flat-pads" {
 		if err := quarantineFlatPadsCmd(os.Args[2:]); err != nil {
 			log.Fatalf("quarantine-flat-pads: %v", err)
@@ -210,9 +219,9 @@ func main() {
 		log.Fatalf("unknown subcommand %q.\n"+
 			"This binary knows: apply-delistings, repair-added-at, build-universe,\n"+
 			"split-reused-tickers, purge-bad-bars, import-delisted, ledger-verify,\n"+
-			"research-loop, "+
-			"paper-epochs, storage-report, quarantine-flat-pads, offsite-keygen,\n"+
-			"offsite-seal, offsite-open, replay-tombstones, waitlist-remove.\n"+
+			"research-loop, paper-epochs, storage-report, quarantine-flat-pads,\n"+
+			"refetch-cohort, confluence-repair, adjudicate-delistings, void-retired-crypto,\n"+
+			"offsite-keygen, offsite-seal, offsite-open, replay-tombstones, waitlist-remove.\n"+
 			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
 			"Refusing to fall through to the default compaction pass, which would\n"+
 			"strip blobs and VACUUM data/signaldeck.db and ignore every flag you passed.",

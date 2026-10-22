@@ -45,7 +45,8 @@ RECENT_WINDOW = (2023, 2025)
 
 def _window(con, lo, hi):
     return con.execute(
-        "SELECT COUNT(*) FROM symbols WHERE delisted_at IS NOT NULL AND "
+        "SELECT COUNT(*) FROM symbols WHERE market = 'stocks' "
+        "AND delisted_at IS NOT NULL AND "
         "CAST(strftime('%Y', delisted_at, 'unixepoch') AS INTEGER) "
         "BETWEEN ? AND ?", (lo, hi)).fetchone()[0]
 
@@ -61,8 +62,12 @@ def measure(con):
     sources = sorted(r[0] for r in
                      con.execute("SELECT DISTINCT source FROM universe_membership"))
 
+    # Stock delistings only: the paused crypto symbols carry a delisted_at too
+    # (sdmaint void-retired-crypto dates their exit), and that is a retired
+    # data source, not a company leaving the market.
     total = con.execute(
-        "SELECT COUNT(*) FROM symbols WHERE delisted_at IS NOT NULL").fetchone()[0]
+        "SELECT COUNT(*) FROM symbols WHERE market = 'stocks' "
+        "AND delisted_at IS NOT NULL").fetchone()[0]
     earlier = _window(con, *EARLIER_WINDOW)
     recent = _window(con, *RECENT_WINDOW)
 

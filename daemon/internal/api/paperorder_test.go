@@ -18,7 +18,7 @@ func TestPaperOrderManualBookRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
 
-	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "Bitcoin")
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "SPDR S&P 500")
 	if err != nil {
 		t.Fatalf("upsert symbol: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestPaperOrderManualBookRoundTrip(t *testing.T) {
 	}
 
 	// Anonymous
-	rec := post(`{"symbol":"BTC/USD","market":"crypto","side":"buy","qty":1}`, 0)
+	rec := post(`{"symbol":"SPY","market":"stocks","side":"buy","qty":1}`, 0)
 	if rec.Code != 401 {
 		t.Fatalf("anonymous: expected 401, got %d", rec.Code)
 	}
@@ -81,7 +81,7 @@ func TestPaperOrderManualBookRoundTrip(t *testing.T) {
 	}
 
 	// Buy
-	rec = post(`{"symbol":"BTC/USD","market":"crypto","side":"buy","qty":2}`, 7)
+	rec = post(`{"symbol":"SPY","market":"stocks","side":"buy","qty":2}`, 7)
 	if rec.Code != 200 {
 		t.Fatalf("buy: expected 200, got %d", rec.Code)
 	}
@@ -145,14 +145,14 @@ func TestPaperOrderManualBookRoundTrip(t *testing.T) {
 	}
 
 	// Oversell
-	rec = post(`{"symbol":"BTC/USD","market":"crypto","side":"sell","qty":5}`, 7)
+	rec = post(`{"symbol":"SPY","market":"stocks","side":"sell","qty":5}`, 7)
 	if rec.Code != 400 {
 		t.Fatalf("oversell: expected 400, got %d", rec.Code)
 	}
 
 	// Sell all
 	sellQty := pos.Qty
-	rec = post(fmt.Sprintf(`{"symbol":"BTC/USD","market":"crypto","side":"sell","qty":%.8f}`, sellQty), 7)
+	rec = post(fmt.Sprintf(`{"symbol":"SPY","market":"stocks","side":"sell","qty":%.8f}`, sellQty), 7)
 	if rec.Code != 200 {
 		t.Fatalf("sell all: expected 200, got %d", rec.Code)
 	}
@@ -215,7 +215,7 @@ func TestPaperOrderRefusesStaleQuote(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
 
-	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "Bitcoin")
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "SPDR S&P 500")
 	if err != nil {
 		t.Fatalf("upsert symbol: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestPaperOrderRefusesStaleQuote(t *testing.T) {
 	}
 
 	// Buy with stale quote -> 409
-	rec := post(`{"symbol":"BTC/USD","market":"crypto","side":"buy","qty":1}`, 7)
+	rec := post(`{"symbol":"SPY","market":"stocks","side":"buy","qty":1}`, 7)
 	if rec.Code != 409 {
 		t.Fatalf("stale quote: expected 409, got %d", rec.Code)
 	}

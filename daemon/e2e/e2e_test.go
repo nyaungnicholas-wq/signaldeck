@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 const csrfHeader = "X-Signaldeck"
@@ -276,6 +280,19 @@ func TestDaemonEndToEnd(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "e2e.db")
 	port := freePort(t)
 
+	// A keyless daemon cannot add a stock and crypto is paused, so the symbol
+	// whose watchlist entry must survive the restart is seeded before boot.
+	seed, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.UpsertSymbol(context.Background(), "MSFT", md.Stocks, "Microsoft"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	d := startDaemon(t, bin, home, dbPath, port)
 	d.waitHealthy(t, 20*time.Second)
 
@@ -331,18 +348,27 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("keyless AAPL subscribe: %d %s (want 422 mentioning Alpaca)", resp.StatusCode, body)
 	}
 
-	// Crypto is paused (2026-10-21: no licensed crypto data source), so a
-	// crypto subscription must be refused with a clear client error and must
-	// not reach the watchlist.
+	// Crypto is paused (2026-10-21, no licensed crypto data source): a crypto
+	// subscription is refused and never reaches the watchlist. It used to be
+	// the keyless way to put a symbol on the watchlist; the seeded MSFT takes
+	// that role below.
 	resp, body = postJSON(t, c, d.url+"/api/subscribe", map[string]string{
 		"symbol": "ETH/USD", "market": "crypto",
 	})
 	if resp.StatusCode != 422 || !strings.Contains(body, "crypto is paused") {
-		t.Fatalf("subscribe ETH/USD: %d %s (want 422: crypto is paused)", resp.StatusCode, body)
+		t.Fatalf("subscribe ETH/USD: %d %s (want 422 crypto is paused)", resp.StatusCode, body)
 	}
 	resp, body = getBody(t, c, d.url+"/api/watchlist")
 	if resp.StatusCode != 200 || strings.Contains(body, `"ETH/USD"`) {
 		t.Fatalf("watchlist: %d %s (want 200 without ETH/USD)", resp.StatusCode, body)
+	}
+	resp, body = postJSON(t, c, d.url+"/api/watch", map[string]string{"symbol": "MSFT", "market": "stocks"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("watch MSFT: %d %s", resp.StatusCode, body)
+	}
+	resp, body = getBody(t, c, d.url+"/api/watchlist")
+	if resp.StatusCode != 200 || !strings.Contains(body, `"MSFT"`) {
+		t.Fatalf("watchlist: %d %s (want MSFT)", resp.StatusCode, body)
 	}
 
 	// The worker fleet reports runs on /api/agents (workers fire immediately
@@ -353,7 +379,11 @@ func TestDaemonEndToEnd(t *testing.T) {
 	// a fleet that was merely slow to report failed. It surfaced under a full
 	// `go test ./...`, where parallel package compilation starves the daemon of
 	// CPU and only backfiller and crypto-live had reported inside the window.
+	// The light fleet's first runs land within ~4.3s of boot (workers.startOffset),
+	// so polling past that also sees any retired-source worker that got
+	// registered again (heavy workers start minutes later and are not covered).
 	names := map[string]bool{}
+	settled := time.Now().Add(6 * time.Second)
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		_, body = getBody(t, c, d.url+"/api/agents")
@@ -365,7 +395,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 				}
 			}
 		}
-		if len(names) >= 3 {
+		if len(names) >= 3 && time.Now().After(settled) {
 			break
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -373,6 +403,12 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if len(names) < 3 {
 		t.Fatalf("expected a fleet of workers, saw only %v\nlast body: %s\nlogs:\n%s",
 			names, body, d.logs.String())
+	}
+	for n := range names { // retired sources: crypto 2026-10-21, StockTwits and TradingView
+		switch {
+		case n == "crypto-live", n == "crypto-bars", n == "crypto-perp", n == "tv-rating", n == "tv-quotes", strings.HasPrefix(n, "stocktwits"):
+			t.Errorf("retired-source worker %q is in the running fleet (saw %v)", n, names)
+		}
 	}
 
 	// Shut down (graceful on Unix, hard Kill on Windows — see stopForRestart).
@@ -393,8 +429,8 @@ func TestDaemonEndToEnd(t *testing.T) {
 	// are isolated away, and crypto is paused), so persistence is asserted on
 	// the account above; the watchlist read must still answer.
 	resp, body = getBody(t, c2, d2.url+"/api/watchlist")
-	if resp.StatusCode != 200 {
-		t.Fatalf("watchlist after restart: %d %s", resp.StatusCode, body)
+	if resp.StatusCode != 200 || !strings.Contains(body, `"MSFT"`) {
+		t.Fatalf("watchlist after restart: %d %s (want MSFT)", resp.StatusCode, body)
 	}
 	d2.stopForRestart(t)
 }
