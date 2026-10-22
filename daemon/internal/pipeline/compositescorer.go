@@ -188,14 +188,10 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 		}
 	}
 
-	// External TradingView-rating skill, MEASURED once per run (pooled across
-	// symbols): the tvrating factor stays context-only until this IC/N clears
-	// the gate. Best-effort — a read error just leaves the factor gated as
-	// unmeasured, never fabricates skill.
-	tvSkill, err := w.tvRatingSkill(ctx)
-	if err != nil {
-		tvSkill = store.TVSkill{}
-	}
+	// The TradingView rating tile is no longer fed (2026-10-21): TradingView's
+	// terms bar non-display use of its scanner data, and republishing the last
+	// stored rating would show a frozen value. TVRating stays nil, so
+	// composite.BuildFactors gates the tile as absent.
 
 	ts := time.Now().Truncate(time.Minute).Unix()
 	n := 0
@@ -257,14 +253,6 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 				Detail:  b.Detail,
 				AgeDays: float64(now-b.Ts) / 86400,
 			}
-		}
-
-		// External TradingView rating (the 12th factor). The pooled measured
-		// skill (tvSkill) is the SAME for every symbol; BuildFactors applies the
-		// per-tile gate. Absent rating ⇒ the tile gates as absent.
-		if tv, ok := w.St.LatestTVRating(ctx, p.SymbolID); ok {
-			in.TVRating = &composite.TVRatingInfo{RecoAll: tv.RecoAll, Label: tv.Label}
-			in.TVSkillHitRate, in.TVSkillIC, in.TVSkillN = tvSkill.HitRate, tvSkill.IC, tvSkill.N
 		}
 
 		payload := composite.Payload{

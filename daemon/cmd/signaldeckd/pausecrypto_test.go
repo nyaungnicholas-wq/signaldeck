@@ -28,7 +28,9 @@ func TestPauseCryptoDeactivatesOnlyCrypto(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pauseCrypto(ctx, st)
+	if err := pauseCrypto(ctx, st); err != nil {
+		t.Fatal(err)
+	}
 
 	all, err := st.ListSymbols(ctx, false)
 	if err != nil {
@@ -51,7 +53,9 @@ func TestPauseCryptoDeactivatesOnlyCrypto(t *testing.T) {
 		t.Fatalf("expected only AAPL active, got %v", active)
 	}
 
-	pauseCrypto(ctx, st)
+	if err := pauseCrypto(ctx, st); err != nil {
+		t.Fatal(err)
+	}
 
 	all2, err := st.ListSymbols(ctx, false)
 	if err != nil {

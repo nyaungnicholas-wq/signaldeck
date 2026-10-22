@@ -138,7 +138,7 @@ export default function WatchlistPanel({
       {sparks.length === 0 ? (
         <EmptyState
           message="Nothing on your watchlist yet"
-          detail="Add a symbol and we start recording its data, scoring it, and telling you when something changes. Try AAPL, or BTC/USD for crypto. History and scores fill in on the daemon's own cadence."
+          detail="Add a symbol and we start recording its data, scoring it, and telling you when something changes. Try AAPL. History and scores fill in on the daemon's own cadence."
           action={{ label: "Add your first symbol →", href: "/welcome" }}
         />
       ) : (

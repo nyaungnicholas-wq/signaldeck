@@ -4,6 +4,7 @@
 package store
 
 import (
+	"strconv"
 	"context"
 	"time"
 
@@ -55,6 +56,16 @@ func (s *Store) Candidates(ctx context.Context, status string) ([]Candidate, err
 		q += ` WHERE status=?`
 		args = append(args, status)
 	}
+	// "new" candidates last seen before TradingView discovery was retired may
+	// have come from its scanner; hide them (see CandidatesFreshSinceKey).
+	if status == "new" {
+		if v, _ := s.GetMeta(ctx, CandidatesFreshSinceKey); v != "" {
+			if since, err := strconv.ParseInt(v, 10, 64); err == nil {
+				q += ` AND last_seen_ts >= ?`
+				args = append(args, since)
+			}
+		}
+	}
 	q += ` ORDER BY dollar_vol DESC, last_seen_ts DESC, symbol`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -90,3 +101,8 @@ func (s *Store) ActiveSymbolCount(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM symbols WHERE active=1`).Scan(&n)
 	return n, err
 }
+
+// CandidatesFreshSinceKey is the meta key holding the unix time the daemon first
+// booted without TradingView discovery (2026-10-21 change). "new" candidates
+// last seen before it are hidden from listing, bulk add and auto-add.
+const CandidatesFreshSinceKey = "candidates_fresh_since"

@@ -141,7 +141,14 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// regime, composite, signals, dq-auditor) mints anything new for it. Nothing
 	// is deleted: the published history stays verifiable on /proof and open
 	// forecasts still grade from bars already stored.
-	pauseCrypto(ctx, st)
+	if err := pauseCrypto(ctx, st); err != nil {
+		// Fatal on purpose: only predict has a stale-bar backstop, so regime,
+		// composite and other producers would keep minting crypto rows from
+		// frozen bars if the pause did not hold.
+		slog.Error("pause crypto", "err", err)
+		return
+	}
+	retireTVCandidates(ctx, st)
 	if seeded, _ := st.GetMeta(ctx, "seeded_v1"); seeded == "" {
 		created, failedSeeds := 0, 0
 		if alpacaClient != nil {
@@ -2135,22 +2142,34 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 
 // pauseCrypto sets every crypto symbol inactive. It runs on every boot because
 // earlier builds re-activated BTC/USD at startup; a symbol that is already
-// inactive is left alone. Errors are logged, never fatal: a failed pause leaves
-// the predict-time stale-bar gate (pipeline.cryptoBarStale) as the backstop.
-func pauseCrypto(ctx context.Context, st *store.Store) {
+// inactive is left alone. Any error is returned and the daemon refuses to start.
+func pauseCrypto(ctx context.Context, st *store.Store) error {
 	syms, err := st.ListSymbols(ctx, true)
 	if err != nil {
-		slog.Error("pause crypto: list symbols", "err", err)
-		return
+		return fmt.Errorf("list symbols: %w", err)
 	}
 	for _, s := range syms {
 		if s.Market != md.Crypto {
 			continue
 		}
 		if err := st.SetSymbolActive(ctx, s.ID, false); err != nil {
-			slog.Error("pause crypto", "symbol", s.Symbol, "err", err)
-			continue
+			return fmt.Errorf("deactivate %s: %w", s.Symbol, err)
 		}
 		slog.Info("crypto paused", "symbol", s.Symbol)
+	}
+	return nil
+}
+
+// retireTVCandidates records, once, when this build first booted. Discovery
+// candidates last seen before then may come from TradingView's scanner, so
+// store.Candidates("new") hides them until an Alpaca sweep sees them again
+// (which moves last_seen_ts past the mark). Nothing is deleted or dismissed.
+func retireTVCandidates(ctx context.Context, st *store.Store) {
+	if v, _ := st.GetMeta(ctx, store.CandidatesFreshSinceKey); v != "" {
+		return
+	}
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	if err := st.SetMeta(ctx, store.CandidatesFreshSinceKey, now); err != nil {
+		slog.Error("retire TradingView candidates", "err", err)
 	}
 }

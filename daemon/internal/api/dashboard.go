@@ -638,13 +638,15 @@ func (d Deps) buildTape(ctx context.Context) []tapeItem {
 	}
 
 	// BTC (the consolidated crypto symbol) from its daily bars.
-	btc := tapeItem{Symbol: d.Cfg.CryptoSymbol, Label: "Bitcoin", Kind: "crypto", Market: string(md.Crypto)}
-	if s, err := d.St.GetSymbol(ctx, d.Cfg.CryptoSymbol, md.Crypto); err == nil {
+	// Skipped while crypto is paused (inactive), so the tape never shows a
+	// frozen price as if it were current.
+	if s, err := d.St.GetSymbol(ctx, d.Cfg.CryptoSymbol, md.Crypto); err == nil && s.Active {
+		btc := tapeItem{Symbol: d.Cfg.CryptoSymbol, Label: "Bitcoin", Kind: "crypto", Market: string(md.Crypto)}
 		if last, prev, ts, ok := d.lastTwoClosesCtx(ctx, s.ID); ok {
 			btc.Price, btc.DayChangePct, btc.Ts, btc.HasData = last, pctChange(last, prev), ts, true
 		}
+		items = append(items, btc)
 	}
-	items = append(items, btc)
 
 	// VIX from the stored FRED VIXCLS series (daily close, ~1 day lag).
 	vix := tapeItem{Symbol: "VIX", Label: "CBOE Volatility Index", Kind: "vix", Note: vixNote}
