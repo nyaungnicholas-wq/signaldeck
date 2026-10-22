@@ -102,6 +102,9 @@ func (d Deps) stressRun(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "need market=crypto|stocks")
 		return
 	}
+	if refuseCrypto(w, market) {
+		return
+	}
 	h := md.Horizon(strings.TrimSpace(req.Horizon))
 	if h == "" {
 		h = md.Horizon("1d")

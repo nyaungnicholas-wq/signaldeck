@@ -2143,6 +2143,11 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 // pauseCrypto sets every crypto symbol inactive. It runs on every boot because
 // earlier builds re-activated BTC/USD at startup; a symbol that is already
 // inactive is left alone. Any error is returned and the daemon refuses to start.
+//
+// It deliberately does NOT stamp delisted_at. `sdmaint void-retired-crypto
+// -apply` dates the exit (survivorship_clean needs it) in the same transaction
+// as the source_retired void; a stamp here would let maintain's
+// VoidDeadPredictions void those rows first under a different reason.
 func pauseCrypto(ctx context.Context, st *store.Store) error {
 	syms, err := st.ListSymbols(ctx, true)
 	if err != nil {

@@ -26,7 +26,7 @@ func TestPaperOrderStampsTheBarItFilledAgainst(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
 
-	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "Bitcoin")
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "SPDR S&P 500")
 	if err != nil {
 		t.Fatalf("upsert symbol: %v", err)
 	}
@@ -59,8 +59,8 @@ func TestPaperOrderStampsTheBarItFilledAgainst(t *testing.T) {
 
 	const uid = int64(11)
 	for i, body := range []string{
-		`{"symbol":"BTC/USD","market":"crypto","side":"buy","qty":1}`,
-		`{"symbol":"BTC/USD","market":"crypto","side":"buy","qty":1}`,
+		`{"symbol":"SPY","market":"stocks","side":"buy","qty":1}`,
+		`{"symbol":"SPY","market":"stocks","side":"buy","qty":1}`,
 	} {
 		if rec := post(body, uid); rec.Code != 200 {
 			t.Fatalf("order %d: expected 200, got %d: %s", i+1, rec.Code, rec.Body.String())

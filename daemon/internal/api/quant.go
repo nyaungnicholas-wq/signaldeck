@@ -33,6 +33,21 @@ func (d Deps) dailySeries(r *http.Request, symbol string, symbolID int64, n int)
 	return s, nil
 }
 
+// cryptoPaused is registerSymbol's refusal (cmd/signaldeckd/run.go). Crypto was
+// paused on 2026-10-21, so every handler that would run a NEW order or analysis
+// on a crypto symbol refuses it for every caller, operator included. Reads of
+// stored history are left alone.
+const cryptoPaused = "crypto is paused: SignalDeck has no licensed crypto data source"
+
+// refuseCrypto answers 422 and returns true when m is crypto.
+func refuseCrypto(w http.ResponseWriter, m md.Market) bool {
+	if m != md.Crypto {
+		return false
+	}
+	httpErr(w, http.StatusUnprocessableEntity, cryptoPaused)
+	return true
+}
+
 // lastClose returns the most recent daily close for a symbol.
 func (d Deps) lastClose(r *http.Request, symbolID int64) (float64, error) {
 	bars, err := d.St.LastBars(r.Context(), symbolID, md.TF1d, 1)
@@ -68,6 +83,9 @@ func (d Deps) backtestRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	if refuseCrypto(w, body.Market) {
 		return
 	}
 	s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(body.Symbol)), body.Market)
@@ -164,6 +182,11 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 	var holdings []risklens.Holding
 	var series []risklens.Series
 	raw := make([]breakout.Series, 0, len(body.Holdings))
+	for _, h := range body.Holdings {
+		if refuseCrypto(w, h.Market) {
+			return
+		}
+	}
 	for _, h := range body.Holdings {
 		s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(h.Symbol)), h.Market)
 		if err != nil {
@@ -330,6 +353,9 @@ func (d Deps) portfolioAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	if refuseCrypto(w, body.Market) {
 		return
 	}
 	s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(body.Symbol)), body.Market)

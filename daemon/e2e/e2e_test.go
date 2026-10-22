@@ -331,16 +331,19 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("keyless AAPL subscribe: %d %s (want 422 mentioning Alpaca)", resp.StatusCode, body)
 	}
 
-	// Crypto subscription needs no keys and must land on the watchlist.
+	// Crypto is paused (2026-10-21, no licensed crypto data source): a crypto
+	// subscription is refused and never reaches the watchlist. It used to be
+	// the keyless way to put a symbol on the watchlist; a keyless daemon now
+	// has no symbol to watch, so the restart leg below checks the account only.
 	resp, body = postJSON(t, c, d.url+"/api/subscribe", map[string]string{
 		"symbol": "ETH/USD", "market": "crypto",
 	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("subscribe ETH/USD: %d %s", resp.StatusCode, body)
+	if resp.StatusCode != 422 || !strings.Contains(body, "crypto is paused") {
+		t.Fatalf("subscribe ETH/USD: %d %s (want 422 crypto is paused)", resp.StatusCode, body)
 	}
 	resp, body = getBody(t, c, d.url+"/api/watchlist")
-	if resp.StatusCode != 200 || !strings.Contains(body, `"ETH/USD"`) {
-		t.Fatalf("watchlist: %d %s (want ETH/USD)", resp.StatusCode, body)
+	if resp.StatusCode != 200 || strings.Contains(body, `"ETH/USD"`) {
+		t.Fatalf("watchlist: %d %s (want 200 without ETH/USD)", resp.StatusCode, body)
 	}
 
 	// The worker fleet reports runs on /api/agents (workers fire immediately
@@ -388,7 +391,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("login after restart: %d %s (persistence broken?)", resp.StatusCode, body)
 	}
 	resp, body = getBody(t, c2, d2.url+"/api/watchlist")
-	if resp.StatusCode != 200 || !strings.Contains(body, `"ETH/USD"`) {
+	if resp.StatusCode != 200 {
 		t.Fatalf("watchlist after restart: %d %s", resp.StatusCode, body)
 	}
 	d2.stopForRestart(t)
