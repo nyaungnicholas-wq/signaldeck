@@ -984,6 +984,16 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	if err := ValidateKnots(kx, ky); err != nil {
 		return nil, nil, false
 	}
+	// FLAT MAP (2026-10-11). Pooling can collapse every block into one value:
+	// a map that answers the same probability for every input. ValidateKnots
+	// passes it (equal values are not inverted), but serving refuses it
+	// (predict.go, KnotsDiscriminate), so the hourly learner kept persisting a
+	// map that every 10-minute pass refused — LQD 1w and 7 other 1w rows, 523
+	// "refused stale per-symbol maps" warnings that could never clear. Refuse
+	// it here with the same rule, so the row is stored unfitted.
+	if !KnotsDiscriminate(ky) {
+		return nil, nil, false
+	}
 	return kx, ky, true
 }
 
