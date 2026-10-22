@@ -28,7 +28,7 @@
 - **A GOOD, honest destination:** 53–56% directional accuracy on longer horizons, OR a rare high-conviction alert stream (~2×/month) at 58–65% hit rate with *positive* cost-adjusted expectancy. That is genuinely valuable. 80% is not on the menu — for us or TradingView.
 
 ## "Can't you just copy other people / TradingView's AI?"
-- **As FEATURES behind the OOS gate: yes, and we already do some** (TradingView reco, insider Form 4, short-volume, put/call, COT are ingested; tv_reco + insider + short-vol now feed the model). That is how Danelfin/Zacks work.
+- **As FEATURES behind the OOS gate: yes, and we already do some** (TradingView reco, insider Form 4, short-volume, put/call, COT are ingested; tv_reco + insider + short-vol now feed the model). That is how Danelfin/Zacks work. *Update 2026-10-22:* TradingView reco is retired (scanner dropped 2026-10-21/22), and short-volume (FINRA) and put/call (Cboe) were retired 2026-10-22: licence review. Insider Form 4 and COT remain.
 - **As gospel / mirroring TV's AI signals: no.** Public technical signals are the *most* arbitraged — if they worked, the edge is gone by the time you see it. TradingView "AI" indicators are curve-fit backtests advertising overfit win rates; copying them inherits their *negative live* edge (the same trap we just fixed here). Copying overfitting is not edge.
 - **The honest version of "copy others":** aggregate MANY weak external signals (analyst estimate revisions = the #1 documented anomaly, insider clusters, options flow, short dynamics) as inputs to a model validated out-of-sample — never trust any single one.
 

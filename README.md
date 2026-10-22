@@ -8,7 +8,7 @@
 > **Publication:** PUBLISHABLE — the live-accuracy block below is generated; every figure in it comes from the grader, and when the grader refuses there is no figure.
 
 SignalDeck is a **market-research instrument that grades itself in public**. A Go daemon
-records US stock and crypto market data into SQLite, computes signals, freezes
+records US stock market data into SQLite (crypto paused 2026-10-22), computes signals, freezes
 pre-registered forecasts into a hash-chained prediction ledger *before* the outcome exists,
 and later grades every forecast against realized prices. Verdicts are published either way,
 including the failures. A Next.js web app is the lens on that record.
@@ -82,12 +82,16 @@ insufficient-evidence states, are in [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.
 ## Architecture
 
 ```
-tickstreamd (:8321) ──┐                       ┌── web app (Next.js, 127.0.0.1:8323)
-   crypto L2/NBBO     │   signaldeckd (:8322) │   public record · private workspace
-Alpaca IEX ws/REST ───┼─▶ ~100 in-app workers ┤   /api/* proxied server-side to :8322
-Kraken OHLC REST ─────┤   SQLite (data/*.db)  │
-FRED · EDGAR · FINRA ─┘                       └── tools/ (Python): daily grading, docs gates
+Alpaca IEX ws/REST ───┐                       ┌── web app (Next.js, 127.0.0.1:8323)
+SEC EDGAR · CFTC ─────┤   signaldeckd (:8322) │   public record · private workspace
+Wikimedia ────────────┼─▶ ~100 in-app workers ┤   /api/* proxied server-side to :8322
+congress (Kadoa) ─────┤   SQLite (data/*.db)  │
+TradingView webhook ──┘                       └── tools/ (Python): daily grading, docs gates
 ```
+
+Retired 2026-10-22 (licence review): FRED, FINRA and Cboe. Crypto (TickStream, Kraken,
+Coinbase, Hyperliquid) paused 2026-10-22. TradingView scanner and StockTwits retired
+2026-10-21/22.
 
 - **Daemon** (`daemon/`, Go 1.25+): ingestion, signal and forecast workers, outcome resolution,
   the prediction ledger, the HTTP JSON API (host allowlist, session cookies, bearer token for
@@ -117,8 +121,7 @@ history before anything is published.
 ## Run it
 
 ```sh
-# 1. optional crypto feed
-cd ../tickstream && make run                         # :8321
+# 1. (no crypto feed: tickstream on :8321 is not needed while crypto is paused, 2026-10-22)
 
 # 2. the daemon — THE sanctioned path: builds from the commit, refuses a dirty tree,
 #    restarts, and verifies the running revision and a stamped worker row
@@ -186,8 +189,11 @@ calling web work done.
 
 ## Data sources and licensing
 
-Alpaca (IEX feed) for US stocks, Kraken and TickStream for crypto, FRED for VIX, SEC EDGAR
-for filings and Form 25 delistings, FINRA for short volume, Wikimedia for attention. Raw
+Alpaca (IEX feed) for US stocks and news, SEC EDGAR for filings and Form 25 delistings, the
+CFTC for Commitments of Traders, Wikimedia for attention, and STOCK Act congressional
+disclosures through third-party datasets (Kadoa; older rows from House/Senate Stock Watcher).
+Retired 2026-10-22 (licence review): FRED, FINRA short data and Cboe put/call. Crypto
+(Kraken, TickStream) paused 2026-10-22; TradingView scanner and StockTwits retired. Raw
 vendor rows are never redistributed. Two separate gates do that, and they answer
 differently: an anonymous request for bars, snapshots, news, scanner data or a CSV export is
 refused **401** by the auth gate, which runs BEFORE the licence check and so is what an
@@ -229,8 +235,9 @@ was designed and understood personally is for the author to state, not for this 
 assume.
 
 Libraries and services: Go and its SQLite driver (see `daemon/go.mod`), Next.js, React,
-Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, Kraken, FRED, SEC EDGAR,
-FINRA, Wikimedia; external timestamps from OpenTimestamps calendars.
+Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, SEC EDGAR, the CFTC,
+Wikimedia and congressional disclosures (Kadoa); Kraken, FRED and FINRA data were used
+before 2026-10-22; external timestamps from OpenTimestamps calendars.
 
 ## License
 

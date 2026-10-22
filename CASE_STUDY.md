@@ -51,8 +51,8 @@ machinery caught me.
 
 ## What it is
 
-A Go daemon ingests live market data (Alpaca for US equities, a separate Go
-service for consolidated crypto order books), computes a decomposable score per
+A Go daemon ingests live market data (Alpaca for US equities; until crypto was
+paused on 2026-10-22, a separate Go service for consolidated crypto order books), computes a decomposable score per
 symbol and horizon, measures what usually happened next in comparable historical
 states, and **grades its own past predictions against realised returns**. A
 Next.js app serves the result. Everything lands in one SQLite database —
@@ -61,9 +61,12 @@ read them as a scale, not a running total.
 
 ```
 Alpaca REST + WebSocket ──┐
-Kraken OHLC ──────────────┼──▶ signaldeckd (Go, ~90 packages) ──▶ Next.js app
-TickStream (crypto L2) ───┘         SQLite · worker fleet           /accuracy
+SEC EDGAR · CFTC ─────────┼──▶ signaldeckd (Go, ~90 packages) ──▶ Next.js app
+Wikimedia · congress ─────┘         SQLite · worker fleet           /accuracy
 ```
+
+Kraken OHLC and TickStream (crypto L2) fed this until crypto was paused on
+2026-10-22; FRED, FINRA and Cboe were retired 2026-10-22: licence review.
 
 **Stack:** Go 1.26, Next.js 16 / React 19, SQLite, Python for the research and
 grading layer.

@@ -64,10 +64,11 @@ engineering check settles them.
 
 | source | how it is accessed | exposure |
 |---|---|---|
-| `tvscanner` | TradingView's public scanner endpoint, no account | automated access is against TradingView's terms; their ratings are their IP |
-| `stocktwits` | undocumented public JSON stream, no key | same class — tolerated for personal use, not a commercial supply chain |
-| `alpaca` | licensed market data | redistribution is prohibited by the agreement |
-| `edgar`, `fred`, `finra`, `cftc`, `cboe` | US government / public | genuinely free to use and redistribute |
+| `tvscanner` | TradingView's public scanner endpoint, no account | retired 2026-10-21/22 (no longer collected); was: automated access is against TradingView's terms; their ratings are their IP |
+| `stocktwits` | undocumented public JSON stream, no key | retired 2026-10-21/22 (no longer collected); was: tolerated for personal use, not a commercial supply chain |
+| `alpaca` | licensed market data | redistribution is prohibited by the agreement; derived-data consent is an open counsel question (2026-10-22) |
+| `edgar`, `cftc` | US government / public | free to access and reuse |
+| `fred`, `finra`, `cboe` | public websites | retired 2026-10-22: licence review (their terms do not allow this use) |
 
 SignalDeck is a bring-your-own-keys platform. The public surface serves derived analytics only (grades, the hash-chained ledger, the volatility record, calibration). No raw bar, quote, headline, or vendor rating leaves the host. The code already enforces this: every licensed raw route in `daemon/internal/datalicense/datalicense.go` `RestrictedRoutes` answers 451 on a published deployment; `BarsRedistributable()` is always false because every price feed in use is licensed; `SIGNALDECK_ALLOW_RAW_EXPORT` records an operator assertion and grants no right. This is a packaging decision, not a legal review, and `DATA_SOURCES.md` section "Not a legal review" still applies; if the platform is ever sold commercially, that paragraph is the trigger for a real one. A source-scan test (`TestEveryRegisteredVendorRouteIsGoverned`) now fails CI when a new `/api` route that looks like it serves vendor rows is not classified.
 
