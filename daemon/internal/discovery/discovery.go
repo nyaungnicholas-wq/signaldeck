@@ -330,6 +330,9 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	}
 	detail := fmt.Sprintf("swept alpaca %d + tv %d candidates (%d recorded), auto-added %d",
 		res.alpacaN, res.tvN, res.upserted, added)
+	if res.note != "" {
+		detail += "; " + res.note
+	}
 	if res.degraded != "" {
 		detail += "; degraded: " + res.degraded
 	}
@@ -343,6 +346,7 @@ type sweepResult struct {
 	tvN      int    // ADDITIONAL symbols surfaced by TradingView's whole-market scan
 	upserted int    // candidate rows recorded
 	degraded string // non-empty when a source failed (never fatal while one works)
+	note     string // by-design source mode (e.g. alpaca-only), not a failure
 }
 
 // sweep fetches the Alpaca screener endpoints (each may independently fail —
@@ -426,10 +430,10 @@ func (w *Worker) sweep(ctx context.Context) (sweepResult, error) {
 	switch {
 	case w.Client != nil && errA != nil && errM != nil:
 		res.degraded = "alpaca screeners failed, tv-only this sweep"
+	case w.TV == nil: // checked before tvErr: tvSweep errors on a nil TV
+		res.note = "alpaca-only (TradingView scanner retired 2026-10-21)"
 	case tvErr != nil:
 		res.degraded = "tv scan failed, alpaca-only this sweep: " + tvErr.Error()
-	case w.TV == nil:
-		res.degraded = "no tv scanner configured, alpaca-only"
 	}
 
 	// Enrich most-actives share volume into dollar volume with one bulk

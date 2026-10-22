@@ -246,10 +246,12 @@ log "ledger-verify: $(echo "$LEDGER_OUT" | tr '\n' ' ')"
 
 # (4) Account deletions made after this backup was taken live only in the
 # tombstone log (internal/tombstone), outside the database. Replay it onto the
-# TEMP copy, so the drill proves a real restore can honour them: the release's
-# own sealed log when it came from GitHub, else this machine's log.
+# TEMP copy, so the drill proves a real restore can honour them. This machine's
+# log wins when it exists: it is a superset of the copy uploaded with the
+# release (it keeps growing after the upload). The release's sealed copy is the
+# fallback for a machine that has lost its local log.
 TOMB="${SIGNALDECK_TOMBSTONE_LOG:-${USERPROFILE:-$HOME}/.signaldeck/deletions.jsonl}"
-[ -n "${GHDL:-}" ] && [ -f "$GHDL/deletions.jsonl" ] && TOMB="$GHDL/deletions.jsonl"
+[ ! -f "$TOMB" ] && [ -n "${GHDL:-}" ] && [ -f "$GHDL/deletions.jsonl" ] && TOMB="$GHDL/deletions.jsonl"
 if [ -f "$TOMB" ]; then
   if ! REPLAY_OUT="$("$SDMAINT" replay-tombstones -db "$TARGET" -log "$TOMB" -apply 2>&1)"; then
     log "FAIL: sdmaint replay-tombstones could not replay $TOMB onto the restored copy — $REPLAY_OUT"

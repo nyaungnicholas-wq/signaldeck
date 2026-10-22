@@ -758,8 +758,8 @@ func subscribe(ctx context.Context, st *store.Store, ac *alpaca.Client,
 // (6h deep) and universe-live poller (60s during market hours) keep its daily,
 // hourly, and minute bars fresh — it just isn't real-time ws-streamed. This is
 // what lets monitoring scale past the small free-ws stream cap: it is bounded
-// only by the (large) universe cap. Crypto always streams (Kraken's public feed
-// is free), so monitor and subscribe are equivalent for crypto.
+// only by the (large) universe cap. Crypto is refused (paused 2026-10-21: no
+// licensed crypto data source).
 func monitor(ctx context.Context, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 	symbol string, market md.Market,
@@ -770,7 +770,7 @@ func monitor(ctx context.Context, st *store.Store, ac *alpaca.Client,
 // registerSymbol is the shared validate+register+backfill path. stream=true
 // promotes a stock into the live-ws hot set (counts against the stream cap);
 // stream=false registers it as a daily-only broad-universe symbol (polled, not
-// streamed). Crypto ignores the flag — it always streams via Kraken.
+// streamed). Crypto is refused outright while crypto is paused.
 func registerSymbol(ctx context.Context, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 	symbol string, market md.Market, stream bool,
