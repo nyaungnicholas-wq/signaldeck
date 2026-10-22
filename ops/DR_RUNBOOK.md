@@ -195,11 +195,14 @@ if (Test-Path $tomb) {
 } else { 'no tombstone log found: confirm no member ever deleted an account before skipping this' }
 ```
 
-A tombstone deletes an account only when its id, the SHA-256 of its stored
-email AND the SHA-256 of its username all match, because `users.id` is reused.
-For an account with no email (the username-only accounts) the username is
-what tells a reused id apart; the dry run marks those lines, so read them
-before `-apply`. If you replayed the release's copy,
+Each line is `{"uid":N,"account_sha256":"<hex>"}`, the hex SHA-256 of the
+account's lowercased email, username and `created_ts` joined by newlines
+(empty email for the username-only accounts). A tombstone deletes an account
+only when its id AND that hash, recomputed from the restored row, both match:
+`users.id` is reused, and someone who deleted and signed up again under the
+same id, username and email has a later `created_ts`, so the new account is
+left alone. Lines in the pre-release `email_sha256`/`username_sha256` format
+are refused with an error (none were written in production). If you replayed the release's copy,
 copy it to `%USERPROFILE%\.signaldeck\deletions.jsonl` so every later backup
 keeps carrying it.
 

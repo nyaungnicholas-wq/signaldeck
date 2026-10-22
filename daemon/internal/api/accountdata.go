@@ -89,7 +89,9 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 	// errs toward erasing an account its owner asked to erase.
 	// Keyed on the id AND the username whose password was just checked: a
 	// double-clicked delete must not record the account that took the id since.
-	email, ok, err := d.St.AccountEmailFor(ctx, uid, u.Username)
+	// The record hashes this row's address, name AND created_ts, so a later
+	// account that reuses the id, name and address is not erased by a replay.
+	email, created, ok, err := d.St.AccountEmailFor(ctx, uid, u.Username)
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -98,7 +100,7 @@ func (d Deps) accountDelete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusUnauthorized, "sign in first")
 		return
 	}
-	if err := tombstone.Append(uid, u.Username, email); err != nil {
+	if err := tombstone.Append(uid, u.Username, email, created); err != nil {
 		slog.Error("account delete refused: the deletion record could not be written", "uid", uid, "err", err)
 		httpErr(w, http.StatusInternalServerError, "your account could not be deleted right now and nothing was erased; please try again later")
 		return

@@ -64,10 +64,11 @@ func TestDeleteAccountWaitsForTheWriteLock(t *testing.T) {
 	}
 	// accountDelete reads the address for its tombstone by the same pair: a
 	// vanished or reused id yields no row, never the newcomer's (2026-10-22).
-	if _, ok, err := st.AccountEmailFor(ctx, other, "member"); err != nil || ok {
+	if _, _, ok, err := st.AccountEmailFor(ctx, other, "member"); err != nil || ok {
 		t.Fatalf("AccountEmailFor(reused id, old name): ok=%v err=%v; want no row", ok, err)
 	}
-	if _, ok, err := st.AccountEmailFor(ctx, other, "newcomer"); err != nil || !ok {
-		t.Fatalf("AccountEmailFor(id, its own name): ok=%v err=%v; want the row", ok, err)
+	nu, _, _ := st.GetUserByID(ctx, other)
+	if _, created, ok, err := st.AccountEmailFor(ctx, other, "newcomer"); err != nil || !ok || created == 0 || created != nu.CreatedTs {
+		t.Fatalf("AccountEmailFor(id, its own name): created=%d ok=%v err=%v; want the row with created_ts %d", created, ok, err, nu.CreatedTs)
 	}
 }

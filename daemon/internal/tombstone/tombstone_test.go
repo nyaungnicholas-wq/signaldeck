@@ -1,7 +1,9 @@
 package tombstone
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,15 +13,18 @@ import (
 func TestAppendWritesOnlyUIDAndHashAndReplaysInOrder(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "new", "deletions.jsonl")
 	t.Setenv("SIGNALDECK_TOMBSTONE_LOG", p)
-	if err := Append(7, "ann", " A@B.c "); err != nil {
+	if err := Append(7, "ann", " A@B.c ", 1700000000); err != nil {
 		t.Fatal(err)
 	}
-	if err := Append(9, "bo", ""); err != nil {
+	if err := Append(9, "bo", "", 1700000009); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
-	want := `{"uid":7,"email_sha256":"` + EmailHash("a@b.c") + `","username_sha256":"` + UsernameHash("ann") + `"}` + "\n" +
-		`{"uid":9,"email_sha256":"` + EmailHash("") + `","username_sha256":"` + UsernameHash("bo") + `"}` + "\n"
+	// The hash input is pinned byte for byte: normalised address, username and
+	// decimal created_ts, joined by newlines.
+	h := func(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
+	want := `{"uid":7,"account_sha256":"` + h("a@b.c\nann\n1700000000") + `"}` + "\n" +
+		`{"uid":9,"account_sha256":"` + h("\nbo\n1700000009") + `"}` + "\n"
 	if string(raw) != want {
 		t.Fatalf("log =\n%s\nwant\n%s", raw, want)
 	}
@@ -33,23 +38,24 @@ func TestAppendWritesOnlyUIDAndHashAndReplaysInOrder(t *testing.T) {
 }
 
 func TestReplayStopsOnAMalformedLine(t *testing.T) {
-	h, uh := EmailHash("x@y.z"), `,"username_sha256":"`+UsernameHash("x")+`"`
-	good := `{"uid":1,"email_sha256":"` + h + `"` + uh + `}`
+	h := AccountHash("x@y.z", "x", 1)
+	good := `{"uid":1,"account_sha256":"` + h + `"}`
 	for name, bad := range map[string]string{
-		"extra field":      `{"uid":2,"email_sha256":"` + h + `"` + uh + `,"email":"x@y.z"}`,
-		"no uid":           `{"email_sha256":"` + h + `"` + uh + `}`,
-		"short hash":       `{"uid":2,"email_sha256":"abcd"` + uh + `}`,
-		"not hex":          `{"uid":2,"email_sha256":"` + strings.Repeat("zz", 32) + `"` + uh + `}`,
-		"no username hash": `{"uid":2,"email_sha256":"` + h + `"}`,
-		"glued onto torn":  `{"uid":2,"ema` + good, // a torn line is skipped, a glued one is not
+		"extra field":     `{"uid":2,"account_sha256":"` + h + `","email":"x@y.z"}`,
+		"no uid":          `{"account_sha256":"` + h + `"}`,
+		"short hash":      `{"uid":2,"account_sha256":"abcd"}`,
+		"not hex":         `{"uid":2,"account_sha256":"` + strings.Repeat("zz", 32) + `"}`,
+		"no hash":         `{"uid":2}`,
+		"old format":      `{"uid":2,"email_sha256":"` + h + `","username_sha256":"` + h + `"}`,
+		"glued onto torn": `{"uid":2,"acc` + good, // a torn line is skipped, a glued one is not
 	} {
 		p := filepath.Join(t.TempDir(), "d.jsonl")
 		if err := os.WriteFile(p, []byte(good+"\n"+bad+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		err := Replay(p, func(Entry) error { return nil })
-		if err == nil || !strings.Contains(err.Error(), "line 2") {
-			t.Errorf("%s: err = %v, want a line 2 error", name, err)
+		if err == nil || !strings.Contains(err.Error(), "line 2") || !strings.Contains(err.Error(), "account_sha256") {
+			t.Errorf("%s: err = %v, want a line 2 error naming the expected format", name, err)
 		}
 	}
 	stop := errors.New("stop")
@@ -66,16 +72,16 @@ func TestReplayStopsOnAMalformedLine(t *testing.T) {
 func TestATornRecordIsSkippedAndTheNextAppendStartsAFreshLine(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "deletions.jsonl")
 	t.Setenv("SIGNALDECK_TOMBSTONE_LOG", p)
-	if err := Append(4, "dee", "d@e.f"); err != nil {
+	if err := Append(4, "dee", "d@e.f", 1); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(`{"uid":5,"email_sha2`) //nolint:errcheck
-	f.Close()                             //nolint:errcheck
-	if err := Append(6, "fay", "f@a.y"); err != nil {
+	f.WriteString(`{"uid":5,"account_sha2`) //nolint:errcheck
+	f.Close()                               //nolint:errcheck
+	if err := Append(6, "fay", "f@a.y", 1); err != nil {
 		t.Fatal(err)
 	}
 	var got []int64
@@ -90,7 +96,7 @@ func TestAppendFailureNamesNoAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SIGNALDECK_TOMBSTONE_LOG", filepath.Join(blocker, "deletions.jsonl"))
-	err := Append(3, "secretname", "secret@example.com")
+	err := Append(3, "secretname", "secret@example.com", 1)
 	if err == nil {
 		t.Fatal("append under a regular file succeeded")
 	}

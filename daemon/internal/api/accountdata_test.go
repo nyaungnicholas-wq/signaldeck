@@ -116,11 +116,14 @@ func TestMemberCanExportAndDeleteTheirAccount(t *testing.T) {
 	if code, _ := acctPostWith(t, admin, srv.URL+"/api/account/delete", map[string]string{"password": "adminpass123"}); code != http.StatusForbidden {
 		t.Fatalf("operator self-delete: %d, want 403", code)
 	}
-	// Exactly one tombstone, for dora alone, holding only the id and the
-	// address and username hashes: the wrong password and the refused operator
-	// wrote none.
+	// Exactly one tombstone, for dora alone, holding only the id and the one
+	// hash of her stored address, name and created_ts: the wrong password and
+	// the refused operator wrote none.
 	raw, _ = os.ReadFile(tombLog)
-	if want := `{"uid":` + strconv.FormatInt(u.ID, 10) + `,"email_sha256":"` + tombstone.EmailHash("dora@gmail.com") + `","username_sha256":"` + tombstone.UsernameHash("dora") + `"}` + "\n"; string(raw) != want {
+	if u.CreatedTs == 0 {
+		t.Fatal("dora's row has no created_ts to bind the tombstone to")
+	}
+	if want := `{"uid":` + strconv.FormatInt(u.ID, 10) + `,"account_sha256":"` + tombstone.AccountHash("dora@gmail.com", "dora", u.CreatedTs) + `"}` + "\n"; string(raw) != want {
 		t.Fatalf("tombstone log = %q, want %q", raw, want)
 	}
 }

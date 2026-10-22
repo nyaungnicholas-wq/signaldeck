@@ -75,7 +75,7 @@ uploads() { grep -c '^release upload' "$GH_CALLS"; }
 left() { ls "$W/backups" | wc -l | tr -d ' '; }
 sealed_upload() {
     reset; : > "$W/backup.key"
-    printf '{"uid":5,"email_sha256":"%s"}\n' "$(printf 'a%.0s' $(seq 64))" > "$W/deletions.jsonl"
+    printf '{"uid":5,"account_sha256":"%s"}\n' "$(printf 'a%.0s' $(seq 64))" > "$W/deletions.jsonl"
     export SIGNALDECK_OFFSITE_KEY_FILE="$W/backup.key" SIGNALDECK_TOMBSTONE_LOG="$W/deletions.jsonl"
     up
 }
