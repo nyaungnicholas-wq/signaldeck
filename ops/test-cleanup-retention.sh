@@ -90,8 +90,6 @@ candidates_present() {
         "$SD/logs/old.log.2"
         "$SD/logs/dead.err"
         "$SD/logs/dead.out"
-        "$SD/logs/notes.md"
-        "$SD/logs/events.jsonl"
         "$TR/signaldeck-20250901-000000.db"
         "$TR/signaldeck-20250901-000000.db.sha256"
     )
@@ -102,23 +100,23 @@ candidates_present() {
     printf '%s' "$count"
 }
 
-EXPECTED_LIST="dead.err dead.out events.jsonl notes.md old.log old.log.1.gz old.log.2 signaldeck-20250901-000000.db signaldeck-20250901-000000.db.sha256 "
-REPORT_SUMMARY="RETENTION mode=report logs=7 holding=2 bytes=3850"
-ENFORCE_SUMMARY="RETENTION mode=enforce logs=7 holding=2 bytes=3850"
+EXPECTED_LIST="dead.err dead.out old.log old.log.1.gz old.log.2 signaldeck-20250901-000000.db signaldeck-20250901-000000.db.sha256 "
+REPORT_SUMMARY="RETENTION mode=report logs=5 holding=2 bytes=2550"
+ENFORCE_SUMMARY="RETENTION mode=enforce logs=5 holding=2 bytes=2550"
 
 echo "-- a. report mode lists exactly the old files, deletes nothing"
 make_fixtures
 out=$(run_ret)
 check "would-remove list matches expected" "$(listed "$out" would-remove)" "$EXPECTED_LIST"
 check "summary line present exactly once" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
-check "all 9 candidates still present" "$(candidates_present)" "9"
+check "all 7 candidates still present" "$(candidates_present)" "7"
 check "no removed lines" "$(printf '%s\n' "$out" | grep -c '^RETENTION removed')" "0"
 check "old.log line ends with 40d 100" "$(printf '%s\n' "$out" | grep 'old.log' | grep -c ' 40d 100$')" "1"
 
 echo "-- b. SIGNALDECK_RETENTION_ENFORCE=0 is still report"
 make_fixtures
 out=$(run_ret SIGNALDECK_RETENTION_ENFORCE=0)
-check "all 9 candidates still present" "$(candidates_present)" "9"
+check "all 7 candidates still present" "$(candidates_present)" "7"
 check "summary mode=report" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
 
 echo "-- c. Enforce via environment (SIGNALDECK_RETENTION_ENFORCE=1)"
@@ -130,7 +128,7 @@ missing_protected=0
 for p in \
     "$SD/logs/recent.log" "$SD/logs/edge.log" "$SD/logs/web-release.json" \
     "$SD/logs/.restore-rehearsal-cursor" "$SD/logs/daemon.pid" "$SD/logs/state.json" \
-    "$SD/logs/sub/deep.log" \
+    "$SD/logs/sub/deep.log" "$SD/logs/notes.md" "$SD/logs/events.jsonl" \
     "$SD/data/signaldeck.db" "$SD/data/signaldeck.db-wal" "$SD/data/signaldeck.db-shm" \
     "$SD/data/backups/signaldeck-20260101-000000.db" \
     "$W/outside.log" \
@@ -157,14 +155,14 @@ echo "-- e. daemon/.env with SIGNALDECK_RETENTION_ENFORCE=0 and no env flag"
 make_fixtures
 printf 'SIGNALDECK_RETENTION_ENFORCE=0\n' > "$SD/daemon/.env"
 out=$(run_ret)
-check "all 9 candidates still present" "$(candidates_present)" "9"
+check "all 7 candidates still present" "$(candidates_present)" "7"
 check "summary mode=report" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
 
 echo "-- f. Dangerous holding path / (REPORT MODE ONLY)"
 make_fixtures
 out=$(run_ret SIGNALDECK_TRASH=/)
 check "SKIP holding line present" "$(printf '%s\n' "$out" | grep -c '^RETENTION SKIP holding:')" "1"
-check "summary holding=0" "$(printf '%s\n' "$out" | grep -c -x 'RETENTION mode=report logs=7 holding=0 bytes=2800')" "1"
+check "summary holding=0" "$(printf '%s\n' "$out" | grep -c -x 'RETENTION mode=report logs=5 holding=0 bytes=1500')" "1"
 
 echo "-- g. Holding path equal to \$HOME, in ENFORCE mode but contained"
 make_fixtures
@@ -178,6 +176,20 @@ make_fixtures
 out=$(run_ret SIGNALDECK_TRASH="$SD/data/backups" SIGNALDECK_RETENTION_ENFORCE=1)
 check "SKIP holding line present" "$(printf '%s\n' "$out" | grep -c '^RETENTION SKIP holding:')" "1"
 check "backup db still exists" "$([ -e "$SD/data/backups/signaldeck-20260101-000000.db" ] && echo 1 || echo 0)" "1"
+
+echo "-- h2. Re-cased data/backups and \$HOME paths, ENFORCE (case-insensitive filesystems only)"
+make_fixtures
+LC=$(printf '%s' "$SD/data/backups" | tr 'A-Z' 'a-z'); UC=$(printf '%s' "$FH" | tr 'a-z' 'A-Z')
+if [ "$LC" != "$SD/data/backups" ] && [ -d "$LC" ]; then
+    out=$(run_ret SIGNALDECK_TRASH="$LC" SIGNALDECK_RETENTION_ENFORCE=1)
+    check "lower-cased data/backups refused" "$(printf '%s\n' "$out" | grep -c '^RETENTION SKIP holding:')" "1"
+    check "backup db still exists" "$([ -e "$SD/data/backups/signaldeck-20260101-000000.db" ] && echo 1 || echo 0)" "1"
+    out=$(run_ret HOME="$FH" SIGNALDECK_TRASH="$UC" SIGNALDECK_RETENTION_ENFORCE=1)
+    check "upper-cased \$HOME refused" "$(printf '%s\n' "$out" | grep -c '^RETENTION SKIP holding:')" "1"
+    check "precious.txt still exists" "$([ -e "$FH/precious.txt" ] && echo 1 || echo 0)" "1"
+else
+    echo "  skip  re-cased path case (case-sensitive filesystem)"
+fi
 
 echo "-- i. Holding path equal to the repo root \$SD, ENFORCE"
 make_fixtures
@@ -214,21 +226,21 @@ echo "-- l. Daily run includes the block"
 make_fixtures
 out=$(env SIGNALDECK_SD="$SD" SIGNALDECK_TRASH="$TR" bash ops/signaldeck-cleanup.sh 2>&1)
 check "report summary line appears" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
-check "all 9 candidates still present" "$(candidates_present)" "9"
+check "all 7 candidates still present" "$(candidates_present)" "7"
 
 echo "-- m. daemon/.env read like the daemon's parseDotEnv: last line wins"
 make_fixtures
 printf 'SIGNALDECK_RETENTION_ENFORCE=1\nSIGNALDECK_RETENTION_ENFORCE=0\n' > "$SD/daemon/.env"
 out=$(run_ret)
 check ".env =1 then =0: report" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
-check ".env =1 then =0: all 9 candidates still present" "$(candidates_present)" "9"
+check ".env =1 then =0: all 7 candidates still present" "$(candidates_present)" "7"
 
 echo "-- n. a set environment value wins over daemon/.env"
 make_fixtures
 printf 'SIGNALDECK_RETENTION_ENFORCE=1\n' > "$SD/daemon/.env"
 out=$(run_ret SIGNALDECK_RETENTION_ENFORCE=0)
 check "env=0 over .env=1: report" "$(printf '%s\n' "$out" | grep -c -x "$REPORT_SUMMARY")" "1"
-check "env=0 over .env=1: all 9 candidates still present" "$(candidates_present)" "9"
+check "env=0 over .env=1: all 7 candidates still present" "$(candidates_present)" "7"
 
 echo "-- o. values the daemon reads as 1 enforce here too"
 for line in 'SIGNALDECK_RETENTION_ENFORCE=1 # on' 'SIGNALDECK_RETENTION_ENFORCE="1"' \

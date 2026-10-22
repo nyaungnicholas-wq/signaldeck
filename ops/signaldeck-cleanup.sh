@@ -87,18 +87,26 @@ ret_sweep() {
 }
 # ret_hold_refusal DIR: prints why DIR must never be swept, or nothing.
 ret_hold_refusal() {
-  local real home sd data
+  local real
   [ -n "$1" ] || { echo "empty path"; return; }
   [ -d "$1" ] || return 0
   real=$(cd "$1" && pwd -P) || { echo "cannot resolve"; return; }
-  home=$(cd "$HOME" 2>/dev/null && pwd -P); sd=$(cd "$SD" && pwd -P)
-  data=$(cd "$SD/data" 2>/dev/null && pwd -P || echo "$sd/data")
-  case "$real" in
-    /) echo "it is /" ;;
-    "$home") echo "it is \$HOME" ;;
-    "$data"|"$data"/*) echo "it is inside $SD/data" ;;
-    *) case "$sd/" in "$real"/*) echo "it is the repo root or one of its parents" ;; esac ;;
-  esac
+  # Compare by file identity (-ef), never by string: Git Bash keeps the case a
+  # path was typed in, so a re-cased data/backups once passed a string match.
+  [ "$real" = / ] && { echo "it is /"; return; }
+  [ "$real" -ef "$HOME" ] && { echo "it is \$HOME"; return; }
+  local p=$real
+  while :; do
+    [ -d "$SD/data" ] && [ "$p" -ef "$SD/data" ] && { echo "it is inside $SD/data"; return; }
+    if [ "$p" = / ] || [ "$p" = . ]; then break; fi
+    p=$(dirname "$p")
+  done
+  p=$SD
+  while :; do
+    [ "$p" -ef "$real" ] && { echo "it is the repo root or one of its parents"; return; }
+    if [ "$p" = / ] || [ "$p" = . ]; then break; fi
+    p=$(dirname "$p")
+  done
 }
 ret_run() {
   local logs_n hold_n=0 why logd holdd
@@ -108,7 +116,7 @@ ret_run() {
   holdd=$(ret_key SIGNALDECK_HOLDING_RETENTION_D); holdd="${holdd:-30}"
   echo "== Retention ($RET_MODE): logs/ over ${logd}d, $TRASH over ${holdd}d =="
   ret_sweep logs "$SD/logs" "$logd" '*.log' '*.log.[0-9]' '*.log.[0-9][0-9]' \
-    '*.log.[0-9].gz' '*.log.[0-9][0-9].gz' '*.err' '*.out' '*.md' '*.jsonl'
+    '*.log.[0-9].gz' '*.log.[0-9][0-9].gz' '*.err' '*.out'
   logs_n=$RET_N
   why=$(ret_hold_refusal "$TRASH")
   if [ -n "$why" ]; then
