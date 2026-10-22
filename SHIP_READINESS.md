@@ -49,10 +49,10 @@ solved by writing more of it.
 
 The updated /privacy and /terms describe work that lives on other branches. Do not merge or deploy `fullfix/p4-legal`, or run its web release, until every line below is true.
 
-1. `fullfix/p5-backup` is merged and deployed: off-site encryption and the deletion record (`daemon/internal/tombstone`). On 2026-10-22 both were uncommitted.
+1. `fullfix/p5-backup` is merged and deployed: off-site encryption and the deletion record (`daemon/internal/tombstone`). Merged on the integration branch 2026-10-22 (8b50dcc6); deploy pending.
 2. The p5 upload refuses to run without a key. On 2026-10-22 it printed a warning and uploaded the backup UNENCRYPTED when no key was set (`ops/signaldeck-backup-offline.sh:448`, `ops/lib-offsite-gh.sh:84` on `fullfix/p5-backup`). If p5 keeps that fallback, replace "each copy is encrypted" on /privacy (Who else handles your data, Backups and deletion, Security) with "the backup job encrypts each copy (AES-256-GCM) on the operator's computer before upload when its key is present, and the operator checks that each new copy is encrypted".
 3. The key is configured, and the newest asset in the off-site GitHub release ends in `.enc`.
-4. `fullfix/p7-retire` is merged and deployed: FRED, FINRA and Cboe are unwired (this branch still wires them at `daemon/cmd/signaldeckd/run.go:1031`, `:1420`, `:1570`, `:1576`), and `/api/source-health` shows them paused.
+4. `fullfix/p7-retire` is merged and deployed: FRED, FINRA and Cboe are unwired, and `/api/source-health` shows them paused. Merged on the integration branch 2026-10-22 (6f6fe6c9; `daemon/cmd/signaldeckd/run.go` no longer wires their pollers); deploy pending.
 5. `fullfix/p2-crypto` is merged and deployed: crypto paused, open crypto forecasts voided.
 6. `fullfix/p6-retention` is merged and its daily job has run once (report-only is enough), because /privacy says a daily automated job checks the retention limits.
 7. Owner only: the Terms promise members an email before a material change takes effect. This update changes who the Terms bind, the data sources and the "Ask the data" wording. Send that email before the web release, or get counsel's answer that it is not needed (counsel packet version 3, decision 11).

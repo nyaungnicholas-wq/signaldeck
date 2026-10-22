@@ -222,9 +222,15 @@ export default function TermsPage() {
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           <li>the TradingView scanner and StockTwits (retired 21&ndash;22 October 2026);</li>
-          <li>crypto market data (crypto paused since 22 October 2026; crypto history stays on the public record, and open crypto forecasts were voided, never deleted);</li>
-          <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review). Forecasts made before that date used FRED data.</li>
+          <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; crypto history stays on the public record, and open crypto forecasts were voided, never deleted);</li>
+          <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review).</li>
         </ul>
+        <p
+          className="text-[0.85rem] leading-relaxed max-w-prose"
+          style={{ color: "var(--dim)" }}
+        >
+          Forecasts made before these dates used data from these sources.
+        </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}

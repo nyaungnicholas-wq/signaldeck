@@ -15,7 +15,7 @@ const ORDER: readonly MetricKey[] = [
   "regime",
   "vol_regime",
   "pressure",
-  "vix",
+  // "vix" left out: VIX (a FRED series) is no longer shown, retired 22 October 2026 (FRED licence).
   "zscore",
   "win_rate",
   "base_rate",

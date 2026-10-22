@@ -238,8 +238,12 @@ assume.
 
 Libraries and services: Go and its SQLite driver (see `daemon/go.mod`), Next.js, React,
 Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, SEC EDGAR, the CFTC,
-Wikimedia and congressional disclosures (Kadoa); Kraken, FRED and FINRA data were used
-before 2026-10-22; external timestamps from OpenTimestamps calendars.
+Wikimedia, congressional STOCK Act disclosures (Kadoa; older rows House/Senate Stock
+Watcher) and TradingView (chart widget; the operator's own alerts by webhook). Retired,
+used before these dates: the TradingView scanner and StockTwits (2026-10-21/22); Kraken,
+Coinbase and Hyperliquid crypto data (crypto paused 2026-10-22, history kept on the
+public record); FINRA, Cboe and FRED (2026-10-22, licence review). External timestamps
+from OpenTimestamps calendars.
 
 ## License
 

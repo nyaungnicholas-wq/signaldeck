@@ -24,8 +24,8 @@ Licensed or Restricted source is ever flagged redistributable.
 
 The Status column was added 2026-10-22 after the data-licence review. It is not
 mirrored in `datalicense.go`, which still lists every source below. The `fred`,
-`finra` and `cboe` rows show the class they get in `datalicense.go` on branch
-`fullfix/p7-retire` (Restricted); on this branch the code still says Public.
+`finra` and `cboe` rows are Restricted in `datalicense.go` since the 22 October
+2026 retirement.
 
 | Source | Class | Provider | Raw redistribution | Status (2026-10-22) |
 |---|---|---|---|---|

@@ -88,7 +88,7 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
         SHORT VOLUME · {symbol}
         {/* freshness: the FINRA file day is the real data timestamp */}
         <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          FINRA Reg SHO daily (free) · posts ~6pm ET
+          FINRA Reg SHO daily · retired 22 October 2026, stored history only
           {latest !== null ? ` · latest file day ${latest.day}` : ""}
         </span>
       </div>
@@ -106,8 +106,8 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
 
       {data !== null && latest === null && (
         <p className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          No Reg SHO rows stored yet — the finra-shorts worker ingests one free FINRA
-          file per trading day (first run backfills ~30 trading days). Honest absence,
+          No Reg SHO rows stored for this symbol. FINRA short data was retired
+          22 October 2026 (licence review), so no new rows arrive. Honest absence,
           not an error.
         </p>
       )}

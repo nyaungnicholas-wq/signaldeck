@@ -68,14 +68,12 @@ import InsightsPanel from "@/components/symbol/InsightsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
 import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
-import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import WhyMovingPanel from "@/components/symbol/WhyMovingPanel";
 import ValidatedSignalsPanel from "@/components/symbol/ValidatedSignalsPanel";
 import SymbolNewsPanel from "@/components/symbol/SymbolNewsPanel";
 import SentimentPanel from "@/components/symbol/SentimentPanel";
-import ShortInterestPanel from "@/components/symbol/ShortInterestPanel";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
@@ -933,7 +931,7 @@ function OperatorSymbolPage({
       <StorySection
         n={5}
         title="THE DETAILS"
-        sub="raw records: financials, SEC filings, short volume AND short interest, retail sentiment, coverage"
+        sub="raw records: financials, SEC filings, public attention, coverage"
         collapsible
       >
           {/* Signal8 wave Stage 5: FINANCIALS — headline EDGAR company-facts
@@ -947,18 +945,15 @@ function OperatorSymbolPage({
               all with honest legal-lag labels. */}
           {market === "stocks" && <FilingsIntelPanel symbol={symbol} />}
 
-          {/* Stage 5 FINRA Reg SHO: daily short sale VOLUME ratio (free FINRA
-              files, universe-scoped) with the NOT-short-interest caveat
-              rendered verbatim. Stocks only (crypto has no Reg SHO data). */}
-          {market === "stocks" && <ShortVolumePanel symbol={symbol} />}
+          {/* ShortVolumePanel and ShortInterestPanel (FINRA) are not mounted, and
+              SentimentPanel no longer reads StockTwits: both sources retired. */}
+          {market === "stocks" && (
+            <p className="m-0 px-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              FINRA short data and StockTwits sentiment retired 22 October 2026 (licence review)
+            </p>
+          )}
 
-          {/* …and its SIBLING: the REAL bi-monthly FINRA short INTEREST with
-              days-to-cover. Both are shown because they answer different
-              questions, and each panel states the difference explicitly. */}
-          {market === "stocks" && <ShortInterestPanel symbol={symbol} />}
-
-          {/* Retail sentiment (StockTwits page snapshots) + public attention
-              (Wikipedia views). Context datasets, never scored factors. */}
+          {/* Public attention (Wikipedia views). Context, never a scored factor. */}
           {market === "stocks" && <SentimentPanel symbol={symbol} market={market} />}
 
           {/* Signal8 wave Stage 2: congressional-activity chip — renders only
