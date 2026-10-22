@@ -92,11 +92,14 @@ export default function CalendarsCard() {
           {/* ECON — latest FRED prints */}
           <div className="border-t" style={{ borderColor: "var(--border)" }}>
             <div className="px-3 pt-2 text-[0.75rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
-              ECON — LATEST FRED PRINTS
+              ECON — LAST STORED FRED PRINTS
+              <span className="font-normal tracking-normal" style={{ color: "var(--faint)" }}>
+                {" "}· FRED retired 22 Oct 2026 (licence review); stored history only
+              </span>
             </div>
             {econ.length === 0 ? (
               <p className="px-3 py-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                No FRED prints stored yet — the fred-poller fills these on its 6h cadence.
+                No FRED prints stored. FRED was retired 22 Oct 2026 (licence review); stored history only, so no new prints arrive.
               </p>
             ) : (
               <div className="flex flex-col px-1 py-1">

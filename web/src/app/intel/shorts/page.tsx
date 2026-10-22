@@ -162,7 +162,7 @@ export default function ShortsPage() {
       {hardError && (
         <ErrorState
           message={err ?? "short volume data unavailable"}
-          hint={symbol ? "Only tracked stocks have Reg SHO rows — clear the shared symbol filter or check the daemon." : "Is the daemon running? The finra-shorts worker ingests FINRA's daily file after ~6:30pm ET."}
+          hint={symbol ? "Only tracked stocks have Reg SHO rows — clear the shared symbol filter or check the daemon." : "Is the daemon running? FINRA short data was retired 22 Oct 2026 (licence review); stored history only, so no new rows arrive."}
           retry={() => { setErr(null); setRetryTick((t) => t + 1); }}
         />
       )}
@@ -195,7 +195,7 @@ export default function ShortsPage() {
 
           {symbol ? (
             !series?.series?.length ? (
-              <EmptyState className="m-4" message={`No Reg SHO rows for ${symbol}`} detail="Rows accrue one trading day at a time." />
+              <EmptyState className="m-4" message={`No Reg SHO rows for ${symbol}`} detail="FINRA short data was retired 22 Oct 2026 (licence review); stored history only, so no new rows arrive." />
             ) : (
               <Reveal>
                 <div className="table-wrap">
@@ -230,7 +230,7 @@ export default function ShortsPage() {
               </Reveal>
             )
           ) : !extremes?.extremes?.length ? (
-            <EmptyState className="m-4" message="No Reg SHO data stored yet" detail={extremes?.emptyNote ?? "The finra-shorts worker ingests after ~6:30pm ET."} />
+            <EmptyState className="m-4" message="No Reg SHO data stored yet" detail={extremes?.emptyNote ?? "FINRA short data was retired 22 Oct 2026 (licence review); stored history only, so no new rows arrive."} />
           ) : (
             <>
               <div className="px-4 pb-2 flex flex-wrap gap-1.5">
