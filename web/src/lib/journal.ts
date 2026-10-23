@@ -3,6 +3,20 @@
 // The daemon never sends prices or returns for a call (licence), only its
 // grade, so nothing here formats one.
 
+import { withheldFromMessage, type Withheld } from "./withheld.ts";
+
+/** The licence withholding behind ANY of the page's reads, or null. The daemon
+ *  withholds every journal route from members (451), the symbol search and the
+ *  call itself included, so one withheld answer means the whole page is: it
+ *  shows one Withheld panel in place of a form that can only fail. */
+export function journalWithheld(...errs: (string | null | undefined)[]): Withheld | null {
+  for (const e of errs) {
+    const w = withheldFromMessage(e);
+    if (w) return w;
+  }
+  return null;
+}
+
 export const JOURNAL_FOOTER =
   "Your calls, graded by the same rules SignalDeck grades itself with. Prices are not shown: the market data is licensed. Not financial advice.";
 

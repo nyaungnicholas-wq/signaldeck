@@ -56,7 +56,7 @@ export default function PrivacyPage() {
                   Gmail address, normalised (lower-cased; googlemail.com becomes gmail.com; dots and +tags removed)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Account confirmation, password reset, and the daily digest if you turn it on
+                  Account confirmation, password reset, and the daily digest if you turn it on (paused for member accounts since 23 October 2026: it goes only to the operator)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Until you delete your account
@@ -122,7 +122,7 @@ export default function PrivacyPage() {
                   Your calls and their notes (up to 280 characters each)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Your private journal, graded
+                  Your private journal, graded (withheld from member accounts since 23 October 2026, because the grades are derived from Alpaca market data; stored calls are kept)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Until you delete your account. A call cannot be edited once made; an open call can be withdrawn and stays marked &ldquo;withdrawn&rdquo;
@@ -133,7 +133,7 @@ export default function PrivacyPage() {
                   Alert settings: digest on or off, the date of your last digest, today&rsquo;s delivery attempts, and, if you link Telegram, your Telegram chat id and a 15-minute link code
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send the daily digest you asked for
+                  To send the daily digest you asked for (paused for member accounts since 23 October 2026; the setting is kept and nothing is sent)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Until you delete your account
@@ -261,7 +261,7 @@ export default function PrivacyPage() {
                   Your email address and the mail we send you; that mail can include your username, and the digest lists forecasts for the symbols you watch
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send account mail and the digest
+                  To send account mail and the digest (the digest is paused for member accounts)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Always
@@ -317,7 +317,7 @@ export default function PrivacyPage() {
                   Your chat id and the digest text
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Delivers the digest, if you link Telegram
+                  Delivers the digest, if you link Telegram (paused for member accounts)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Not switched on today

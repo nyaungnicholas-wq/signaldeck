@@ -113,6 +113,12 @@ export default function Registrations() {
           </p>
         ) : null}
 
+        {/* A non-operator's view: the daemon says what it left out. Without
+            this, a stripped spec read as the frozen record itself. */}
+        {data.withheld ? (
+          <Withheld compact title="Claim details" notice={data.withheld} source="alpaca" />
+        ) : null}
+
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           <span>
             chain{" "}

@@ -124,6 +124,39 @@ const PREREG_FIXTURE = {
   ],
 };
 
+// The SAME chain as a published daemon serves it to a non-operator
+// (daemon/internal/api/prereg.go): hashes kept, spec cut to a structural
+// claim's wording or null, no note, every row marked specWithheld, and a
+// withheld sentence. The walk that missed "null (frozen empty)" was fed the
+// operator shape above.
+const WITHHELD_PREREG_FIXTURE = {
+  chainVerified: true,
+  registeredBefore: true,
+  firstGradableOn: "2026-08-07",
+  liveResolved: null,
+  whatThisIs:
+    "The claim each structural predictor made, frozen and hash-chained before any of its forecasts resolved. The claimed accuracy bands and the live record they are graded against are withheld under the data licence.",
+  appendOnly: PREREG_FIXTURE.appendOnly,
+  withheld:
+    "Each record keeps its hashes; spec is the claim's wording and resolution rule only, and notes are omitted. " +
+    "Withheld: SignalDeck's prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only. They are shown only to the operator until Alpaca gives written permission.",
+  records: PREREG_FIXTURE.records.map((r) => {
+    const s = r.spec as Record<string, unknown>;
+    const { note: _note, ...rest } = r;
+    void _note;
+    return {
+      ...rest,
+      specWithheld: true,
+      spec: typeof s.question === "string"
+        ? { kind: s.kind, question: s.question, horizonDays: s.horizonDays, resolution: s.resolution }
+        : null,
+    };
+  }),
+};
+
+const DIGEST_NOTICE =
+  "Withheld: the daily digest is paused for member accounts. Its reads are derived from Alpaca market data, which is licensed for personal use only, so it goes only to the operator until Alpaca gives written permission.";
+
 // The daemon's 451 contract (daemon/internal/api, web/src/lib/withheld.ts),
 // verbatim. A page must show these words, never an outage sentence.
 const ALPACA_NOTICE =
@@ -157,7 +190,13 @@ async function withheldDaemon(page: Page, role: "anon" | "member" | "admin"): Pr
     }
     if (p.startsWith("/api/auth/")) return route.fulfill({ json: { ok: true } });
     if (p === "/api/health") return route.fulfill({ json: { version: "smoke", uptimeS: 1, alpaca: true } });
-    if (p === "/api/prereg") return route.fulfill({ json: PREREG_FIXTURE });
+    if (p === "/api/prereg") return route.fulfill({ json: role === "admin" ? PREREG_FIXTURE : WITHHELD_PREREG_FIXTURE });
+    if (p === "/api/alert-prefs") {
+      const prefs = { emailDigest: false, emailVerified: true, telegramLinked: false, telegramAvailable: true, mailAvailable: true };
+      return route.fulfill({
+        json: role === "admin" ? prefs : { ...prefs, digestWithheld: true, digestNotice: DIGEST_NOTICE },
+      });
+    }
     if (p === "/api/ledger/verify") return route.fulfill({ json: LEDGER_FIXTURE });
     if (p === "/api/watchlist") return route.fulfill({ json: [] });
     if (p === "/api/ask") return route.fulfill({ status: 403, json: { error: "not available" } });
@@ -296,6 +335,14 @@ test.describe("release smoke", () => {
     // The parts that stay open still render: the registrations and the chain.
     await expect(page.getByText("200-day moving average", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("entries in chain")).toBeVisible();
+    // The stripped chain says it is stripped. A null spec is WITHHELD, never
+    // "frozen empty", and no row promises a recomputation it cannot support.
+    await expect(page.getByRole("status", { name: "Claim details: withheld" })).toBeVisible();
+    const body = page.locator("body");
+    await expect(body).toContainText("Wording withheld under the data licence");
+    await expect(body).not.toContainText("frozen empty");
+    await expect(body).not.toContainText("served as JSON at");
+    await expect(body).not.toContainText("signaldeck-anchors");
     await expectNoOutageWording(page);
     await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
     expect(crashes.join(" | ")).toBe("");
@@ -313,6 +360,49 @@ test.describe("release smoke", () => {
     await expect(notice).toContainText(ALPACA_NOTICE);
     await expect(page.locator("body")).not.toContainText("proof data unavailable");
     await expectNoOutageWording(page);
+    expect(crashes.join(" | ")).toBe("");
+  });
+
+  test("/journal gives a member one withheld panel, not a form that can only fail", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "member");
+    await page.goto("/journal");
+    const notice = page.getByTestId("withheld");
+    await expect(notice.first()).toBeVisible();
+    await page.waitForTimeout(SETTLE_MS);
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toContainText(ALPACA_NOTICE);
+    await expect(page.locator("#journal-symbol-search")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Review call" })).toHaveCount(0);
+    await expectNoOutageWording(page);
+    expect(crashes.join(" | ")).toBe("");
+  });
+
+  test("/watchlist reads a member's identity-only rows as withheld, not as missing data", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "member");
+    // The daemon's member shape: symbol identity only, no latestBarTs.
+    await page.route("**/api/watchlist", (route) =>
+      route.fulfill({ json: [{ id: 7, symbol: "AAPL", market: "stocks", name: "Apple Inc.", active: true, addedAt: 1 }] }),
+    );
+    await page.goto("/watchlist");
+    await expect(page.getByText("Apple Inc.").first()).toBeVisible();
+    await page.waitForTimeout(SETTLE_MS);
+    await expect(page.locator("body")).not.toContainText("No data yet");
+    await expectNoOutageWording(page);
+    expect(crashes.join(" | ")).toBe("");
+  });
+
+  test("/account tells a member the digest is paused instead of offering it", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "member");
+    await page.goto("/account");
+    const notice = page.getByRole("status", { name: "Daily digest: withheld" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText(DIGEST_NOTICE);
+    await expect(page.getByText("Send me the daily digest")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Connect Telegram" })).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("can turn on a daily digest");
     expect(crashes.join(" | ")).toBe("");
   });
 

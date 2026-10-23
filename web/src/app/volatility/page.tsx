@@ -36,7 +36,7 @@ export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Volatility forecast: the live record",
   description:
-    "How one pre-registered volatility forecast has scored against two simple baselines, under the loss function registered before any of it was measured. A record of forecast error, not a per-symbol risk estimate.",
+    "One pre-registered volatility forecast, graded against two simple baselines under the loss function registered before any of it was measured. A record of forecast error, not a per-symbol risk estimate.",
 };
 
 type Horizon = {
@@ -140,11 +140,12 @@ export default async function RiskPage() {
           <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
             The method above is unchanged. The claim, the two baselines, the loss function and the
             minimum evidence were written down and hash-chained before any of these forecasts
-            existed; you can read that registration on{" "}
+            existed.{" "}
             <Link href="/proof" style={{ color: "var(--accent)" }}>
-              the receipts page
-            </Link>
-            .
+              The receipts page
+            </Link>{" "}
+            shows the claim&rsquo;s wording and the record&rsquo;s hashes; the rest of the
+            registration quotes measured statistics, so it is withheld with the figures.
           </p>
         </>
       ) : rec == null ? (

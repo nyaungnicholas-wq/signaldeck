@@ -26,7 +26,11 @@ function stringifyRecord(r: PreregRecord): string {
 }
 
 export default function FullRecord({ record }: { record: PreregRecord }) {
-  const fields = specFields(record.spec, "full");
+  // A non-operator's view under the data licence: the spec is the claim's
+  // wording at most and null for every other kind. That null is WITHHELD, not
+  // "frozen empty", and the digest below covers bytes this view does not hold.
+  const withheld = record.specWithheld === true;
+  const fields = withheld && record.spec == null ? [] : specFields(record.spec, "full");
   const digest = record.specHash ?? "";
   return (
     <details className="mt-1 max-w-[70ch] text-[0.72rem]">
@@ -54,23 +58,32 @@ export default function FullRecord({ record }: { record: PreregRecord }) {
                   className="m-0 whitespace-pre-wrap break-words"
                   style={{ color: f.empty ? "var(--faint)" : "var(--dim)" }}
                 >
-                  {f.empty ? `${f.full} (frozen empty)` : f.full}
+                  {f.empty && !withheld ? `${f.full} (frozen empty)` : f.full}
                 </dd>
               </div>
             ))}
           </dl>
         ) : (
           <p className="m-0" style={{ color: "var(--faint)" }}>
-            This record froze no spec fields.
+            {withheld
+              ? "Wording withheld under the data licence; the hashes are kept."
+              : "This record froze no spec fields."}
           </p>
         )}
+        {withheld ? (
+          <p className="m-0" style={{ color: "var(--faint)" }}>
+            The spec is withheld under the data licence. The digest is the frozen record&rsquo;s and
+            cannot be recomputed from this view.
+          </p>
+        ) : null}
 
         <div className="mono break-all" style={{ color: "var(--faint)" }}>
           digest {digest || "— (none on this record)"}
         </div>
 
         {/* The raw payload, so a reader can recompute the digest over exactly
-            the bytes the chain holds rather than over this page's rendering. */}
+            the bytes the chain holds rather than over this page's rendering.
+            Not on the withheld view: those bytes are the operator's only. */}
         <details>
           <summary className="cursor-pointer" style={{ color: "var(--faint)" }}>
             Raw JSON
@@ -82,7 +95,9 @@ export default function FullRecord({ record }: { record: PreregRecord }) {
             {stringifyRecord(record)}
           </pre>
           <p className="m-0 mt-1" style={{ color: "var(--faint)" }}>
-            The whole chain is served as JSON at <span className="mono">/api/prereg</span>.
+            {withheld
+              ? "This is the withheld view. The full payload the digest covers is shown only to the operator."
+              : <>The whole chain is served as JSON at <span className="mono">/api/prereg</span>.</>}
           </p>
         </details>
       </div>

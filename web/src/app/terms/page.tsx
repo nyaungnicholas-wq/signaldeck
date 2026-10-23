@@ -63,11 +63,14 @@ export default function TermsPage() {
           style={{ color: "var(--dim)" }}
         >
           SignalDeck makes statistical market forecasts and grades them against
-          rules registered before the results were known. The rules and a
-          hash-chained public record of every published directional forecast
-          stay public. Since 23 October 2026 the forecasts, grades and other
-          figures themselves are withheld from everyone except the operator,
-          for the reason given under Data sources below.
+          rules registered before the results were known. The method, the
+          wording of each pre-registered claim and the hashes of both chains
+          (the claims and the forecast ledger) stay public. Since 23 October
+          2026 the forecasts, grades and other figures themselves, and the
+          parts of each registration that quote measured statistics
+          (baselines, accuracy bands, the grading protocol and the retirement
+          rule), are withheld from everyone except the operator, for the
+          reason given under Data sources below.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
@@ -200,7 +203,8 @@ export default function TermsPage() {
           public data: Alpaca Markets (US stock market data and news), SEC
           EDGAR (filings, insider Form 4 reports, 13F holdings and company
           facts), the CFTC (Commitments of Traders), Wikimedia (Wikipedia
-          page-view counts, CC0) and congressional trade disclosures.
+          page-view counts, CC0) and, until 23 October 2026, congressional
+          trade disclosures.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
@@ -213,9 +217,10 @@ export default function TermsPage() {
           accuracy figures and other statistics are derived from that data, so
           they are withheld from everyone except the operator until Alpaca
           gives written permission. Signing in does not change this: member
-          accounts see the same notice as visitors. The method, the
-          pre-registered rules and the hash-chained record of claims stay
-          public. Public-domain data, such as SEC EDGAR filings, is not covered
+          accounts see the same notice as visitors. The method, the wording of
+          each pre-registered claim and the chain hashes stay public; the parts
+          of a registration that quote measured statistics are withheld with
+          the figures. Public-domain data, such as SEC EDGAR filings, is not covered
           by Alpaca&rsquo;s licence.
         </p>
         <p
@@ -224,11 +229,14 @@ export default function TermsPage() {
         >
           Congressional trades are disclosures made public under the STOCK
           Act. SignalDeck obtained them through third-party datasets:
-          Kadoa&rsquo;s congress-trades file, and for older rows the House and
-          Senate Stock Watcher datasets. Kadoa&rsquo;s terms do not permit
-          automated collection, or making its compilation available to others,
-          without written permission. As of 23 October 2026 collection from
-          Kadoa has stopped, and the rows already stored are shown only to the
+          Kadoa&rsquo;s congress-trades file (the fallback from 7 September
+          2026) and, before it, the House and Senate Stock Watcher datasets,
+          which have since stopped answering. The stored rows do not record
+          which dataset each came from, so all of them are treated as
+          Kadoa&rsquo;s. Kadoa&rsquo;s terms do not permit automated
+          collection, or making its compilation available to others, without
+          written permission. As of 23 October 2026 collection from Kadoa has
+          stopped, and the rows already stored are shown only to the
           operator. SignalDeck is free and non-commercial: no ads, no fees and
           no sale of data.
         </p>
@@ -252,7 +260,7 @@ export default function TermsPage() {
           <li>the TradingView scanner and StockTwits (retired 21&ndash;22 October 2026);</li>
           <li>Kadoa&rsquo;s congress-trades file (collection stopped 23 October 2026; the stored rows are withheld from everyone except the operator);</li>
           <li>the NVIDIA-hosted AI features and the AI news-sentiment tagger (switched off as of the 23 October 2026 release; headlines are no longer sent to NVIDIA);</li>
-          <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; crypto history stays on the public record; open crypto direction forecasts were voided, never deleted; open crypto regime calls are marked ungradable when they fall due; nothing was deleted);</li>
+          <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; the stored crypto history is kept but shown only to the operator; open crypto direction forecasts were voided, never deleted; open crypto regime calls are marked ungradable when they fall due; nothing was deleted);</li>
           <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review). Rows already stored from FINRA short-sale data and FRED still feed two pre-registered research tests until about 27 October 2026, when those tests&rsquo; 5-day freshness gates lapse; after that they are not used at all.</li>
         </ul>
         <p

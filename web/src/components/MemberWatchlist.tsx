@@ -259,11 +259,13 @@ export default function MemberWatchlist() {
                     </span>
                   </Link>
                   <div className="flex items-center gap-3">
-                    <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                      {row.latestBarTs > 0
-                        ? `Data through ${new Date(row.latestBarTs * 1000).toISOString().slice(0, 10)}`
-                        : "No data yet"}
-                    </span>
+                    {typeof row.latestBarTs === "number" && (
+                      <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                        {row.latestBarTs > 0
+                          ? `Data through ${new Date(row.latestBarTs * 1000).toISOString().slice(0, 10)}`
+                          : "No data yet"}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => void unwatch(row)}

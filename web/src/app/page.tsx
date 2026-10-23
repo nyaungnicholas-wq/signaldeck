@@ -42,9 +42,9 @@ import "@/components/landing/landing.css";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "SignalDeck - a market instrument that grades itself in public",
+  title: "SignalDeck - a market instrument that registers its claims in public before the outcome",
   description:
-    "A volatility forecast for US equities, pre-registered before the outcome and graded in public under the loss function it registered - including the results that failed.",
+    "A volatility forecast for US equities, pre-registered and hash-chained before the outcome and graded under the loss function it registered, failures included. The grades are withheld from public view while the market-data licence is unresolved.",
 };
 
 const DAEMON = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
@@ -175,7 +175,7 @@ const TICKER = [
   "Every claim written before the outcome",
   "Hash-chained — edits are detectable",
   "Graded against what actually happened",
-  "Failures published, not buried",
+  "Failures kept, not buried",
   "Retired models stay retired",
   "No skill claim without an interval",
   "Descriptive, never advice",
@@ -340,14 +340,16 @@ function LiveRecord({ live }: { live: Live }) {
         <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           <li>
             Every claim is still written down and hash-chained before its outcome exists, and the
-            chain still recomputes in public.{" "}
+            receipts page still shows each chain&rsquo;s verification and head hash.{" "}
             <Link href="/proof" style={{ color: "var(--accent)" }}>
               The receipts
             </Link>
           </li>
           <li>
-            Each claim&rsquo;s question, baseline and loss function stay readable as they were
-            registered, so the rules cannot move while the results are out of view.
+            Each structural claim&rsquo;s wording (its question, horizon and resolution rule) stays
+            readable as registered, and every record keeps its hash, so the rules cannot move while
+            the results are out of view. Baselines, accuracy bands and loss functions quote measured
+            statistics, so they are withheld with the figures.
           </li>
           <li>
             Grading continues privately under those same rules. Nothing is regraded or deleted while
@@ -565,7 +567,7 @@ export default async function Landing() {
   const maxDays = rows.reduce((m, r) => Math.max(m, r.distinct_days ?? 0), 0);
   const stats: { value: number; label: string; tone: string }[] = [
     { value: chain?.count ?? 0, label: "records on the hash chain", tone: "var(--accent)" },
-    { value: graded, label: "predictors graded in public", tone: "#38bdf8" },
+    { value: graded, label: "predictors graded live", tone: "#38bdf8" },
     { value: condemned, label: "rows failed or retired — shown, not hidden", tone: "var(--bad)" },
     { value: maxDays, label: "distinct graded days (longest record)", tone: "var(--ok)" },
   ].filter((s) => s.value > 0);
@@ -580,7 +582,7 @@ export default async function Landing() {
         <div className="hero-content flex max-w-[760px] flex-col gap-6">
           <div className="sec-eyebrow">Open research instrument</div>
           <KineticHeadline
-            text="A market instrument that grades itself in public."
+            text="A market instrument that registers its claims in public before the outcome."
             cycle={[
               "every claim is written before the outcome",
               "every record is hash-chained",
@@ -599,7 +601,7 @@ export default async function Landing() {
               Create free account
             </Link>
             <Link href="/accuracy" className="cta-secondary">
-              See the grades
+              {live.kind === "withheld" ? "Why the grades are withheld" : "See the grades"}
             </Link>
             <Link href="/proof" className="cta-secondary">
               Verify the chain

@@ -452,14 +452,15 @@ export default async function AccuracyPage() {
         </header>
         <Withheld notice={pub.licence.notice} source={pub.licence.source} title="The registry" />
         <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          How the grading works is unchanged and stays public: each claim, its baseline and its
-          minimum evidence were registered and hash-chained before any outcome existed, and a
-          predictor that loses to its baseline is retired by a rule written in advance. Those
-          registrations are readable on the{" "}
+          How the grading works is unchanged: each claim, its baseline and its minimum evidence were
+          registered and hash-chained before any outcome existed, and a predictor that loses to its
+          baseline is retired by a rule written in advance. The{" "}
           <Link href="/proof" style={{ color: "var(--accent)" }}>
             receipts page
-          </Link>
-          . Every term is in the{" "}
+          </Link>{" "}
+          shows each structural claim&rsquo;s wording and every record&rsquo;s hashes. The baselines,
+          accuracy bands, grading protocol and retirement-rule text quote measured statistics, so
+          they are withheld with the figures. Every term is in the{" "}
           <Link href="/glossary" style={{ color: "var(--accent)" }}>
             glossary
           </Link>

@@ -554,6 +554,11 @@ export type AlertPrefs = {
   telegramLinked: boolean;
   telegramAvailable: boolean;
   mailAvailable: boolean;
+  /** True for every account but the operator's: the digest's reads are derived
+   *  from Alpaca market data, so the daemon sends it to the operator only and a
+   *  member's switch would deliver nothing. digestNotice says so. */
+  digestWithheld?: boolean;
+  digestNotice?: string;
 };
 
 /** POST /api/alert-prefs/telegram-link: a one-time code the member sends to the bot. */
@@ -775,7 +780,9 @@ export interface VolForecastLatest {
 }
 
 export interface MemberWatchRow extends SymbolInfo {
-  latestBarTs: number;
+  /** Absent on a non-operator's rows: the bar time is Alpaca-derived, so the
+   *  daemon sends symbol identity only. Absent is withheld, not "no data". */
+  latestBarTs?: number;
 }
 
 export interface NewsItem {
@@ -1495,6 +1502,11 @@ export interface PreregRecord {
    * its own timetable. Null is NOT EVALUATED and must never render as "no". */
   beforeFirstGradable?: boolean | null;
   note?: string;
+  /** True on a non-operator's view under the data licence: spec is at most the
+   *  claim's wording (null for every other kind) and note is omitted, so a null
+   *  spec is WITHHELD, never "frozen empty", and specHash cannot be recomputed
+   *  from it. */
+  specWithheld?: boolean;
 }
 
 /** GET /api/prereg — the registration chain, with the daemon's own explanation.
@@ -1516,6 +1528,9 @@ export interface PreregResponse {
   howToUseIt?: string;
   whyChained?: string;
   appendOnly?: string;
+  /** Set for a non-operator: what this view leaves out and why (the daemon's
+   *  sentence, ending in the Alpaca notice). */
+  withheld?: string;
 }
 
 export function prereg() {
