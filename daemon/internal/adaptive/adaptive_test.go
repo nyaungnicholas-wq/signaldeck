@@ -222,10 +222,14 @@ func TestFromVector_RebuildsLegsAndRegime(t *testing.T) {
 		ExpectancyHitRate: fp(0.62),
 		ForecastProb:      fp(0.71),
 		ForecastLift:      fp(0.05),
-		SentimentScore:    fp(1.0),
 	})
 	if len(legs) != len(want) {
 		t.Fatalf("legs = %v, want %v", legs, want)
+	}
+	// The vector carries sentiment_score, but LLM headline ratings were retired
+	// 2026-10-23 (NVIDIA trial terms): no sentiment leg may be rebuilt from it.
+	if _, has := legs[ensemble.LegSentiment]; has {
+		t.Fatalf("retired sentiment_score rebuilt a sentiment leg: %v", legs)
 	}
 	for k, v := range want {
 		if legs[k] != v {

@@ -33,7 +33,7 @@ mirrored in `datalicense.go`, which still lists every source below. The `fred`,
 | `cryptohist` | Licensed | Kraken | **No** — derived works included | Paused 2026-10-22: crypto paused; history stays on the record, open crypto forecasts voided (never deleted) |
 | `cryptolive` | Licensed | Coinbase / Kraken | **No** | Paused 2026-10-22: crypto paused |
 | `hyperliquid` | Licensed | Hyperliquid | **No** — commercial terms unestablished | Paused 2026-10-22: crypto paused |
-| `news` | Licensed | Alpaca news | **No** — headlines are publisher IP | In use. Headlines also go to NVIDIA for sentiment tagging (open licence question) |
+| `news` | Licensed | Alpaca news | **No** — headlines are publisher IP | In use. Since 2026-10-23 headlines are no longer sent to NVIDIA: the LLM sentiment tagger is retired (see `nvidia` below) |
 | `tvscanner` | Restricted | TradingView | **No** — automated access is against their terms; ratings are their IP | Retired 2026-10-21/22 |
 | `stocktwits` | Restricted | StockTwits | **No** — undocumented endpoint, personal use only | Retired 2026-10-21/22 |
 | `edgar` | Public | SEC | Yes — SEC data is free to access and reuse | In use |
@@ -43,6 +43,7 @@ mirrored in `datalicense.go`, which still lists every source below. The `fred`,
 | `cboe` | Restricted | Cboe | **No** — data-licence audit: clearly forbidden | Retired 2026-10-22: licence review |
 | `congress` | Public | STOCK Act disclosures, via third-party datasets (Kadoa's congress-trades file; older rows House/Senate Stock Watcher) | Unclear (counsel): Kadoa's permission pending | In use. Open question: the Ethics in Government Act commercial-use restriction (SignalDeck is free and non-commercial) |
 | `wikimedia` | Public | Wikimedia | Yes — page-view counts are CC0 | In use |
+| `nvidia` | Restricted | NVIDIA (hosted model API, a processor rather than a data feed) | **No** | Retired 2026-10-23: used under NVIDIA's trial API terms, which do not permit production use. The daemon refuses its hosts, the sentiment tagger is unwired, and the stored LLM ratings (`sentiment_score`, `sentiment_n`) are no longer a model input or a composite tile; forecasts made before then used them |
 
 The operator's own TradingView webhook alerts (`tv_signals`, received at `/api/tv-webhook`) are stored for the record but are no longer used as a model input since 2026-10-22 (licence review: TradingView's terms bar non-display use of alerts).
 

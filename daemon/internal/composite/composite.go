@@ -73,6 +73,9 @@ const ShortVolCaveat = "short sale volume ratio (Reg SHO daily) — NOT short in
 const (
 	ShortVolRetiredReason = "retired 22 Oct 2026: FINRA's terms do not permit this use of Reg SHO short-volume data"
 	TVRatingRetiredReason = "retired 21 Oct 2026: TradingView's terms bar non-display use of its scanner data"
+	// SentimentRetiredReason: the sentiment tile was the mean of LLM headline
+	// ratings; the scorer stopped feeding it on 2026-10-23.
+	SentimentRetiredReason = "retired 2026-10-23: LLM headline sentiment ran on NVIDIA's trial API, whose terms do not permit production use"
 )
 
 // Factor keys, in tile display order.
@@ -376,8 +379,7 @@ func BuildFactors(in Inputs) []Factor {
 
 	// sentiment — the news-sentiment leg (conservative mapping).
 	if c.SentimentScore == nil {
-		out = append(out, gatedFactor(FactorSentiment,
-			"no fresh rated-headline aggregate (needs ≥3 rated headlines within 3 days) — leg absent from the blend"))
+		out = append(out, gatedFactor(FactorSentiment, SentimentRetiredReason))
 	} else {
 		sProb := clamp01(0.5 + *c.SentimentScore*ensemble.SentimentScale)
 		out = append(out, in.withSkill(Factor{

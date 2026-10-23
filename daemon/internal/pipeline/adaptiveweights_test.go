@@ -240,7 +240,11 @@ func TestPredictionRunner_UsesLearnedWeightsForRegimeCell(t *testing.T) {
 	}
 }
 
-func TestSentimentAggregatorWorker_FeedsThePredictionFeature(t *testing.T) {
+// LLM headline sentiment was retired as a model input on 2026-10-23 (the tagger
+// ran on NVIDIA's hosted API, whose trial terms do not permit production use).
+// A fresh, deep sentiment_daily aggregate that used to feed both the blend and
+// the vector must now reach neither.
+func TestRetiredLLMSentimentIsNotAPredictionInput(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
@@ -267,8 +271,7 @@ func TestSentimentAggregatorWorker_FeedsThePredictionFeature(t *testing.T) {
 		t.Fatalf("aggregate: mean=%v n=%d ok=%v err=%v", mean, n, ok, err)
 	}
 
-	// …so the PredictionRunner captures the sentiment feature into both the
-	// blend components and the persisted vector.
+	// …which the PredictionRunner used to capture; it must not any more.
 	var bars []md.Bar
 	for i := int64(0); i < 30; i++ {
 		bars = append(bars, md.Bar{
@@ -293,23 +296,21 @@ func TestSentimentAggregatorWorker_FeedsThePredictionFeature(t *testing.T) {
 		t.Fatalf("features: %v (%d rows)", err, len(feats))
 	}
 	vec := feats[0].Vec
-	if math.Abs(vec["sentiment_score"]-0.6) > 1e-9 || vec["sentiment_n"] != 3 {
-		t.Fatalf("sentiment feature not captured: %+v", vec)
+	for _, k := range []string{"sentiment_score", "sentiment_n", "sentiment_score__has", "sentiment_n__has"} {
+		if _, has := vec[k]; has {
+			t.Fatalf("retired LLM sentiment key %q reached the vector: %+v", k, vec)
+		}
 	}
-	// The FEATURE is captured but the LEG is not blended, and the split is the
-	// point of this test now that the runner defaults to production mode.
-	//
-	// Nothing assigns SentimentLift and the leg is graded on too few symbols to
-	// clear the fleet evidence floor, so it carries no measured edge — and an
-	// unmeasured leg is benched rather than blended in at a conservative weight.
-	// Its measured within-day AUC on the live record is 0.3805, i.e. it ranks
-	// backwards, so blending it in weakly was not the harmless default it looked
-	// like. Capturing the feature regardless is what lets a trainer eventually
-	// grade it and earn the leg back; that is the whole re-admission path, which
-	// is why the vector assertion above still stands.
 	p, ok, err := st.LatestPrediction(ctx, sym.ID, md.H1d)
 	if err != nil || !ok {
 		t.Fatal("prediction missing")
+	}
+	var comp ensemble.Components
+	if err := json.Unmarshal([]byte(p.Components), &comp); err != nil {
+		t.Fatal(err)
+	}
+	if comp.SentimentScore != nil {
+		t.Fatalf("retired LLM sentiment reached the blend components: %s", p.Components)
 	}
 	if p.NUsed != 1 || math.Abs(p.RawProb-0.5) > 1e-9 {
 		t.Fatalf("raw=%v nUsed=%d, want 0.5 / 1 (pressure only; ungraded sentiment benched)", p.RawProb, p.NUsed)

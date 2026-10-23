@@ -172,3 +172,36 @@ func TestWebhookSilentFailure(t *testing.T) {
 		t.Error("expected a nonzero stale count")
 	}
 }
+
+// The LLM headline tagger was retired 2026-10-23 (NVIDIA trial terms), so its
+// sentiment_daily aggregate stops growing by design: reported as paused with
+// the NVIDIA reason, never stale, with or without an old row.
+func TestLLMSentimentTaggerIsPaused(t *testing.T) {
+	st := fixtureStore(t)
+	ctx := context.Background()
+	const want = "paused: retired 2026-10-23: the LLM headline tagger ran on NVIDIA's hosted API, whose trial terms do not permit production use — not checked"
+	reports, err := srchealth.Evaluate(ctx, st, openNow, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bySource(t, reports, "news_sentiment_llm"); got.Stale || got.Note != want {
+		t.Errorf("no rows: must be paused, never stale: %+v", got)
+	}
+	sym, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "")
+	old := openNow.UTC().AddDate(0, -1, 0)
+	if err := st.InsertNews(ctx, store.NewsItem{ID: "n1", SymbolID: sym.ID, Ts: old.Unix(), Headline: "h"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RateNews(ctx, "n1", "bullish", 0.5, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertSentimentDaily(ctx, old.Format("2006-01-02")); err != nil {
+		t.Fatal(err)
+	}
+	if reports, err = srchealth.Evaluate(ctx, st, openNow, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := bySource(t, reports, "news_sentiment_llm"); got.Stale || got.Note != want || got.LastTs == 0 {
+		t.Errorf("a month-old aggregate must be reported (with its last row) as paused, never stale: %+v", got)
+	}
+}

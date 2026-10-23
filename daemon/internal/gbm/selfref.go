@@ -96,10 +96,18 @@ const PresenceSuffix = "__has"
 //
 // Retired 2026-10-22: tv_webhook_signal. TradingView ToS s.3 bars non-display
 // use of alerts; the webhook is still stored for history, not as a model input.
+//
+// Retired 2026-10-23: sentiment_score and sentiment_n, the daily mean and count
+// of LLM headline ratings. The sentiment-tagger sent Alpaca/Benzinga headlines
+// to NVIDIA's hosted API, whose trial terms do not permit production use; the
+// tagger is unwired and llm.ProviderRetired refuses the host. The local
+// lexicon scores (internal/newssent) are not these keys. Reversal = delete the
+// two names here and rewire the tagger.
 func RetiredSourceKey(k string) bool {
 	base := strings.TrimSuffix(k, PresenceSuffix)
 	switch base {
 	case "tv_reco", "stocktwits_bull_ratio", "tv_webhook_signal",
+		"sentiment_score", "sentiment_n",
 		"short_vol_z", "short_int_dtc", "pc_total",
 		"vix_level", "vix_regime", "vix_high_vol":
 		return true

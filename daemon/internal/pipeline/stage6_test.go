@@ -26,7 +26,7 @@ func TestBuildFeatureVector_Stage6Features(t *testing.T) {
 	micro := map[string]float64{"micro_imbalance": 0.15, "micro_spread_bps": 3.2}
 	vix := map[string]float64{"vix_level": 0.18, "vix_high_vol": 0}
 
-	vec := buildFeatureVector(sc, c, 0.55, 0.55, "", nil, 0, micro, vix)
+	vec := buildFeatureVector(sc, c, 0.55, 0.55, "", nil, micro, vix)
 
 	for k, want := range map[string]float64{
 		"micro_imbalance":  0.15,
@@ -47,7 +47,7 @@ func TestBuildFeatureVector_Stage6Features(t *testing.T) {
 func TestBuildFeatureVector_UngatedLegAbsent(t *testing.T) {
 	gp, gl := 0.63, -0.02 // GBM had NO edge (lift<=0)
 	c := ensemble.Components{PressureScore: 0.1, GBMProb: &gp, GBMLift: &gl}
-	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, "", nil, 0)
+	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, "", nil)
 	if _, ok := vec["gbm_prob"]; ok {
 		t.Fatal("an edgeless GBM leg must not appear in the feature vector")
 	}
@@ -203,7 +203,7 @@ func TestBannedKeys_DeletedNotGated(t *testing.T) {
 		ForecastProb:      &fp,
 		ForecastLift:      &fl,
 	}
-	vec := buildFeatureVector(md.Score{Score: 0.2}, c, 0.55, 0.55, "", nil, 0)
+	vec := buildFeatureVector(md.Score{Score: 0.2}, c, 0.55, 0.55, "", nil)
 	for _, k := range []string{"forecast_prob", "forecast_lift", "expectancy_hit_rate", "n_used"} {
 		if _, ok := vec[k]; ok {
 			t.Fatalf("A7 shortcut key %q must no longer be constructed", k)

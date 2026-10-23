@@ -222,3 +222,17 @@ func TestEveryNonRedistributableSourceWithARouteIsGoverned(t *testing.T) {
 		}
 	}
 }
+
+// NVIDIA's hosted API was retired 2026-10-23: its trial terms do not permit
+// production use. It must stay Restricted, not redistributable, and say why.
+func TestNVIDIAIsRetiredAndRestricted(t *testing.T) {
+	s, ok := Sources["nvidia"]
+	if !ok || s.Class != Restricted || s.Redistrib {
+		t.Fatalf("nvidia must be Restricted and not redistributable: %+v", s)
+	}
+	for _, want := range []string{"RETIRED 2026-10-23", "trial terms", "production use"} {
+		if !contains(s.Note, want) {
+			t.Errorf("nvidia note must say %q: %q", want, s.Note)
+		}
+	}
+}

@@ -124,6 +124,11 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 			parseErrs++
 			continue
 		}
+		// The sentiment tile is no longer fed (2026-10-23): it was the mean of
+		// LLM headline ratings from the NVIDIA-hosted tagger, whose trial terms
+		// do not permit production use. Predictions frozen before the change
+		// still carry it in their components, so it is dropped here too.
+		c.SentimentScore = nil
 		eligible = append(eligible, scored{pred: p, comp: c})
 	}
 
