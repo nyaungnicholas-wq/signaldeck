@@ -174,6 +174,8 @@ def evaluate(con, as_of, sessions=5, today=None):
     today = today or dt.datetime.now(dt.timezone.utc).date()
     if as_of > today:
         raise ValueError("as_of %s is in the future (today %s)" % (as_of, today))
+    if sessions < 1:
+        raise ValueError("sessions must be >= 1, got %d" % sessions)
     current = as_of == today
     as_of_ts = int(dt.datetime(as_of.year, as_of.month, as_of.day, tzinfo=dt.timezone.utc).timestamp()) + DAY - 1
     cutoff_day, calendar = session_cutoff_day(con, as_of_ts, sessions)
@@ -184,8 +186,10 @@ def evaluate(con, as_of, sessions=5, today=None):
     sec = {}
     if _has_table(con, "companies"):
         for ticker, exch, name, upd in con.execute("SELECT ticker, exchange, name, updated_ts FROM companies"):
-            if not ticker or (upd or 0) > as_of_ts:
-                continue  # an SEC row updated after as_of is not knowable at as_of
+            # an SEC row updated after as_of is not knowable at as_of; an undated one
+            # is knowable only today, because the table is a current snapshot
+            if not ticker or (upd is None and not current) or (upd or 0) > as_of_ts:
+                continue
             prev = sec.get(ticker.upper())
             if prev is None or (exch in NATIONAL_EXCHANGES and prev["exchange"] not in NATIONAL_EXCHANGES):
                 sec[ticker.upper()] = {"exchange": exch or "", "name": name or ""}

@@ -187,6 +187,20 @@ class TestSurvivorshipStatus(unittest.TestCase):
         with self.assertRaises(sqlite3.Error):
             self.con.execute("CREATE TABLE x(a)")
 
+    def test_undated_sec_row_is_evidence_today_but_not_historically(self):
+        con_w = sqlite3.connect(self.db)
+        con_w.execute("UPDATE companies SET updated_ts=NULL WHERE ticker='CONF'")
+        con_w.commit()
+        con_w.close()
+        now = ss.evaluate(self.con, AS_OF, sessions=5, today=AS_OF)['scopes']['universe']
+        self.assertIn('CONF', {u['symbol'] for u in now['unknown']})
+        then = ss.evaluate(self.con, dt.date(2026, 10, 10), sessions=5, today=AS_OF)['scopes']['universe']
+        self.assertNotIn('CONF', {u['symbol'] for u in then['unknown']})
+
+    def test_a_non_positive_session_window_is_refused(self):
+        with self.assertRaises(ValueError):
+            ss.evaluate(self.con, AS_OF, sessions=0, today=AS_OF)
+
     def test_future_as_of_is_refused(self):
         with self.assertRaises(ValueError):
             ss.evaluate(self.con, dt.date(2026, 10, 23), today=AS_OF)
