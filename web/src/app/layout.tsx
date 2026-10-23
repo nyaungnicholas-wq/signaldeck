@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Shell from "@/components/Shell";
 import AuthGate from "@/components/AuthGate";
+import DemoBanner from "@/components/DemoBanner";
 import CompanyPeekProvider from "@/components/CompanyPeek";
 import { OG_IMAGE, siteUrl } from "@/lib/site";
 
@@ -39,9 +40,10 @@ export const metadata: Metadata = {
   ...(site ? { openGraph: { images: [OG_IMAGE] } } : {}),
   // Child route segments set a bare page name and inherit the suffix; the
   // dashboard (this segment) keeps the full default title.
+  // SIGNALDECK_DEMO_TITLE is "" except in a demo build (next.config.ts).
   title: {
-    template: "%s — SignalDeck",
-    default: "Dashboard — SignalDeck",
+    template: `%s — SignalDeck${process.env.SIGNALDECK_DEMO_TITLE ?? ""}`,
+    default: `Dashboard — SignalDeck${process.env.SIGNALDECK_DEMO_TITLE ?? ""}`,
   },
   description:
     "Continuously records US stock market data, computes decomposable pressure scores, and grades itself against realized returns.",
@@ -72,6 +74,7 @@ export default function RootLayout({
             <Shell>{children}</Shell>
           </CompanyPeekProvider>
         </AuthGate>
+        <DemoBanner />
       </body>
     </html>
   );

@@ -42,7 +42,8 @@ import "@/components/landing/landing.css";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "SignalDeck - a market instrument that registers its claims in public before the outcome",
+  // The root page escapes the layout's title template, so the demo suffix ("" outside a demo build) goes here too.
+  title: `SignalDeck - a market instrument that registers its claims in public before the outcome${process.env.SIGNALDECK_DEMO_TITLE ?? ""}`,
   description:
     "A volatility forecast for US equities, pre-registered and hash-chained before the outcome and graded under the loss function it registered, failures included. The grades are withheld from public view while the market-data licence is unresolved.",
 };

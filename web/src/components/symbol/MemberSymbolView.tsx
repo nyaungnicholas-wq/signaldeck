@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type Market } from "@/lib/api";
 import TradingViewChart from "@/components/TradingViewChart";
+import DemoPriceChart from "@/components/DemoPriceChart";
 import ValidatedSignalsPanel from "@/components/symbol/ValidatedSignalsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
@@ -109,7 +110,8 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
         )}
       </header>
 
-      <TradingViewChart symbol={symbol} />
+      {/* "" except in a demo build (next.config.ts): fictional tickers have no TradingView chart. */}
+      {process.env.SIGNALDECK_DEMO_BANNER ? <DemoPriceChart symbol={symbol} /> : <TradingViewChart symbol={symbol} />}
       <ValidatedSignalsPanel symbol={symbol} market={market} memberView />
       <SymbolAgentPanel symbol={symbol} market={market} memberView />
       {market === "stocks" && (

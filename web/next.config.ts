@@ -133,7 +133,22 @@ const SECURITY_HEADERS = [
   },
 ];
 
+// DEMO MODE, for recording the product against SYNTHETIC data (ops/demo-run.ps1
+// and tools/demo/demo_daemon.py). NEXT_PUBLIC_DEMO_DATA=1 at build time puts a
+// fixed banner on every page (components/DemoBanner.tsx) and a suffix on every
+// title. The wording lives here and reaches the bundle only through `env` in a
+// demo build, so a normal build contains it nowhere -- which is what lets
+// ops/demo-data-guard.ps1 refuse any release whose output does. Keep the phrase
+// "synthetic values for illustration, not market data": the guard matches it.
+const DEMO_DATA = process.env.NEXT_PUBLIC_DEMO_DATA === "1";
+const DEMO_BANNER =
+  "DEMO DATA — synthetic values for illustration, not market data. Real SignalDeck figures are withheld pending data permission.";
+
 const nextConfig: NextConfig = {
+  env: {
+    SIGNALDECK_DEMO_BANNER: DEMO_DATA ? DEMO_BANNER : "",
+    SIGNALDECK_DEMO_TITLE: DEMO_DATA ? " · DEMO DATA" : "",
+  },
   // Build output directory. Defaults to .next; overridable so a build can be
   // produced and served in ISOLATION from the one the live servers are using.
   //

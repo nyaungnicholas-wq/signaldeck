@@ -232,6 +232,20 @@ test.describe("release smoke", () => {
     });
   }
 
+  // A NEXT_PUBLIC_DEMO_DATA=1 build (ops/demo-run.ps1) shows synthetic values
+  // under a DEMO DATA banner and must never be released. ops/web-release.ps1
+  // refuses one by scanning the candidate's files; this is the same refusal from
+  // the browser, so it holds even if that scan's marker drifts from the banner.
+  test("no page of a release carries the demo-data banner or title", async ({ page }) => {
+    for (const path of ["/", "/accuracy", "/login"]) {
+      await page.goto(path);
+      await expect(page.locator("header").first()).toBeVisible();
+      await expect(page.locator("[data-demo-data]")).toHaveCount(0);
+      await expect(page.locator("body")).not.toContainText("synthetic values for illustration");
+      expect(await page.title()).not.toContain("DEMO DATA");
+    }
+  });
+
   test("/proof renders a real registration payload without crashing", async ({ page }) => {
     const crashes = watchForCrashes(page);
     await page.route("**/api/prereg", (route) => route.fulfill({ json: PREREG_FIXTURE }));

@@ -92,6 +92,22 @@ function Remove-StalePrevBuilds([string]$WebDir, [string]$RecordPath, [int]$Keep
     return $removed
 }
 
+# A build made with NEXT_PUBLIC_DEMO_DATA=1 (ops/demo-run.ps1) labels every page
+# as synthetic demo data and must never become the public site. next.config.ts
+# puts the banner wording into the output ONLY in such a build, so finding it in
+# any served file of a candidate means the candidate is one. The build cache is
+# skipped: it is never served and is compressed, so a scan of it proves nothing.
+# Throws when there is nothing to scan, because a scan of nothing passes anything.
+$DemoBannerMarker = 'synthetic values for illustration, not market data'
+function Find-DemoDataBuild([string]$Dir) {
+    $files = @(Get-ChildItem -LiteralPath $Dir -Recurse -File -ErrorAction Stop |
+        Where-Object { $_.FullName -notmatch '[\\/]cache[\\/]' -and
+            $_.Extension -notin @('.woff2', '.woff', '.ttf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico') })
+    if ($files.Count -eq 0) { throw ("nothing to scan under {0}" -f $Dir) }
+    $hits = @($files | Select-String -SimpleMatch -Pattern $DemoBannerMarker -List | ForEach-Object { $_.Path })
+    return [pscustomobject]@{ Scanned = $files.Count; Hits = $hits }
+}
+
 if ($SelfTestOnly) { return }
 
 if (-not (Test-Path -LiteralPath (Join-Path $Web 'package.json'))) {
@@ -99,6 +115,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $Web 'package.json'))) {
 }
 if (-not (Test-Path -LiteralPath $AssetsCheck)) {
     Fail ("the asset check is missing at {0}; the completeness gate cannot run" -f $AssetsCheck)
+}
+if ($env:NEXT_PUBLIC_DEMO_DATA) {
+    Fail ("NEXT_PUBLIC_DEMO_DATA is set ('{0}') in this shell. That builds the synthetic-data demo (ops/demo-run.ps1), which must never be released. Unset it and run again." -f $env:NEXT_PUBLIC_DEMO_DATA)
 }
 
 # 1 - the revision this release is FOR. A checkout without git is still
@@ -160,6 +179,14 @@ try {
             [System.IO.File]::WriteAllBytes($TsConfig, $TsConfigWas)
         }
     }
+
+    # 3b - DEMO-DATA GATE. The env check above misses a flag set in a web\.env*
+    # file, which next build also reads; the built output cannot lie about it.
+    $demo = Find-DemoDataBuild $CandidateDir
+    if ($demo.Hits.Count -gt 0) {
+        Fail ("the candidate is a DEMO-DATA build (synthetic values, banner on every page): {0} of {1} files carry the banner, first {2}. Find NEXT_PUBLIC_DEMO_DATA in the environment or a web\.env* file and remove it." -f $demo.Hits.Count, $demo.Scanned, $demo.Hits[0])
+    }
+    Write-Log ("demo-data gate PASSED ({0} files scanned)" -f $demo.Scanned)
 
     # 4 - ASSET GATE. Serve the candidate on a spare port and make it prove it
     # can produce every chunk and font its own markup names.
