@@ -46,6 +46,9 @@ unverified() {
 [ "$(uname -s)" = Linux ] || refuse "this is the Linux path; on Windows use ops/signaldeck-ctl.sh deploy"
 command -v systemctl >/dev/null 2>&1 || refuse "systemctl not found; this script drives the units in ops/cloud/systemd"
 [ "$(id -u)" -ne 0 ] || refuse "run as the service user (sudo -u signaldeck ...), never root: root-owned bin/ and caches break the units"
+# sudo's secure_path omits /usr/local/go/bin (README section 16), so look there too.
+PATH="$PATH:/usr/local/go/bin"
+go version >/dev/null 2>&1 || refuse "go is not on PATH or does not run (expected /usr/local/go/bin; README section 16)"
 command -v golangci-lint >/dev/null 2>&1 || refuse "golangci-lint is not installed; CI's daemon job runs it (README, provisioning)"
 cd "$REPO" || refuse "cannot cd to $REPO"
 

@@ -27,6 +27,7 @@ EOF
 cat > "$STUBS/go" <<'EOF'
 #!/bin/bash
 echo "go $* @ $PWD" >> "$STUB_LOG"
+[ -n "${STUB_GO_MISSING:-}" ] && exit 127
 case "$1" in
   vet) exit "${STUB_VET_RC:-0}" ;;
   test) exit "${STUB_TEST_RC:-0}" ;;
@@ -156,6 +157,9 @@ run env STUB_TUNNEL=yes STUB_POSTURE_RC=3; check_refused "unpublished posture be
 
 # 8. root
 run env STUB_UID=0; check_refused "running as root refuses" "never root"
+
+# 8b. no working go (sudo's secure_path): a clear refusal, not "go vet failed"
+run env STUB_GO_MISSING=1; check_refused "missing go refuses by name" "go is not on PATH"
 
 # 9. someone else's maintenance lock
 : > "$LOG"; rm -f "$R/bin/signaldeckd"

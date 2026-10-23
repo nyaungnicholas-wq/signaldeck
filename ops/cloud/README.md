@@ -34,9 +34,12 @@ email, and touching the owner's PC. Everything else an operator with SSH can do.
 | `check-units.sh` | unit drift, failed units, ports, clock | `ops/check-task-health.ps1` + `install-windows-tasks.ps1` report mode |
 | `check-grader-health.sh` | grader heartbeat, WAL, ledger checks (line-for-line port) | `ops/check-grader-health.ps1` |
 | `db-manifest.py` | file sha256 + schema hash + ledger/anchor heads + per-table counts, for cutover diffs | (new) |
-| `test-deploy-linux.sh`, `test-linux-ops.sh`, `test-web-assets-check.sh` | stub-driven self-tests; each prints `SELFTEST OK` / `selftest OK` | |
+| `test-deploy-linux.sh`, `test-web-release-linux.sh`, `test-linux-ops.sh`, `test-web-assets-check.sh` | stub-driven self-tests; each prints `SELFTEST OK` / `selftest OK` | |
 
-Two shared files changed so the existing bash jobs work under systemd:
+`ops/signaldeck-ctl.sh` gained one guard for the cutover: while `data/RETIRED`
+exists it refuses `up`, `collect`, `deploy`, `launch` and `refresh` (C2, C8;
+self-test `ops/test-ctl-retired.sh`, run in CI). Two more shared files changed
+so the existing bash jobs work under systemd:
 `ops/lib-portable.sh` (`sd_svc_start`/`sd_svc_stop` drive `systemctl` on Linux
 for the daemon and web units; the Windows path is untouched and the self-test
 proves a non-Linux host never takes the new branch) and
@@ -108,9 +111,14 @@ That leaves roughly 2x headroom for growth. Raise the data volume, not the boot
 volume, if `check-units.sh` or the backup budget line starts complaining.
 `/etc/fstab` uses the filesystem UUID with `defaults,nofail`, and every unit
 carries `RequiresMountsFor=/srv/sd`, so nothing starts against an empty mount
-point. Always Free includes 5 volume backups: use two for "before cutover" and
-"after cutover" (section 14). They live in the same Oracle account, so they are
-NOT off-site; the sealed GitHub releases are.
+point. Always Free includes 5 volume backups: use two, of the **block volume
+only**, for "before cutover" and "after cutover" (section 14). Never back up the
+boot volume: it holds `~/.signaldeck/ledger_anchor.key` and `backup.key`, which
+`ops/DR_RUNBOOK.md` keeps in no backup by design, and section 16 rebuilds it.
+The block-volume backups are still **secret-bearing**: they hold `daemon/.env`
+and the database in plaintext. They live in the same Oracle account, so they are
+NOT off-site (the sealed GitHub releases are); never export, copy or share them,
+and **[OWNER]** deletes them when C8's hold ends.
 
 ## 4. Exactly one writer
 
@@ -124,8 +132,11 @@ How the kit enforces it:
 
 - Units are installed **disabled** (section 16). Nothing on the VM writes until
   cutover step C7.
-- At cutover the PC's tasks are **disabled, not deleted**, and its binary is
-  renamed so no stray `signaldeck-ctl.sh up` can start it (C2, C8).
+- At cutover the PC's tasks are **disabled, not deleted** (C2). Disabled tasks
+  do not stop `signaldeck-ctl.sh deploy`/`launch`, which rebuild the binary from
+  HEAD (`launch` then runs it), so C2 also writes `data\RETIRED`, which makes
+  `up`, `collect`, `deploy`, `launch` and `refresh` refuse (`ops/test-ctl-retired.sh`).
+  C8 renames the binary and the database aside.
 - One tunnel connector. Cloudflare treats every connector of a named tunnel as a
   replica and spreads visitors across them, so the PC connector and the VM
   connector must never run at the same time (C7).
@@ -149,16 +160,32 @@ How the kit enforces it:
 
 ## 6. Secrets
 
-Never in git, never pasted into chat or tickets, never in a backup.
+Never in git, never pasted into chat or tickets. The keys and `daemon/.env` are
+in no off-site backup (only the tombstone log rides in each sealed release,
+encrypted). The OCI block-volume backups (section 3) do hold `daemon/.env` and
+the plaintext database, so they are secret-bearing and handled as such.
 
 | secret | where on the VM | mode | how it gets there |
 |---|---|---|---|
-| `daemon/.env` (API token, local-proxy key, data-source keys, notifier webhooks, public URL and origins) | `/srv/sd/signaldeck/daemon/.env` | 0600 `signaldeck` | **[OWNER]** copies the PC file over SSH (`scp`), or re-enters values from the offline copy |
-| ledger anchor signing key | `/home/signaldeck/.signaldeck/ledger_anchor.key` | 0600 | **[OWNER]** copies the PC's key. A new key is a public key rotation (`ops/DR_RUNBOOK.md` section 3) |
-| off-site backup key | `/home/signaldeck/.signaldeck/backup.key` | 0600 | **[OWNER]** copies the PC's key: the same key must open older releases and seal new ones |
-| deletion tombstones | `/home/signaldeck/.signaldeck/deletions.jsonl` | 0600 | copied at cutover (C6) |
+| `daemon/.env` (API token, local-proxy key, data-source keys, notifier webhooks, public URL and origins) | `/srv/sd/signaldeck/daemon/.env` | 0600 `signaldeck` | **[OWNER]** copies the PC file over SSH, or re-enters values from the offline copy; installed with the block below |
+| ledger anchor signing key | `/home/signaldeck/.signaldeck/ledger_anchor.key` | 0600 `signaldeck` | **[OWNER]** copies the PC's key. A new key is a public key rotation (`ops/DR_RUNBOOK.md` section 3) |
+| off-site backup key | `/home/signaldeck/.signaldeck/backup.key` | 0600 `signaldeck` | **[OWNER]** copies the PC's key: the same key must open older releases and seal new ones |
+| deletion tombstones | `/home/signaldeck/.signaldeck/deletions.jsonl` | 0600 `signaldeck` | copied at cutover (C6) |
 | anchor repo push credential, `gh` login for off-site uploads | `signaldeck`'s home | 0600 | **[OWNER]** credential steps |
 | tunnel token | inside `cloudflared.service` | root | **[OWNER]** `cloudflared service install` |
+
+`scp` sets neither the owner nor a safe mode, and `ubuntu` cannot write into
+`/srv/sd` or `/home/signaldeck`, so **[OWNER]** copies the files into a private
+staging directory and installs them from there (as `ubuntu`):
+
+```bash
+install -d -m 0700 ~/sd-stage          # then, from the PC: scp <file> ubuntu@<vm>:sd-stage/
+sudo install -m 0600 -o signaldeck -g signaldeck ~/sd-stage/.env /srv/sd/signaldeck/daemon/.env
+sudo install -m 0600 -o signaldeck -g signaldeck ~/sd-stage/backup.key /home/signaldeck/.signaldeck/backup.key
+# the same for ledger_anchor.key, and for deletions.jsonl at C6
+sudo ls -la /srv/sd/signaldeck/daemon/.env /home/signaldeck/.signaldeck/   # every file -rw------- signaldeck signaldeck
+find ~/sd-stage -type f -exec shred -u {} + && rmdir ~/sd-stage
+```
 
 `~/.signaldeck` is 0700. Scripts read single keys from `daemon/.env` with
 `grep -m1 '^NAME='`, never by sourcing it; the web unit gets only
@@ -327,8 +354,36 @@ not a measurement.
   As You Go (Oracle's documentation says Always Free resources on such accounts
   are not reclaimed for idleness; re-check the current wording first), or accept
   the risk. Never generate artificial load to dodge the policy.
-- Either way, a reclaimed VM costs at most one day of data: the sealed off-site
-  backups and this kit rebuild it (sections 12 and 16).
+
+If the VM is reclaimed anyway, recover it as a writer handover, never as a
+fresh deploy:
+
+1. **Restart before rebuilding.** If the console shows the instance stopped, start
+   it: its boot and block volumes survive a stop, so its units resume on the
+   database it was writing. Then run `check-units.sh` and C7.6. If the instance
+   is gone but the 150 GB block volume is still listed, attach that to the
+   rebuilt VM instead of restoring a backup, and run C5's `integrity_check` and
+   `ledger-verify` on `data/signaldeck.db` before anything starts.
+2. **A rebuild from backup is a cutover.** Section 16, then C4-C6 with the newest
+   release, then C7.3-C7.6 with every timer still disabled. The newest release is
+   a Market-Close snapshot (Mon-Fri 13:10), so it predates that day's 19:30
+   Anchor-Publish, and over a weekend Saturday's and Sunday's too: up to three
+   days of writes are gone, and the restored chain is behind the public
+   `anchors.log`. In C6 the old VM's tombstone log is gone with its disk and the
+   PC's is pre-cutover, so seed the new VM's log from the release instead (as `signaldeck`, in
+   `/srv/sd/restore`): `/srv/sd/signaldeck/bin/sdmaint offsite-open -key
+   ~/.signaldeck/backup.key -in deletions.jsonl.enc -out ~/.signaldeck/deletions.jsonl
+   && chmod 600 ~/.signaldeck/deletions.jsonl`, then replay it (dry run, `-apply`
+   if it lists anything). Without the seed, every later backup would seal a log
+   missing those deletions. C7.6 then decides (`ops/DR_RUNBOOK.md` section 5): the
+   newest published line matches = go on; an older one reproduces = **[OWNER]**
+   states the gap publicly before `signaldeck-anchor-publish.timer` or any other
+   timer is enabled; none reproduces = stop and publish nothing.
+3. **One writer, one connector.** Before C7.7, **[OWNER]** terminates the old
+   instance, or confirms it is stopped and leaves it stopped (its units and
+   `cloudflared` are enabled at boot, so starting it makes a second writer and a
+   second connector). After C7.7 the Cloudflare dashboard must show exactly one
+   connector.
 
 ## 14. CUTOVER runbook (DEFERRED; do not start until the banner's questions are closed)
 
@@ -344,7 +399,7 @@ not a measurement.
   task falls in it (09:20 grader health is the last before it, 14:05 accuracy
   and cleanup the first after).
 
-**C1. Freeze.** Note the PC's `git rev-parse HEAD`. On the VM:
+**C1. Freeze.** **[OWNER]** notes the PC's `git rev-parse HEAD`. On the VM:
 `sudo -u signaldeck bash ops/cloud/deploy-linux.sh --dry-run` must end `deploy DRY RUN: every gate passed`.
 
 **C2. Quiesce the PC writer** (elevated PowerShell on the PC, **[OWNER]**'s machine):
@@ -355,14 +410,21 @@ Get-ScheduledTask -TaskName 'SignalDeck*' | Where-Object State -ne 'Disabled' |
   Select-Object -ExpandProperty TaskName | Set-Content cutover-enabled-tasks.txt
 Get-ScheduledTask -TaskName 'SignalDeck*' | Disable-ScheduledTask
 bash ops/signaldeck-ctl.sh stop          # daemon drains (stop file, then /End); web and tunnel tasks stop
+Set-Content data\RETIRED 'cloud cutover: the VM is the writer (ops/cloud/README.md C2/C8). Rollback R1 step 2 deletes this file.'
 Get-Process signaldeckd -ErrorAction SilentlyContinue   # must print nothing
 Test-Path data\signaldeck.db-wal         # absent, or 0 bytes after the checkpoint
+Select-String -Quiet 'data/RETIRED' ops\signaldeck-ctl.sh   # True: this checkout has the guard (P3)
 ```
 
 `cutover-enabled-tasks.txt` is the list rollback re-enables. Disabling the tasks
 first stops `daemon-guard.ps1` from restarting the daemon behind you.
+`data\RETIRED` covers what disabled tasks do not: `signaldeck-ctl.sh deploy` and
+`launch` rebuild `bin\signaldeckd.exe` from `git archive HEAD` and `launch` runs
+it directly, so an agent session's routine deploy would otherwise start a second
+writer. While the file exists `up`, `collect`, `deploy`, `launch` and `refresh`
+refuse; `stop` and `status` still work.
 
-**C3. Final consistent snapshot, encrypted** (Git Bash on the PC, daemon down):
+**C3. [OWNER] Final consistent snapshot, encrypted** (Git Bash on the PC, daemon down):
 
 ```bash
 bash ops/signaldeck-backup-offline.sh     # refuses a live daemon; writes data/backups/signaldeck-<stamp>.db + .sha256, seals and uploads release backup-<stamp>
@@ -399,7 +461,7 @@ tombstone on the same machine), adding `-apply` only if it lists something.
 
 **C7. Enable exactly one writer.**
 
-1. PC: `Get-ScheduledTask -TaskName 'SignalDeck*' | Where-Object State -ne 'Disabled'` prints nothing;
+1. **[OWNER]** PC: `Get-ScheduledTask -TaskName 'SignalDeck*' | Where-Object State -ne 'Disabled'` prints nothing;
    `Get-Process signaldeckd -ErrorAction SilentlyContinue` prints nothing (the web never opens the database, so a leftover `node` is not a writer).
 2. **[OWNER]** stop the PC's tunnel connector, recoverably:
    `Stop-Service cloudflared; Set-Service cloudflared -StartupType Disabled`.
@@ -425,11 +487,22 @@ tombstone on the same machine), adding `-apply` only if it lists something.
 9. VM: `sudo systemctl enable --now $(cd ops/cloud/systemd && ls signaldeck-*.timer)`.
 10. VM: `sudo -u signaldeck bash ops/cloud/check-units.sh` ends `check-units: HEALTHY`.
 
-**C8. Hold the PC for 7 days, recoverable.** Tasks stay disabled, not deleted.
-Rename the binary so nothing can start it:
-`Rename-Item bin\signaldeckd.exe signaldeckd.exe.cloud-cutover`. Leave
-`data\signaldeck.db` untouched as the rollback reference. After 7 clean days
-**[OWNER]** decides whether to retire the PC fleet.
+**C8. [OWNER] Hold the PC for 7 days, recoverable.** Tasks stay disabled, not
+deleted, and `data\RETIRED` (C2) stays. Move the binary and the database aside
+(PowerShell on the PC, in the checkout; `<stamp>` is the C3 release's):
+
+```powershell
+Get-ChildItem data\signaldeck.db-wal, data\signaldeck.db-shm -ErrorAction SilentlyContinue   # nothing, or 0-byte files only (as in C2)
+Rename-Item bin\signaldeckd.exe signaldeckd.exe.cloud-cutover
+Rename-Item data\signaldeck.db signaldeck.db.pre-cloud-<stamp>
+```
+
+`data\signaldeck.db.pre-cloud-<stamp>` is the rollback reference (R2). With the
+binary gone the Daemon task's `run-daemon-with-provenance.ps1` refuses ("no
+binary"), and the ctl paths that could rebuild it refuse on `data\RETIRED`. A
+daemon someone builds and runs by hand is still possible; it would find no
+database at `data\signaldeck.db`, so it cannot extend the stale chain. After 7
+clean days **[OWNER]** decides whether to retire the PC fleet.
 
 **C9. One-hour PC-off check.** On the first weekday after cutover, **[OWNER]**
 powers the PC off from 13:05 to 14:10 PT, which covers Market-Close (13:10),
@@ -446,7 +519,9 @@ before C7.3's deploy):
 
 1. VM: `sudo systemctl disable --now signaldeck-daemon.service signaldeck-web.service`
    and every `signaldeck-*.timer`.
-2. PC: rename `bin\signaldeckd.exe.cloud-cutover` back if C8 ran; re-enable
+2. **[OWNER]** PC: `Remove-Item data\RETIRED` (C2). If C8 ran (reachable only
+   from R2): `Rename-Item bin\signaldeckd.exe.cloud-cutover signaldeckd.exe`; R2
+   step 3 or 4 has already put the right database at `data\signaldeck.db`. Re-enable
    exactly the tasks in `cutover-enabled-tasks.txt`
    (`Get-Content cutover-enabled-tasks.txt | ForEach-Object { Enable-ScheduledTask -TaskName $_ }`);
    `bash ops/signaldeck-ctl.sh up`.
@@ -462,21 +537,41 @@ in public.
    the VM connector (`sudo systemctl disable --now cloudflared`).
 2. Take a final snapshot on the VM: `sudo -u signaldeck bash ops/signaldeck-backup-offline.sh`
    (sealed release) and `db-manifest.py` of it.
-3. The VM's final snapshot is the truth: the PC's copy plus every cloud write.
-   Default rollback moves **that** to the PC: restore it there with
+3. **[OWNER]** The VM's final snapshot is the truth: the PC's copy plus every
+   cloud write. Default rollback moves **that** to the PC: restore it there with
    `ops/DR_RUNBOOK.md` section 2 using exactly the release step 2 uploaded
    (`logs/backup-offline.log` on the VM says `offsite OK` for it), never merely
    the newest one; if the upload did not complete, copy
-   `data/backups/signaldeck-<stamp>.db` and its `.db.sha256` from the VM over
-   SSH instead. Check sha256 + `ledger-verify` + `db-manifest` diff, keep the
-   PC's old file as `data\signaldeck.db.pre-cloud-<stamp>`, then R1 steps 2-3.
-4. Only if the VM's database is unusable (fails `integrity_check` or
-   `ledger-verify`): fall back to the PC's pre-cutover database, and before
-   restarting anything list what is lost (VM-era ledger entries and anchors,
-   sign-ups, deletions). Replay the VM's `deletions.jsonl` on the PC
-   (`sdmaint replay-tombstones ... -apply`), publish nothing until the public
+   `data/backups/signaldeck-<stamp>.db`, its `.db.sha256` and the VM's
+   `~/.signaldeck/deletions.jsonl` over SSH instead. Before the restore, the PC's
+   old file must already be `data\signaldeck.db.pre-cloud-<stamp>` (C8 did this
+   if it ran; otherwise rename it now). Check sha256 + `ledger-verify` +
+   `db-manifest` diff.
+   **Tombstones go back too.** Section 2's replay reads "this machine's own" log,
+   which on the PC stopped at C2, and every later PC backup would seal it without
+   the VM-era deletions, so a restore from one of those would bring the accounts
+   back. In place of that replay, merge the VM's log (the release's, opened into
+   `restore-dl\deletions.jsonl`, or the SSH copy) into the PC's before anything starts:
+
+   ```powershell
+   $pc = "$env:USERPROFILE\.signaldeck\deletions.jsonl"
+   if (Test-Path $pc) { Copy-Item $pc "$pc.pre-rollback" }
+   @(Get-Content $pc -ErrorAction SilentlyContinue) + @(Get-Content restore-dl\deletions.jsonl) |
+     Where-Object { $_.Trim() } | Select-Object -Unique | Set-Content -Encoding ascii $pc
+   .\bin\sdmaint.exe replay-tombstones -db data\signaldeck.db -log $pc   # dry run: expect nothing to delete
+   ```
+
+   The VM's snapshot already applied its own deletions, so the dry run should
+   list nothing; if it lists something, stop and find out why before `-apply`.
+   Then R1 steps 2-3.
+4. **[OWNER]** Only if the VM's database is unusable (fails `integrity_check` or
+   `ledger-verify`): fall back to the PC's pre-cutover database
+   (`Move-Item data\signaldeck.db.pre-cloud-<stamp> data\signaldeck.db` if C8
+   ran), and before restarting anything list what is lost (VM-era ledger entries
+   and anchors, sign-ups, deletions). Merge the VM's `deletions.jsonl` into the
+   PC's as in step 3 and replay it with `-apply`, publish nothing until the public
    anchor head is reconciled (`ops/DR_RUNBOOK.md` section 5, "no published line
-   reproduces" = stop), and state the gap publicly.
+   reproduces" = stop), and state the gap publicly. Then R1 steps 2-3.
 
 ## 16. Provisioning (once, before cutover)
 
@@ -503,8 +598,16 @@ sudo install -d -o signaldeck -g signaldeck -m 0700 /home/signaldeck/.signaldeck
 
 Toolchains (versions come from the repo, not from this page): Go from
 go.dev's `linux-arm64` tarball at the `toolchain` version in `daemon/go.mod`,
-unpacked to `/usr/local/go`; Node at the `node-version` CI uses
-(`.github/workflows/ci.yml`), `linux-arm64`; golangci-lint at the `version` CI
+unpacked to `/usr/local/go` and linked into `/usr/local/bin`
+(`sudo ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/`):
+`sudo -u signaldeck` runs with sudo's `secure_path`, which has `/usr/local/bin`
+but not `/usr/local/go/bin`, and the service user has no login shell to set
+PATH, so without the links the build below and `deploy-linux.sh` find no `go`;
+Node at the `node-version` CI uses (`.github/workflows/ci.yml`), `linux-arm64`,
+unpacked with `sudo tar -xJf node-*.tar.xz -C /usr/local --strip-components=1`
+so `node`, `npm` and `npx` land in `/usr/local/bin` for the same reason;
+`go version`, `node --version` and `npm --version` under `sudo -u signaldeck`
+must all answer; golangci-lint at the `version` CI
 pins, from its GitHub release (`linux-arm64`, check the checksums file), into
 `/usr/local/bin`; `gh` from GitHub's apt repository. Then, as `signaldeck`
 (`sudo -u signaldeck -H bash`):
@@ -552,14 +655,18 @@ Read-only with respect to production; no daemon, no timers:
 
 Done on the Windows host that wrote this kit (Git Bash; no VM, no WSL, no Docker):
 
-- `bash -n` on every script; `test-deploy-linux.sh` (16 cases: dirty tree,
-  vet, lint, failing test, build, posture, root, foreign lock, revision
-  mismatch, unresolvable, no stamped worker run, failed restart, dry run),
+- `bash -n` on every script; `test-deploy-linux.sh` (17 cases: dirty tree,
+  vet, lint, failing test, build, posture, root, no working `go`, foreign lock,
+  revision mismatch, unresolvable, no stamped worker run, failed restart, dry run),
+  `test-web-release-linux.sh` (14 cases: promote, build-only, foreign lock,
+  failed stop, both failed moves, incomplete promotion, prune, the asset,
+  browser, port, dirty-tree and root gates),
   `test-linux-ops.sh` (21 cases: systemd branch, non-Linux untouched,
   market-close restart, guard locks/strikes/posture, web guard),
-  `test-web-assets-check.sh` (5 cases against a real HTTP server) and
+  `test-web-assets-check.sh` (5 cases against a real HTTP server),
+  `ops/test-ctl-retired.sh` (8 cases) and
   `check-grader-health.sh __selfcheck`, `db-manifest.py __selfcheck`;
-  mutation checks on the deploy and guard tests.
+  mutation checks on the deploy, web-release, guard and RETIRED tests.
 - `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build` of `cmd/signaldeckd` and
   `cmd/sdmaint` (ELF aarch64).
 

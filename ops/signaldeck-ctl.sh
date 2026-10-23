@@ -190,6 +190,19 @@ running() {
   esac
 }
 
+# data/RETIRED: this PC handed the writer role to the cloud VM (ops/cloud/README.md
+# C2/C8). Disabled tasks do not stop `deploy`/`launch`, which rebuild the binary
+# from HEAD (launch then execs it), so every path that builds or starts the daemon
+# refuses here. stop and status still work. Rollback R1 step 2 deletes the file.
+case "${1:-status}" in
+  up|collect|deploy|launch|refresh)
+    if [ -e "$REPO/data/RETIRED" ]; then
+      echo "REFUSED: $REPO/data/RETIRED exists - this PC is no longer the SignalDeck writer (ops/cloud/README.md C2/C8)." >&2
+      echo "Starting or deploying here would make a second writer and fork the ledger. Roll back with R1/R2 instead." >&2
+      exit 1
+    fi ;;
+esac
+
 case "${1:-status}" in
   up)
     kick "$DAEMON"; kick "$TUNNEL" optional; kick "$WEB"
