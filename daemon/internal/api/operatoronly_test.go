@@ -369,7 +369,8 @@ func TestNonOperatorPayloadsAreStripped(t *testing.T) {
 		return pb, body
 	}
 	op, opBody := read(owner)
-	if !strings.Contains(opBody, `"claimedAccuracy"`) || !strings.Contains(opBody, `"note"`) || op.Withheld != "" {
+	if !strings.Contains(opBody, `"claimedAccuracy"`) || !strings.Contains(opBody, `"note"`) || op.Withheld != "" ||
+		strings.Contains(opBody, "specWithheld") || !strings.Contains(opBody, "by recomputation") {
 		t.Fatalf("operator prereg is not the full record, so the strip below proves nothing: %.400s", opBody)
 	}
 	for who, c := range map[string]*http.Client{"member": member, "anonymous": newClient(t)} {
@@ -383,8 +384,18 @@ func TestNonOperatorPayloadsAreStripped(t *testing.T) {
 			t.Errorf("%s prereg: %d records (operator %d), withheld %q, liveResolved %v",
 				who, len(pb.Records), len(op.Records), pb.Withheld, pb.LiveResolved)
 		}
+		// The operator prose points at the withheld track record and bands and
+		// promises a recomputation the stripped specs cannot support.
+		for _, bad := range []string{"/api/track-record", "by recomputation", "claimed HERE"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s prereg still says %q: %.400s", who, bad, body)
+			}
+		}
 		questions := 0
 		for i, r := range pb.Records {
+			if r["specWithheld"] != true {
+				t.Errorf("%s prereg record %d does not say its spec is withheld: %v", who, i, r)
+			}
 			for _, k := range []string{"entryHash", "prevHash", "specHash", "seq"} {
 				if r[k] != op.Records[i][k] {
 					t.Errorf("%s prereg record %d: %s %v, operator %v", who, i, k, r[k], op.Records[i][k])

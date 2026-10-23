@@ -4,6 +4,8 @@
 
 **Update 2026-10-22:** the retention, removal, backup-encryption and data-source items are now **DECIDED** (marked inline below) and published on /privacy and /terms, dated 22 October 2026.
 
+**Update 2026-10-23 (licence gate):** on a published deployment everything derived from Alpaca market data or Kadoa's congress rows (prices, forecasts, grades, statistics, the member digest's reads, the journal and its grades, crypto history) is served only to the operator; everyone else, members included, gets an HTTP 451 "withheld" answer. The member daily digest is therefore sent to the operator's account only: a member can still store the digest switch and a Telegram link, but nothing is sent to them. Kadoa collection stopped on 2026-10-23.
+
 ## What is collected, and why
 
 | Data | Where | Why | Kept |
@@ -17,7 +19,7 @@
 | Emailed link tokens, stored only as hashes | `auth_tokens` | Confirmation (24 h) and reset (1 h) links | Until used or expired; deleted with the account |
 | Watchlist | `member_symbols` | Your list | Until you remove a symbol or delete the account |
 | Your calls and their notes | `member_calls` | Your journal, graded | Until the account is deleted; a call cannot be edited once made |
-| Alert settings (digest on/off, optional Telegram chat id) | `member_alert_prefs`, `member_digest_tries` | The opt-in daily digest | Until the account is deleted |
+| Alert settings (digest on/off, optional Telegram chat id) | `member_alert_prefs`, `member_digest_tries` | The opt-in daily digest (sent to the operator's account only since 2026-10-23; a member's switch is stored but nothing is sent) | Until the account is deleted |
 | Notification-list email (the landing page form, no account) | `waitlist` | One email when the volatility record can be judged | **DECIDED 2026-10-22**: up to 12 months, or sooner on request to the contact address |
 | Failed sign-in | daemon log: a 12-character digest of the typed name and its length, no name and no address | Spotting a name under attack | Log rotation by size (20 MB × 3 files, plus a daily rotation over 10 MB); **DECIDED 2026-10-22**: the limit is 30 days after a log file's last entry (see the interim note under Backups). Rotation is by size, not date, so on a quiet site one file can cover months and an entry can be kept longer than 30 days |
 | Requests | daemon log: method, path, status, user id, duration; no IP address, no user agent | Operating the service | As above |
@@ -59,5 +61,5 @@ Unverified sign-ups older than 24 hours are deleted the next time anyone signs u
 
 ## Data sources (2026-10-22)
 
-- **In use:** Alpaca Markets (US stock market data and news), SEC EDGAR (filings, Form 4, 13F, company facts), the CFTC (Commitments of Traders), Wikimedia (page-view counts, CC0), congressional STOCK Act disclosures via third-party datasets (Kadoa's public congress-trades file; older rows from House/Senate Stock Watcher), and TradingView (chart widget on member symbol pages; the operator's own alerts by webhook).
-- **Retired:** TradingView scanner and StockTwits (2026-10-21/22); crypto data from Kraken, Coinbase and Hyperliquid (crypto paused 2026-10-22; history kept on the public record, open crypto forecasts voided, never deleted); FINRA, Cboe and FRED (retired 2026-10-22: licence review); NVIDIA's hosted model API, which tagged headline sentiment (retired 2026-10-23: trial terms do not permit production use). Forecasts made before these dates used data from these sources.
+- **In use:** Alpaca Markets (US stock market data and news; licensed for personal use only, so everything derived from it is shown only to the operator since 2026-10-23), SEC EDGAR (filings, Form 4, 13F, company facts), the CFTC (Commitments of Traders), Wikimedia (page-view counts, CC0), and TradingView (chart widget on member symbol pages; the operator's own alerts by webhook).
+- **Retired:** Kadoa's congress-trades file (2026-10-23: its terms bar automated access and sharing its rows; no stored row records its source, Kadoa was the fallback from 2026-09-07 and the Stock Watcher mirrors answer 403, so every stored row is treated as Kadoa's and shown only to the operator); TradingView scanner and StockTwits (2026-10-21/22); crypto data from Kraken, Coinbase and Hyperliquid (crypto paused 2026-10-22; history kept but shown only to the operator since 2026-10-23, open crypto forecasts voided, never deleted); FINRA, Cboe and FRED (retired 2026-10-22: licence review); NVIDIA's hosted model API, which tagged headline sentiment (retired 2026-10-23: trial terms do not permit production use). Forecasts made before these dates used data from these sources.

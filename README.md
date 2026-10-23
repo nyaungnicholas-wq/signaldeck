@@ -181,32 +181,37 @@ calling web work done.
 - **No demonstrated forecasting edge.** Every directional predictor tested has failed against
   its own baseline; the volatility test has 32 of 60 required days (2026-10-22). No return, Sharpe or
   profitability figure exists in this product and none may be quoted from it.
-- **Congress trade feeds**: the volunteer House/Senate Stock Watcher mirrors are offline, so
-  Kadoa's public file is the live source (its licence is an open question for counsel); the
-  stored history is served when it is down.
+- **Congress trade feeds**: retired 2026-10-23. Kadoa's terms bar automated access and sharing
+  its rows, and the volunteer House/Senate Stock Watcher mirrors answer 403. No stored row
+  records its source, so every row is treated as Kadoa's and shown only to the operator.
 - **External timestamps start on 2026-09-30.** The anchors repository,
   [github.com/nyaungnicholas-wq/signaldeck-anchors](https://github.com/nyaungnicholas-wq/signaldeck-anchors),
   is public since 2026-10-04. Since 2026-09-30 each publish commits a statement of the
   current ledger head, timestamped by two RFC 3161 authorities (FreeTSA, DigiCert) and
   OpenTimestamps, and `tools/verify_public_record.py` (published there as `verify.py`)
-  checks all of it offline, recomputing the chain through the public `/api/ledger/range`.
+  checks all of it offline. Its `--site` step recomputes the chain through `/api/ledger/range`,
+  which since 2026-10-23 answers HTTP 451 to everyone but the operator (Alpaca-derived data,
+  personal use only), so that step reports WITHHELD until Alpaca gives written permission.
   Forecasts from before the first statement carry no external timestamp.
 
 ## Data sources and licensing
 
 Alpaca (IEX feed) for US stocks and news, SEC EDGAR for filings and Form 25 delistings, the
 CFTC for Commitments of Traders, Wikimedia for attention, and STOCK Act congressional
-disclosures through third-party datasets (Kadoa; older rows from House/Senate Stock Watcher).
+disclosures through third-party datasets (Kadoa, retired 2026-10-23; the stored rows are shown only to the operator).
 Retired 2026-10-22 (licence review): FRED, FINRA short data and Cboe put/call. Crypto
 (Kraken, TickStream) paused 2026-10-22; TradingView scanner and StockTwits retired. Raw
 vendor rows are never redistributed. Two separate gates do that, and they answer
 differently: an anonymous request for bars, snapshots, news, scanner data or a CSV export is
 refused **401** by the auth gate, which runs BEFORE the licence check and so is what an
-anonymous caller actually meets; on a published deployment the licence gate then answers
-**451** to an authenticated caller on a governed route (`internal/datalicense`). That second
-gate is deliberately skipped when the daemon is only reachable privately, so an operator can
-read their own data on their own box. Only derived analytics are public. Read each provider's
-terms before hosting a copy.
+anonymous caller actually meets. On a published deployment the licence gate then answers
+**451** to every caller except the operator (admin session or loopback token) on any route not
+classified as rights-cleared (`datalicense.NonOperatorRoutes`), so it fails closed. Since
+2026-10-23 that includes the derived analytics: Alpaca licenses its data for personal use only,
+derivations included, so prices, forecasts, grades and statistics are shown only to the
+operator until Alpaca gives written permission. The gate is skipped when the daemon is only
+reachable privately, so an operator can read their own data on their own box. Read each
+provider's terms before hosting a copy.
 
 ## Security model
 

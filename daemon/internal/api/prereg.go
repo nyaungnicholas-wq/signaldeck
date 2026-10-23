@@ -85,7 +85,11 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 			"beforeFirstGradable": beforeFlag,
 		}
 		if withheld {
+			// specWithheld: the spec shown is not the frozen record, so a nil
+			// here never reads as "registered empty", and specHash cannot be
+			// recomputed from it.
 			row["spec"] = claimText(rec.SpecJSON)
+			row["specWithheld"] = true
 			delete(row, "note")
 		}
 		out = append(out, row)
@@ -137,6 +141,19 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 	if withheld {
 		resp["withheld"] = "Each record keeps its hashes; spec is the claim's wording and resolution " +
 			"rule only, and notes are omitted. " + datalicense.WithheldNotice("alpaca")
+		// The operator wording points at the track record and the claimed
+		// bands, both withheld here, and promises a recomputation this view
+		// cannot support: entryHash covers the full spec and note.
+		resp["whatThisIs"] = "The claim each structural predictor made, frozen and hash-chained before " +
+			"any of its forecasts resolved. The claimed accuracy bands and the live record they are " +
+			"graded against are withheld under the data licence."
+		resp["whyChained"] = "Each record links to the previous by hash, so rewriting an old claim " +
+			"breaks every link after it. chainVerified is this server's own recomputation. Recomputing " +
+			"it yourself needs each record's full spec and note, which are shown only to the operator " +
+			"while the market-data licence question is open; the hashes are kept here unchanged."
+		resp["howToUseIt"] = "Nothing here can be compared yet: the bands and the live grades are " +
+			"withheld. When they are released, the frozen record is the one that counts, not whatever " +
+			"the code says at that time."
 	}
 	writeJSON(w, resp)
 }

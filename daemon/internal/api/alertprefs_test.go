@@ -101,6 +101,19 @@ func TestAlertPrefsMemberFlow(t *testing.T) {
 	}
 }
 
+// The digest goes only to the admin account (memberdigest.Run), so a member's
+// prefs say it is withheld, with the sentence the page shows; the owner's do not.
+func TestAlertPrefsSayTheDigestIsWithheldFromMembers(t *testing.T) {
+	base, _, member, owner := newAlertPrefsServer(t, nil, true)
+	if v := prefsOf(t, member, base); !v.DigestWithheld || !strings.HasPrefix(v.DigestNotice, "Withheld: ") ||
+		!strings.Contains(v.DigestNotice, "Alpaca") {
+		t.Errorf("member prefs must carry the withholding: %+v", v)
+	}
+	if v := prefsOf(t, owner, base); v.DigestWithheld || v.DigestNotice != "" {
+		t.Errorf("the operator's digest is not withheld: %+v", v)
+	}
+}
+
 func TestAlertPrefsTelegramUnavailable(t *testing.T) {
 	base, _, member, _ := newAlertPrefsServer(t, nil, false)
 	if v := prefsOf(t, member, base); v.TelegramAvailable {

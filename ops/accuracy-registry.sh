@@ -660,6 +660,16 @@ if ! "$PY" "$SD/tools/grader_heartbeat.py" --success >> "$LOG" 2>&1; then
   exit 1
 fi
 
+# LICENCE GATE (23 Oct 2026), the same switch as ops/anchor-publish.sh. README.md,
+# partials/live_accuracy.md, the INCLUDES documents and STRATEGY_DECK.md section 8
+# are committed to the public repo, and what this block writes into them is
+# computed from Alpaca market data, which Alpaca licenses for personal use only
+# and forbids publishing, derivations included. They are regenerated only when
+# the operator records Alpaca's written permission with
+# SIGNALDECK_PUBLISH_DERIVED=1. The registry itself (data/, gitignored) is still
+# graded and written above, and the refusal path never publishes a number.
+docs_stale=0
+if [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ]; then
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the
 # fresh registry, between the LIVE-ACCURACY markers. The point: a FAILED verdict
 # must be one click from the headline, not buried in a log only this Mac reads.
@@ -819,7 +829,6 @@ PY
 # live_accuracy --check and deck_facts --check -- sit behind an `exit 0` guard in
 # ci.yml (lines 197-211) for the gitignored data/, so on a runner they never
 # execute at all. That left the WARNs below with no reader anywhere.
-docs_stale=0
 "$PY" "$SD/tools/live_accuracy.py" --write \
   || { echo "WARN: partials/live_accuracy.md not regenerated"; docs_stale=1; }
 "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt") \
@@ -827,6 +836,9 @@ docs_stale=0
 # deck_facts reads the 4.9 GB database; a failure here is not fatal to grading.
 "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md" \
   || { echo "WARN: STRATEGY_DECK.md §8 not re-injected"; docs_stale=1; }
+else
+  echo "licence: README.md, partials/live_accuracy.md, the INCLUDES documents and STRATEGY_DECK.md section 8 not regenerated (Alpaca-derived statistics; SIGNALDECK_PUBLISH_DERIVED=1 only with Alpaca's written permission). The registry was graded." >> "$LOG"
+fi
 
 # H9: page on VERDICT TRANSITIONS — a predictor changing state (PENDING→FAILED,
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.

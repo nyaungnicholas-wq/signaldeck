@@ -19,7 +19,7 @@ import (
 
 const (
 	congressLagNote = "Congressional stock disclosures lag 30-45 days by law (STOCK Act filing windows) — these are never real-time trades."
-	congressNote    = "Congressional financial disclosures (Senate eFD / House Clerk) as compiled by Kadoa's congress trades dataset; the Stock Watcher mirrors never supplied a stored row (403 since 2026-07). Collection stopped 23 Oct 2026 because Kadoa's terms do not permit sharing the compiled rows; the rows stored before then are shown to the operator only. Amounts are the RANGES reported on the disclosure, not exact values. Tickers we don't track keep symbolId null."
+	congressNote    = "Congressional financial disclosures (Senate eFD / House Clerk) as compiled by third-party datasets. No stored row records its source: Kadoa's congress trades file was the fallback from 7 Sep 2026 and the Stock Watcher mirrors tried first answer 403, so every stored row is treated as Kadoa's compilation. Collection stopped 23 Oct 2026 because Kadoa's terms do not permit sharing the compiled rows; the rows stored before then are shown to the operator only. Amounts are the RANGES reported on the disclosure, not exact values. Tickers we don't track keep symbolId null."
 )
 
 // congressRetiredStatus is the source status /api/congress reports since the

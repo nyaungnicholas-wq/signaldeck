@@ -110,8 +110,9 @@ var Sources = map[string]Source{
 			"NVIDIA's trial terms, which do not permit production use; nothing is sent to it " +
 			"any more, and its stored sentiment ratings are not a model input",
 		Redistrib: false},
-	// Every stored congress_trades row came from Kadoa (the Stock Watcher mirrors
-	// have answered 403 since 2026-07). Its terms (s.4, s.8) bar automated access,
+	// Every stored congress_trades row is treated as Kadoa's: no row records its
+	// source, Kadoa was the fallback from 7 Sep 2026 and the Stock Watcher
+	// mirrors answer 403. Its terms (s.4, s.8) bar automated access,
 	// reproduction and making the data available to third parties without written
 	// permission, so the poller is unwired and the stored rows are operator-only.
 	"kadoa": {Name: "kadoa", Class: Restricted, Provider: "Kadoa (congress trades dataset)",

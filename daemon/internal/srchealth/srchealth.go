@@ -121,9 +121,9 @@ var registry = []spec{
 		note: "1s microstructure snapshots (crypto 24/7)"},
 	{source: "congress_trades", query: `SELECT MAX(disclosed_ts) FROM congress_trades`,
 		budget: 7 * 24 * time.Hour, gated: false,
-		paused: "retired 23 Oct 2026: every stored row came from Kadoa, whose terms (s.4, s.8) bar " +
-			"automated access and sharing its rows without written permission; the Stock Watcher " +
-			"mirrors answer 403",
+		paused: "retired 23 Oct 2026: no stored row records its source, so every row is treated as " +
+			"Kadoa's (the fallback from 7 Sep 2026; the Stock Watcher mirrors answer 403), whose terms " +
+			"(s.4, s.8) bar automated access and sharing its rows without written permission",
 		note: "STOCK Act congressional trade disclosures (congress-poller, retired)"},
 	{source: "tv_signals", query: `SELECT MAX(ts) FROM tv_signals`,
 		budget: 6 * time.Hour, gated: true, webhook: true,

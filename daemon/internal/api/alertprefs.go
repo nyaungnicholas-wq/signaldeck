@@ -27,7 +27,16 @@ type alertPrefsView struct {
 	TelegramLinked    bool `json:"telegramLinked"`
 	TelegramAvailable bool `json:"telegramAvailable"`
 	MailAvailable     bool `json:"mailAvailable"`
+	// DigestWithheld: memberdigest.Run sends only to the admin account (its
+	// reads are Alpaca-derived), so for anyone else the switches below deliver
+	// nothing. The page says so instead of offering a switch that cannot work.
+	DigestWithheld bool   `json:"digestWithheld,omitempty"`
+	DigestNotice   string `json:"digestNotice,omitempty"`
 }
+
+const digestWithheldNotice = "Withheld: the daily digest is paused for member accounts. Its reads are " +
+	"derived from Alpaca market data, which is licensed for personal use only, so it goes only to the " +
+	"operator until Alpaca gives written permission."
 
 func (d Deps) telegramAvailable() bool {
 	return d.Notifier != nil && d.Notifier.TelegramToken != ""
@@ -45,13 +54,17 @@ func (d Deps) writeAlertPrefs(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	writeJSON(w, alertPrefsView{
+	v := alertPrefsView{
 		EmailDigest:       p.EmailDigest && verified,
 		EmailVerified:     verified,
 		TelegramLinked:    p.TelegramChatID != "",
 		TelegramAvailable: d.telegramAvailable(),
 		MailAvailable:     d.digestMailAvailable(),
-	})
+	}
+	if !d.isAdminUID(r.Context(), uid) {
+		v.DigestWithheld, v.DigestNotice = true, digestWithheldNotice
+	}
+	writeJSON(w, v)
 }
 
 // digestMailAvailable gates the daily email on SIGNALDECK_PUBLIC_URL, not on
