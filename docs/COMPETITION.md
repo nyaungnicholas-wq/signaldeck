@@ -133,9 +133,7 @@ Do not assert that all code was personally reviewed or tested, or that AI did no
 
 ### Commit authorship
 
-Of the commits from 2026-07-01 to 2026-07-15, 51 carry the git identity Natalie Nyaung (`natalienyaung@Natalies-MacBook-Pro.local`); they are interleaved with commits under Nicholas's identity from 2026-07-13, and every commit after 2026-07-15 is under Nicholas's identity, apart from one automated Dependabot dependency update. They were made on a family Mac whose git name was set to Natalie, and the work in them was partly Natalie's and partly Nicholas's. The history is deliberately not rewritten: the grader verifies each graded build against these commit IDs, and this project's claim is that its record is not retouched.
-
-[NICHOLAS TO CONFIRM: what Natalie contributed. If she contributed to the app being submitted, the Congressional App Challenge rules may require listing her as a teammate (teams of up to four, at least half living or attending school in the district) or crediting her.]
+Of the commits from 2026-07-01 to 2026-07-15, 51 carry the git identity Natalie Nyaung (`natalienyaung@Natalies-MacBook-Pro.local`); they are interleaved with commits under Nicholas's identity from 2026-07-13, and every commit after 2026-07-15 is under Nicholas's identity, apart from one automated Dependabot dependency update. They were made on a shared family Mac whose git name was set to Natalie; the identity is only that computer's git setting, and all of the work in them is Nicholas's. Nicholas Nyaung is the sole entrant. The history is deliberately not rewritten: the grader verifies each graded build against these commit IDs, and this project's claim is that its record is not retouched.
 
 ## FirstCommit (separate)
 
