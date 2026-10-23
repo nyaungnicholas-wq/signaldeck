@@ -187,6 +187,27 @@ log "=== sweep start (trading day $target, maxwait ${MAXWAIT}s) ==="
 #      (b) the marker commits WITH the widening. See ATOMICITY above.
 #      (c) the result is CHECKED. A step whose failure mode is "silently does
 #          nothing" must not also be a step nobody verifies.
+#      (d) rows carrying delisted_at ARE reactivated, deliberately, unlike
+#          store.UpsertSymbol / UpsertDailyUniverseSymbol. This UPDATE is the
+#          ONLY path that puts a stamped, non-user-held stock back in the
+#          poller's fetch set (ActiveStockSymbols, a 10-day window), and the
+#          delisting detector clears a stamp only when bars resume
+#          (pipeline/delisting.go, "Delisting is reversible"). Adding
+#          `AND delisted_at IS NULL` here would make every false stamp
+#          permanent. Measured 2026-10-23 (read-only): BURU (inactive, not
+#          user-held, not streamed) went silent 2026-07-17 -> 2026-09-14, past
+#          the detector's 42-day rule, and is unstamped and printing today,
+#          which is what a stamp cleared on resume looks like (stamp history is
+#          not persisted, so this is inferred); the detector logged "cleared 1
+#          resumed" on 2026-10-16. The
+#          cost is the recycled-ticker splice those guards exist for (ATC): a
+#          reused ticker's new bars would land on the dead row and clear its
+#          stamp. 0 of 1,902 stamped stocks have a 1d bar in the last 10 days,
+#          and sdmaint split-reused-tickers repairs a splice after the fact.
+#          Narrowing the recheck (recent stamps only, or bars to quarantine) is
+#          a design decision, not a one-line guard. The accuracy registry is
+#          unaffected either way: it counts only active=0 AND delisted_at IS
+#          NULL, which never includes a stamped row.
 was_up=$(sd_is_running signaldeckd && echo yes || echo no)
 trap on_interrupt EXIT INT TERM HUP
 qw "$BUSY
