@@ -202,12 +202,16 @@ log "=== sweep start (trading day $target, maxwait ${MAXWAIT}s) ==="
 #          resumed" on 2026-10-16. The
 #          cost is the recycled-ticker splice those guards exist for (ATC): a
 #          reused ticker's new bars would land on the dead row and clear its
-#          stamp. 0 of 1,902 stamped stocks have a 1d bar in the last 10 days,
-#          and sdmaint split-reused-tickers repairs a splice after the fact.
-#          Narrowing the recheck (recent stamps only, or bars to quarantine) is
-#          a design decision, not a one-line guard. The accuracy registry is
-#          unaffected either way: it counts only active=0 AND delisted_at IS
-#          NULL, which never includes a stamped row.
+#          stamp; sdmaint split-reused-tickers repairs a splice after the fact.
+#          The registry's survivorship_clean count is unaffected (it counts
+#          only active=0 AND delisted_at IS NULL, never a stamped row), but a
+#          splice WOULD reach the graded tallies: the grader has no
+#          delisted-symbol carve-out (tools/accuracy_registry.py, "NO
+#          delisted-symbol carve-out, deliberately"), so this choice does
+#          change what it grades. Current exposure: 0 of 1,902 stamped stocks
+#          have a 1d bar in the last 10 days (re-measured read-only
+#          2026-10-23). Narrowing the recheck (recent stamps only, or bars to
+#          quarantine) is a design decision, not a one-line guard.
 was_up=$(sd_is_running signaldeckd && echo yes || echo no)
 trap on_interrupt EXIT INT TERM HUP
 qw "$BUSY
