@@ -594,13 +594,6 @@ export default async function Landing() {
             afterwards, and graded against what actually happened under a loss function
             registered in advance. <strong style={{ color: "var(--text)" }}>Including the claims that failed. Especially those.</strong>
           </p>
-          {live.kind === "withheld" && (
-            <p className="m-0 max-w-[58ch] text-[0.9rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-              For now the graded figures are shown only to the operator: they are derived from
-              market data licensed for personal use. The method, the registered rules and the hash
-              chain stay public.
-            </p>
-          )}
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <Link href="/signup" className="cta-primary">
               Create free account

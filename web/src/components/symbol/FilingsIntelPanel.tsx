@@ -21,6 +21,8 @@ import {
 } from "@/lib/api";
 import { ago } from "@/lib/format";
 import HelpTip from "@/components/HelpTip";
+import Withheld from "@/components/Withheld";
+import { withheldFromMessage } from "@/lib/withheld";
 
 function levelColor(level: string): string {
   switch (level) {
@@ -101,11 +103,15 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
         </span>
       </div>
 
-      {err !== null && rows === null && (
+      {err !== null && rows === null && (withheldFromMessage(err) ? (
+        <div className="px-4 py-3">
+          <Withheld compact notice={err} source={withheldFromMessage(err)?.source} />
+        </div>
+      ) : (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
-      )}
+      ))}
       {rows === null && err === null && (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading SEC data…
