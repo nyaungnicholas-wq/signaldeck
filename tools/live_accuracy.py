@@ -408,7 +408,12 @@ def render(snapshot, banner, registry_path):
     status = survivorship_status_line(st)
     if status:
         surv.append(status)
-    effect = survivorship_effect()
+    # The full revalidation snapshot lives beside the registry in data/ (always
+    # written there); ops/ carries it only with SIGNALDECK_PUBLISH_DERIVED=1 and
+    # is otherwise a figure-free stamp, so it is the fallback.
+    effect = (survivorship_effect(os.path.join(os.path.dirname(os.path.abspath(registry_path)),
+                                               "revalidation-status.json"))
+              or survivorship_effect())
     if effect is not None:
         # The DIRECTION of this bias was already stated in prose ("the published
         # claim is inflated by excluding dead names") while its SIZE sat in a

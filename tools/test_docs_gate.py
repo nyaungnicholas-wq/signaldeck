@@ -926,5 +926,98 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("measured", out.stdout)
 
 
+class IntegrityLicenceWithholdingTest(unittest.TestCase):
+    """ops/data-integrity.json is public and its database counts are Alpaca-derived,
+    so write-integrity records only pass/fail facts unless SIGNALDECK_PUBLISH_DERIVED
+    is exactly 1, and check reads those facts without weakening a rule."""
+
+    def setUp(self) -> None:
+        self.fx = GateFixture()
+        self.fx.owner = self
+        self.addCleanup(self.fx.cleanup)
+
+    def withheld_snapshot(self, **delisting) -> dict:
+        snap = json.loads(json.dumps(CLEAN_INTEGRITY))
+        for k in ("universe_membership_rows",):
+            snap.pop(k)
+        snap["withheld"] = "licence"
+        snap["universe_membership_populated"] = True
+        snap["delisting"] = {"rate_at_or_above_floor": True, "floor_per_year": 0.02}
+        snap["delisting"].update(delisting)
+        return snap
+
+    def codes_for(self, snap: dict) -> set[str]:
+        self.fx.write_integrity(snap)
+        self.assertEqual(self.fx.run("build").returncode, 0)
+        return self.fx.codes()
+
+    def test_a_passing_withheld_snapshot_is_clean(self):
+        self.assertNotIn("data-integrity", self.codes_for(self.withheld_snapshot()))
+
+    def test_withheld_snapshot_still_fails_each_rule(self):
+        empty = self.withheld_snapshot()
+        empty["universe_membership_populated"] = False
+        self.assertIn("data-integrity", self.codes_for(empty))
+        self.assertIn("data-integrity", self.codes_for(self.withheld_snapshot(rate_at_or_above_floor=False)))
+        # A pass judged against a looser floor than the registry's is not a pass.
+        self.assertIn("data-integrity", self.codes_for(self.withheld_snapshot(floor_per_year=0.001)))
+        missing = self.withheld_snapshot()
+        missing.pop("universe_membership_populated")
+        self.assertIn("data-integrity", self.codes_for(missing))
+
+    def write_integrity(self, publish: str | None) -> dict:
+        import sqlite3
+        os.makedirs(self.fx.path("data"), exist_ok=True)
+        db = self.fx.path("data/signaldeck.db")
+        if not os.path.exists(db):
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE universe_membership (x)")
+            con.executemany("INSERT INTO universe_membership VALUES (?)", [(i,) for i in range(7)])
+            con.execute("CREATE TABLE symbols (market, delisted_at, added_at)")
+            old = int(datetime.now(timezone.utc).timestamp()) - 4 * 31557600
+            con.executemany("INSERT INTO symbols VALUES ('stocks', ?, ?)",
+                            [(1 if i < 3 else None, old) for i in range(10)])
+            con.commit()
+            con.close()
+        with open(self.fx.path("data/accuracy_registry.json"), "w", encoding="utf-8") as f:
+            json.dump({"status": "REFUSED", "generated": "2026-10-23T14:05:00",
+                       "refused_since": "2026-10-23T14:05:00", "rows": [],
+                       "refusal_reason": "publication gate: contains 15 collapsed "
+                                         "cross-section(s) of 35 day(s): 2026-10-01"}, f)
+        env = dict(os.environ)
+        env.pop("SIGNALDECK_PUBLISH_DERIVED", None)
+        if publish is not None:
+            env["SIGNALDECK_PUBLISH_DERIVED"] = publish
+        r = subprocess.run([sys.executable, GATE, "write-integrity", "--repo", self.fx.root],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(self.fx.path("ops/data-integrity.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_write_integrity_withholds_counts_without_exactly_1(self):
+        for publish in (None, "0", "true", " 1"):
+            with self.subTest(publish=publish):
+                snap = self.write_integrity(publish)
+                text = json.dumps(snap)
+                for leak in ("universe_membership_rows", "stocks_total", "stocks_delisted",
+                             "rate_per_year", "collapsed", "35 day"):
+                    self.assertNotIn(leak, text, f"withheld snapshot carries {leak}")
+                self.assertTrue(snap["withheld"])
+                self.assertIs(snap["universe_membership_populated"], True)
+                self.assertIs(snap["delisting"]["rate_at_or_above_floor"], True)
+                self.assertEqual(snap["grader"]["status"], "REFUSED")
+                self.assertTrue(snap["grader"]["refusal_reason"].startswith("publication gate:"))
+                # The gate reads it: data-integrity passes on the withheld facts.
+                self.assertEqual(self.fx.run("build").returncode, 0)
+                self.assertNotIn("data-integrity", self.fx.codes())
+
+    def test_write_integrity_with_permission_records_the_counts(self):
+        snap = self.write_integrity("1")
+        self.assertEqual(snap["universe_membership_rows"], 7)
+        self.assertEqual(snap["delisting"]["stocks_delisted"], 3)
+        self.assertNotIn("withheld", snap)
+        self.assertIn("collapsed", snap["grader"]["refusal_reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -631,9 +631,15 @@ class TestSurvivorshipWording(unittest.TestCase):
 
     def test_effect_line_no_longer_calls_every_inactive_name_dead(self):
         with TmpRepo() as t:
+            # The full revalidation snapshot is read from beside the registry
+            # (data/); the committed ops/ copy is a figure-free licence stamp.
+            with open(os.path.join(os.path.dirname(t.registry), "revalidation-status.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump({"generated": "2026-10-01T10:20:22+00:00",
+                           "arms": {"active_only": {"accuracy": 0.84, "n": 100},
+                                    "survivorship_clean": {"accuracy": 0.83, "n": 120}}}, f)
             out = self._gen(t)
-            if "measured effect" not in out:
-                self.skipTest("ops/revalidation-status.json carries no arms")
+            self.assertIn("measured effect", out)
             self.assertNotIn("INFLATED by excluding dead names", out)
             self.assertIn("mixes watch-set selection with survivorship", out)
 

@@ -509,10 +509,19 @@ if [ -n "$refusal_reason" ]; then
     rm -f "$PREV"
   fi
 
-  refusal_text=$("$PY" - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" <<'PY'
+  # LICENCE GATE, refusal side (23 Oct 2026). The envelope below always goes to
+  # data/accuracy_registry.json (gitignored). README.md is public, and the
+  # refusal notice quotes the reason (a collapse refusal carries day counts) and
+  # grade ages, so it is written only with SIGNALDECK_PUBLISH_DERIVED=1 -- the
+  # same exact-"1" switch as the success path. Otherwise README gets the
+  # licence-withheld section from live_accuracy.py --readme, which reads nothing.
+  publish_derived=0
+  [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ] && publish_derived=1
+  refusal_text=$("$PY" - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" "$publish_derived" <<'PY'
 import datetime as dt, json, pathlib, re, sys
 
 sd, out_p, err_p, reason = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+publish = sys.argv[5] == "1"
 now = dt.datetime.now()
 
 try:
@@ -599,14 +608,18 @@ elif "## Run it" in text:
     new = text.replace("## Run it", block + "\n\n## Run it", 1)
 else:
     new = text.rstrip() + "\n\n" + block + "\n"
-if new != text:
+if publish and new != text:
     readme_path.write_text(new)
 
 print(f"ACCURACY GRADING REFUSED ({reason}). Last successful grade {graded_at or 'never'} "
-      f"({age} old). README accuracy tables removed; no numbers published.")
+      f"({age} old). " + ("README accuracy tables removed; no numbers published." if publish else
+      "README left to the licence-withheld section (SIGNALDECK_PUBLISH_DERIVED is not 1)."))
 PY
 )
   { echo "ACCURACY REGISTRY REFUSED:"; echo "$refusal_text"; } >> "$LOG"
+  if [ "$publish_derived" != 1 ]; then
+    "$PY" "$SD/tools/live_accuracy.py" --readme >> "$LOG" 2>&1       || echo "WARN: README.md not reset to the licence-withheld section on the refusal path" >> "$LOG"
+  fi
 
   # THE REFUSAL HAS TO REACH EVERY SURFACE, NOT JUST README.
   #
@@ -640,7 +653,14 @@ PY
   #
   # Same WARN-not-fatal treatment as its siblings above: this reads the multi-GB
   # database, and a slow or failed read must not wedge the grader.
-  "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+  # Licence: §8's measurements come from the Alpaca-derived database, so the
+  # deck is re-injected only with SIGNALDECK_PUBLISH_DERIVED=1, as on the
+  # success path.
+  if [ "$publish_derived" = 1 ]; then
+    "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+  else
+    echo "licence: STRATEGY_DECK.md section 8 not re-injected on the refusal path (Alpaca-derived; SIGNALDECK_PUBLISH_DERIVED=1 only with Alpaca's written permission)." >> "$LOG"
+  fi
 
   # The snapshot docs_gate reads. Regenerated on BOTH paths so it states what
   # the grader actually did; left stale it asserted grader OK for 37 days while
@@ -683,7 +703,10 @@ fi
 # and forbids publishing, derivations included. They are regenerated only when
 # the operator records Alpaca's written permission with
 # SIGNALDECK_PUBLISH_DERIVED=1. The registry itself (data/, gitignored) is still
-# graded and written above, and the refusal path never publishes a number.
+# graded and written above. The REFUSAL PATH reads the same exact-"1" switch: with
+# it off, README gets the licence-withheld section and §8 is not re-injected.
+# ops/data-integrity.json is written on both paths by docs_gate write-integrity,
+# which withholds its database counts under the same switch.
 docs_stale=0
 if [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ]; then
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the

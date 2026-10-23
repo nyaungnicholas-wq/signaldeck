@@ -110,9 +110,27 @@ def main(status_path: str = STATUS) -> int:
     age = max(age, 0.0)
     if age > MAX_AGE_DAYS:
         print(f"FAIL: the structural revalidation is {age:.1f} days old "
-              f"(limit {MAX_AGE_DAYS}). Re-run it and commit "
-              f"ops/revalidation-status.json.", file=sys.stderr)
+              f"(limit {MAX_AGE_DAYS}). Re-run ops/revalidate-structural.sh -force and "
+              f"commit ops/revalidation-status.json (a figure-free stamp unless "
+              f"SIGNALDECK_PUBLISH_DERIVED=1).", file=sys.stderr)
         return 1
+
+    # LICENCE (23 Oct 2026): while SIGNALDECK_PUBLISH_DERIVED is not 1 the
+    # committed file is a figure-free stamp (ops/revalidate-structural.sh). Its
+    # age is the gate in CI. Where the full snapshot it names exists (the
+    # operator's machine) that snapshot is checked too, and its figures are
+    # printed only there.
+    if d.get("withheld"):
+        if "arms" in d:
+            print(f"FAIL: {rel} says its figures are withheld but carries arms. "
+                  f"A withheld stamp must not carry the figures.", file=sys.stderr)
+            return 1
+        print(f"OK: revalidation {age:.1f}d old ({gen}); figures withheld (licence)")
+        full = os.path.join(REPO, str(d.get("full_snapshot") or ""))
+        if d.get("full_snapshot") and os.path.isfile(full) \
+                and os.path.abspath(full) != os.path.abspath(status_path):
+            return main(full)
+        return 0
 
     arms = d.get("arms") or {}
     active = (arms.get("active_only") or {}).get("accuracy")
@@ -221,6 +239,17 @@ def _selfcheck() -> None:
                           '{"active_only":{"accuracy":NaN},'
                           '"survivorship_clean":{"accuracy":0.85}}}')
         assert rc == 1 and "unreadable" in err, err
+
+        # (g) a licence-withheld stamp: fresh passes without arms and prints no
+        # figure; stale still fails; a stamp that carries arms is refused.
+        stamp = {"generated": _ago(1), "withheld": "licence",
+                 "full_snapshot": "data/does-not-exist.json"}
+        rc, out, err = _run(tmp, "g.json", json.dumps(stamp))
+        assert rc == 0 and "withheld" in out and "%" not in out, (rc, out, err)
+        rc, _, err = _run(tmp, "g2.json", json.dumps(dict(stamp, generated=_ago(MAX_AGE_DAYS + 1))))
+        assert rc == 1 and "days old" in err, err
+        rc, _, err = _run(tmp, "g3.json", json.dumps(dict(stamp, **json.loads(_snapshot(_ago(1))))))
+        assert rc == 1 and "must not carry the figures" in err, err
 
         # (f) missing file
         out, err = io.StringIO(), io.StringIO()
