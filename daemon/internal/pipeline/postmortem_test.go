@@ -154,6 +154,41 @@ func TestPostmortemWorker_IgnoresStoredVIX(t *testing.T) {
 	}
 }
 
+// LLM headline sentiment was retired 23 Oct 2026 (NVIDIA trial terms). A
+// strongly rated headline against the call, inside the miss window, must not
+// stamp news_shock onto the miss.
+func TestPostmortemWorker_IgnoresRatedNews(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "pmnews.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close() //nolint:errcheck
+	sym, _ := st.UpsertSymbol(ctx, "DDD", md.Stocks, "")
+	if err := st.InsertNews(ctx, store.NewsItem{ID: "n1", SymbolID: sym.ID, Ts: 1500, Headline: "h"}); err != nil {
+		t.Fatalf("news: %v", err)
+	}
+	if err := st.RateNews(ctx, "n1", "negative", -0.9, "r"); err != nil {
+		t.Fatalf("rate: %v", err)
+	}
+	if err := st.UpsertPrediction(ctx, store.Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: 1000,
+		RawProb: 0.72, CalProb: 0.72, NUsed: 40, Components: `{"PressureScore":0.4}`}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 1000, -0.03); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	w := NewPostmortemWorker(st)
+	w.Now = func() time.Time { return time.Unix(5000, 0) }
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	recent, err := st.RecentPostmortems(ctx, 10)
+	if err != nil || len(recent) != 1 || recent[0].Primary == string(postmortem.ReasonNewsShock) {
+		t.Fatalf("want one miss not attributed to news_shock, got %+v (err %v)", recent, err)
+	}
+}
+
 // CAL-N: a calibration bucket's rate is trusted only over minBucket pairs on
 // minBucketDays distinct days; forty symbols on one day are one market move.
 func TestCalibBucketsNeedDistinctDays(t *testing.T) {
