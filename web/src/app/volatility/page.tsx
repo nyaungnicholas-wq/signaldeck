@@ -3,6 +3,7 @@ import Link from "next/link";
 import WithheldNotice from "@/components/Withheld";
 import { verdictTone } from "@/lib/riskHeadline";
 import { parseWithheld, type Withheld } from "@/lib/withheld";
+import { daemonFetch } from "@/lib/demoUpstream";
 
 /**
  * The live record of the HAR volatility forecast, for a reader with no
@@ -68,7 +69,7 @@ async function loadRecord(): Promise<Record | Withheld | null> {
     // may read this record, everyone else is answered 451 by the daemon.
     const cookie = (await cookies()).toString();
     // Bounded: a hung (not refused) daemon must not pin this server render forever.
-    const res = await fetch(`${daemon}/api/vol-forecast/record`, {
+    const res = await daemonFetch(`${daemon}/api/vol-forecast/record`, {
       cache: "no-store",
       headers: cookie ? { cookie } : undefined,
       signal: AbortSignal.timeout(15_000),

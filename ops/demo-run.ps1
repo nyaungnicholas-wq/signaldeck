@@ -37,14 +37,28 @@ $State = Join-Path $env:TEMP 'signaldeck-demo'
 $PidFile = Join-Path $State 'pids.json'
 $Marker = 'synthetic values for illustration, not market data'
 
+# pids.json outlives a crash or a reboot and Windows reuses process ids, so a
+# recorded id can now be anything, on this host the live daemon, web or tunnel.
+# Only a process whose command line is still the demo's own is stopped.
 function Stop-Demo {
     if (Test-Path -LiteralPath $PidFile) {
         $pids = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
-        foreach ($p in @($pids.stub, $pids.web)) {
-            if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+        $own = @{
+            stub = ('demo_daemon\.py.*--port\s+{0}\b' -f [int]$pids.stubPort)
+            web  = ('node_modules\\next\\dist\\bin\\next.*\s-p\s+{0}\b' -f [int]$pids.webPort)
+        }
+        foreach ($k in 'stub', 'web') {
+            $p = [int]$pids.$k
+            if (-not $p) { continue }
+            $cl = (Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue).CommandLine
+            if ($cl -and $cl -match $own[$k]) {
+                Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+                Write-Host ("demo {0} stopped (pid {1})" -f $k, $p)
+            } else {
+                Write-Host ("demo {0} pid {1} is not the demo any more (gone, or reused by another process); left alone" -f $k, $p)
+            }
         }
         Remove-Item -LiteralPath $PidFile -Force
-        Write-Host ("demo stopped (pids {0}, {1})" -f $pids.stub, $pids.web)
     } else {
         Write-Host 'no demo is recorded as running'
     }

@@ -24,6 +24,7 @@ import Withheld from "@/components/Withheld";
 import type { Withheld as WithheldInfo } from "@/lib/withheld";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
+import { daemonFetch, isUsableRegistry } from "@/lib/demoUpstream";
 
 export const dynamic = "force-dynamic";
 
@@ -115,7 +116,9 @@ async function loadRegistry(): Promise<Registry | null> {
     path.resolve(process.cwd(), "data", "accuracy_registry.json"),
   ]) {
     try {
-      return JSON.parse(await fs.readFile(p, "utf8")) as Registry;
+      const reg: unknown = JSON.parse(await fs.readFile(p, "utf8"));
+      // A demo build reads only the demo stub's registry, never a checkout's real one.
+      if (isUsableRegistry(reg)) return reg as Registry;
     } catch {
       /* try the next location */
     }
@@ -373,7 +376,7 @@ async function loadPublicationStatus(): Promise<{
     // and deliberately avoids. Not signed in => 401 => the refusal path, which
     // is the honest answer.
     const cookie = (await cookies()).toString();
-    res = await fetch(`${daemon}/api/accuracy`, {
+    res = await daemonFetch(`${daemon}/api/accuracy`, {
       cache: "no-store",
       headers: cookie ? { cookie } : undefined,
       // Unbounded until 2026-10-01: a daemon slowed by a restart held this

@@ -13,6 +13,7 @@ import SignupCTA from "@/components/landing/SignupCTA";
 import Withheld from "@/components/Withheld";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import { parseWithheld } from "@/lib/withheld";
+import { daemonFetch } from "@/lib/demoUpstream";
 import "@/components/landing/landing.css";
 
 /**
@@ -91,7 +92,7 @@ type Envelope = {
 async function loadLive(): Promise<Live> {
   let res: Response;
   try {
-    res = await fetch(`${DAEMON}/api/accuracy`, {
+    res = await daemonFetch(`${DAEMON}/api/accuracy`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
       // Bounded: a hung daemon must not pin this server render forever. 6s,
@@ -143,7 +144,7 @@ type Chain = {
 
 async function loadChain(): Promise<Chain | null> {
   try {
-    const res = await fetch(`${DAEMON}/api/prereg`, {
+    const res = await daemonFetch(`${DAEMON}/api/prereg`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(6_000), // see loadLive

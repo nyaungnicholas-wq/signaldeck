@@ -8,6 +8,8 @@
 // pass through untouched.
 
 import type { NextRequest } from "next/server";
+// Relative with the extension so node --test can load this route (demoUpstream.test.mjs).
+import { isNotDemoData, NOT_DEMO_DATA } from "../../../lib/demoUpstream.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +162,12 @@ async function proxy(
     const why = err instanceof Error ? err.name : "error";
     console.error(`[api-proxy] ${req.method} ${upstreamPath} failed: ${why}${typeof cause === "string" ? ` (${cause})` : ""}`);
     return Response.json({ error: "daemon unreachable" }, { status: 502 });
+  }
+  // A demo build passes on only the demo stub's answers (lib/demoUpstream).
+  if (isNotDemoData(res)) {
+    await res.body?.cancel();
+    console.error(`[api-proxy] ${req.method} ${upstreamPath}: ${NOT_DEMO_DATA}, refused in a demo build`);
+    return Response.json({ error: NOT_DEMO_DATA }, { status: 502 });
   }
 
   const out = new Headers();

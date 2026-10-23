@@ -128,15 +128,53 @@ try {
   Check 'web/next.config.ts banner contains the guard marker' ($cfg.Contains($DemoBannerMarker))
 } catch { Check ("case 10 threw: " + $_.Exception.Message) $false }
 
-# Case 11: wiring: web-release.ps1 contains the guard logic
+# Cases 11-13 RUN the refusals (Fail exits the process, so each runs in a child).
+$Rel = Join-Path $PSScriptRoot 'web-release.ps1'
+function RunPs([string[]]$PsArgs) {
+  $ErrorActionPreference = 'Continue'
+  $out = & (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive @PsArgs 2>&1 | Out-String
+  return [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
+}
+function RunGate([string]$dir) {
+  RunPs @('-Command', (". '{0}' -SelfTestOnly -LogPath '{1}'; Assert-NotDemoBuild '{2}'" -f $Rel, (Join-Path $root 'gate.log'), $dir))
+}
+
+# Case 11: the gate itself stops on a demo build and passes a clean one
 try {
-  $rel = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'web-release.ps1'))
-  Check 'web-release.ps1 contains Find-DemoDataBuild $CandidateDir' ($rel.Contains('Find-DemoDataBuild $CandidateDir'))
-  Check 'web-release.ps1 contains if ($demo.Hits.Count -gt 0)' ($rel.Contains('if ($demo.Hits.Count -gt 0)'))
-  Check 'web-release.ps1 contains if ($env:NEXT_PUBLIC_DEMO_DATA)' ($rel.Contains('if ($env:NEXT_PUBLIC_DEMO_DATA)'))
+  $g = RunGate (NewBuild 'gate-demo' @{ 'server\app\index.html' = ('<div>' + $banner + '</div>') })
+  Check ("Assert-NotDemoBuild stops a demo build (exit {0})" -f $g.Code) ($g.Code -eq 1 -and $g.Out.Contains('RELEASE ABORTED: the candidate is a DEMO-DATA build'))
+  $g = RunGate (NewBuild 'gate-clean' @{ 'server\app\index.html' = '<html></html>' })
+  Check ("Assert-NotDemoBuild passes a clean build (exit {0})" -f $g.Code) ($g.Code -eq 0 -and $g.Out.Contains('demo-data gate PASSED (1 files scanned)'))
 } catch { Check ("case 11 threw: " + $_.Exception.Message) $false }
 
-# Case 12: real demo build, only if it exists
+# Case 12: wiring, read from the parsed script (comments are not in it): one
+# unconditional Assert-NotDemoBuild $CandidateDir after the build, before promotion
+try {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Rel, [ref]$null, [ref]$null)
+  $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+  $call = @($cmds | Where-Object { $_.GetCommandName() -eq 'Assert-NotDemoBuild' })
+  $at = { param($name) @($cmds | Where-Object { $_.GetCommandName() -eq $name })[0].Extent.StartOffset }
+  $flow = $true
+  if ($call.Count -eq 1) {
+    for ($n = $call[0].Parent; $n; $n = $n.Parent) { if ($n.GetType().Name -notin 'PipelineAst', 'StatementBlockAst', 'TryStatementAst', 'NamedBlockAst', 'ScriptBlockAst') { $flow = $false } }
+  }
+  Check 'web-release.ps1 calls Assert-NotDemoBuild $CandidateDir once, unconditionally' ($call.Count -eq 1 -and $flow -and $call[0].CommandElements[1].Extent.Text -eq '$CandidateDir')
+  Check '... after npm run build and before promotion' ($call.Count -eq 1 -and $call[0].Extent.StartOffset -gt (& $at 'npm') -and $call[0].Extent.StartOffset -lt (& $at 'Stop-ScheduledTask'))
+} catch { Check ("case 12 threw: " + $_.Exception.Message) $false }
+
+# Case 13: the real script refuses NEXT_PUBLIC_DEMO_DATA before building. npm,
+# node and git are taken off PATH so a broken refusal fails fast, never builds.
+$was = @{ PATH = $env:PATH; DEMO = $env:NEXT_PUBLIC_DEMO_DATA }
+try {
+  $env:NEXT_PUBLIC_DEMO_DATA = '1'
+  $env:PATH = "$env:SystemRoot\System32;$PSHOME"
+  $live = RunPs @('-File', $Rel, '-BuildOnly', '-LogPath', (Join-Path $root 'live.log'))
+  Check ("web-release.ps1 -BuildOnly with NEXT_PUBLIC_DEMO_DATA=1 aborts (exit {0})" -f $live.Code) ($live.Code -eq 1 -and $live.Out.Contains('RELEASE ABORTED: NEXT_PUBLIC_DEMO_DATA is set'))
+  Check '... before it builds anything' (-not $live.Out.Contains('building into'))
+} catch { Check ("case 13 threw: " + $_.Exception.Message) $false }
+finally { $env:PATH = $was.PATH; $env:NEXT_PUBLIC_DEMO_DATA = $was.DEMO }
+
+# Case 14: real demo build, only if it exists
 try {
   $demoDir = Join-Path (Get-Location) 'web\.next-demo'
   if (Test-Path -LiteralPath $demoDir) {
@@ -145,7 +183,7 @@ try {
   } else {
     Write-Host '  skip web\.next-demo not built (run ops\demo-run.ps1 -BuildOnly to include it)'
   }
-} catch { Check ("case 12 threw: " + $_.Exception.Message) $false }
+} catch { Check ("case 14 threw: " + $_.Exception.Message) $false }
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 

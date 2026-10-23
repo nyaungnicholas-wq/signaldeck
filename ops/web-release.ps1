@@ -108,6 +108,16 @@ function Find-DemoDataBuild([string]$Dir) {
     return [pscustomobject]@{ Scanned = $files.Count; Hits = $hits }
 }
 
+# The demo-data GATE: stops the release (Fail exits 1) when $Dir is a demo build.
+# A function so ops/test-web-release-demo-guard.ps1 can run the refusal itself.
+function Assert-NotDemoBuild([string]$Dir) {
+    $demo = Find-DemoDataBuild $Dir
+    if ($demo.Hits.Count -gt 0) {
+        Fail ("the candidate is a DEMO-DATA build (synthetic values, banner on every page): {0} of {1} files carry the banner, first {2}. Find NEXT_PUBLIC_DEMO_DATA in the environment or a web\.env* file and remove it." -f $demo.Hits.Count, $demo.Scanned, $demo.Hits[0])
+    }
+    Write-Log ("demo-data gate PASSED ({0} files scanned)" -f $demo.Scanned)
+}
+
 if ($SelfTestOnly) { return }
 
 if (-not (Test-Path -LiteralPath (Join-Path $Web 'package.json'))) {
@@ -182,11 +192,7 @@ try {
 
     # 3b - DEMO-DATA GATE. The env check above misses a flag set in a web\.env*
     # file, which next build also reads; the built output cannot lie about it.
-    $demo = Find-DemoDataBuild $CandidateDir
-    if ($demo.Hits.Count -gt 0) {
-        Fail ("the candidate is a DEMO-DATA build (synthetic values, banner on every page): {0} of {1} files carry the banner, first {2}. Find NEXT_PUBLIC_DEMO_DATA in the environment or a web\.env* file and remove it." -f $demo.Hits.Count, $demo.Scanned, $demo.Hits[0])
-    }
-    Write-Log ("demo-data gate PASSED ({0} files scanned)" -f $demo.Scanned)
+    Assert-NotDemoBuild $CandidateDir
 
     # 4 - ASSET GATE. Serve the candidate on a spare port and make it prove it
     # can produce every chunk and font its own markup names.
