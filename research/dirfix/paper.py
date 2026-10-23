@@ -33,7 +33,12 @@ import pandas as pd
 import lab
 import search
 
-LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_ledger.jsonl")
+# The ledger stamps Alpaca closing prices (entry_close, exit_close), which may not be
+# published, so it lives in the gitignored data/ dir. Until 2026-10-23 it was committed
+# at research/dirfix/paper_ledger.jsonl; restore that copy byte-identical with
+#   git show 2970a6a8:research/dirfix/paper_ledger.jsonl > data/dirfix_paper_ledger.jsonl
+LEDGER = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                      "data", "dirfix_paper_ledger.jsonl")
 
 # Config chosen by pick_best.py on the FUND-FREE panel, search period only.
 # It did NOT clear the pre-set bar (t_NW 1.66 < 2.0) and carries beta -0.41, so

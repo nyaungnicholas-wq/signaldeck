@@ -192,6 +192,25 @@ else
 fi
 rm -rf "$d6"
 
+# ── Case 7: a tracked JSON record carrying a raw closing price. The scan
+#    used to look at .db/.sqlite/.csv/.parquet paths only and printed SAFE TO
+#    PUBLISH over research/dirfix/paper_ledger.jsonl's 40 entry_close values.
+d7=$(mktemp -d)
+init_repo "$d7"
+mkdir -p "$d7/research"
+printf '%s\n' '{"entry_day": "2026-08-14", "symbol": "LQD", "entry_close": 106.12}' > "$d7/research/ledger.jsonl"
+printf '%s\n' '{"name": "fixture", "price_note": "no number here", "count": 3}' > "$d7/config.json"
+git -C "$d7" add -A && git -C "$d7" commit -q -m "add a ledger"
+out7=$(run_scan "$d7"); rc7=$?
+if [ "$rc7" -ne 0 ] && printf '%s' "$out7" | grep -q "research/ledger.jsonl" \
+   && ! printf '%s' "$out7" | grep -q "^      config.json"; then
+  check_pass "tracked JSON with a price-shaped value: scan FAILS and names only that file"
+else
+  check_fail "tracked JSON with a price-shaped value: expected nonzero exit naming research/ledger.jsonl, got exit=$rc7"
+  printf '%s\n' "$out7" | sed 's/^/      /'
+fi
+rm -rf "$d7"
+
 note ""
 note "pre-publish-scan self-test: $pass passed, $fail failed"
 exit "$([ "$fail" -eq 0 ] && echo 0 || echo 1)"

@@ -194,21 +194,39 @@ else
 fi
 
 say "── 3. Provider data ───────────────────────────────────────────────────"
-# Raw records are the licensed thing; derived analytics are explicitly fine
-# (see DATA_SOURCES.md). Committed .db/.csv files are the usual accident.
+# Raw records are the licensed thing, and since 23 Oct 2026 Alpaca-derived
+# analytics are not publishable either without Alpaca's written permission
+# (DATA_SOURCES.md; SIGNALDECK_PUBLISH_DERIVED). Committed .db/.csv files are
+# the usual accident.
 #
 # This is a REVIEW flag, not a hard failure, and the distinction matters: a
 # scan that fails on every CSV gets ignored within a week, and an ignored scan
 # is worse than no scan. Known-benign example: the prune audit log holds symbol
 # IDs and tickers, which are public facts, not provider records.
-data_hits=$(printf '%s\n' "$tracked" | grep -iE '\.(db|sqlite3?|csv|parquet)$' | head -10)
+data_hits=$(printf '%s\n' "$tracked" | grep -iE '\.(db|sqlite3?|csv|parquet|jsonl)$' | head -10)
 if [ -n "$data_hits" ]; then
   say "  ! data files are tracked — eyeball each against DATA_SOURCES.md."
-  say "    Bars, quotes and news bodies are licensed and may NOT be published."
-  say "    Tickers, symbol ids and aggregate statistics are fine."
+  say "    Bars, quotes and news bodies are licensed and may NOT be published,"
+  say "    and neither may statistics derived from Alpaca data without Alpaca's"
+  say "    written permission. Tickers and symbol ids are fine."
   printf '%s\n' "$data_hits" | sed 's/^/      /'
 else
   ok "no data files tracked"
+fi
+
+# A HARD failure, unlike the review flag above: a tracked JSON record with a
+# price-shaped key holding a number is a raw vendor price whatever the file is
+# called. research/dirfix/paper_ledger.jsonl carried 40 Alpaca closing prices
+# (entry_close) while this scan printed SAFE TO PUBLISH, because it looked only
+# at .db/.sqlite/.csv/.parquet paths.
+price_hits=$(printf '%s\n' "$tracked" | grep -iE '\.(json|jsonl|ndjson)$' | while IFS= read -r f; do
+  [ -f "$f" ] && grep -lE '"(entry_close|exit_close|close|open|high|low|vwap|bid|ask|last_price|price)"[[:space:]]*:[[:space:]]*-?[0-9]' "$f" 2>/dev/null
+done | head -10)
+if [ -n "$price_hits" ]; then
+  bad "tracked JSON records carry price-shaped values (raw provider data; never publishable):"
+  printf '%s\n' "$price_hits" | sed 's/^/      /'
+else
+  ok "no price-shaped values in tracked JSON records"
 fi
 
 say "── 4. Working tree ────────────────────────────────────────────────────"
@@ -238,9 +256,11 @@ fi
 say ""
 if [ "$fail" = "0" ]; then
   say "SAFE TO PUBLISH — secrets (working tree + history) and raw-data checks passed."
-  say "Still your call: derived analytics may be published freely, raw provider"
-  say "records may not. Quoting ledger rows or bars in a writeup is the case to"
-  say "think about; aggregate statistics are not."
+  say "Still your call: Alpaca-derived analytics (forecasts, grades, accuracy and"
+  say "other statistics) may not be published without Alpaca's written permission"
+  say "(SIGNALDECK_PUBLISH_DERIVED), and raw provider records may not be published"
+  say "at all. This scan does not read figures in prose; DATA_SOURCES.md names what"
+  say "the repository still carries."
 else
   say "DO NOT PUBLISH — fix the ✗ items above first."
 fi
