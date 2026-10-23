@@ -1,5 +1,6 @@
-import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from "./freshness";
-import { untilWarm } from "./warming";
+import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from "./freshness.ts";
+import { untilWarm } from "./warming.ts";
+import { parseWithheld, WITHHELD_NOTICES, type Withheld } from "./withheld.ts";
 
 // Typed client for the SignalDeck API. Every page goes through this module.
 // Default is same-origin ("") — the Next.js app proxies /api/* to the daemon
@@ -14,22 +15,39 @@ export const API_BASE = process.env.NEXT_PUBLIC_SIGNALDECK_API ?? "";
  *  as "is the daemon running?" — a question about a daemon that had just
  *  answered. `message` is the daemon's own `error` string, never a JSON dump. */
 export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-    /** The daemon's raw `error` string, e.g. "warming". */
-    readonly code?: string,
-    /** Retry-After in ms, when the daemon sent one. */
-    readonly retryAfterMs?: number,
-  ) {
+  // Plain fields, not constructor parameter properties: node --test strips
+  // types but cannot transform parameter properties, and the 451 tests import
+  // this module directly.
+  readonly status: number;
+  /** The daemon's raw `error` string, e.g. "warming" or "withheld". */
+  readonly code?: string;
+  /** Retry-After in ms, when the daemon sent one. */
+  readonly retryAfterMs?: number;
+  /** Set only for a 451 licence withholding; then `message` is its notice. */
+  readonly withheld?: Withheld;
+  constructor(status: number, message: string, code?: string, retryAfterMs?: number, withheld?: Withheld) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.retryAfterMs = retryAfterMs;
+    this.withheld = withheld;
   }
+}
+
+export { WITHHELD_HREF, withheldFromMessage, type Withheld } from "./withheld.ts";
+
+/** The licence withholding an error carries (HTTP 451), or null. Distinct from
+ *  401/403 (who you are) and 503 (the daemon is busy): the daemon answered and
+ *  will answer the same on every retry, so a caller renders <Withheld>, never a
+ *  retry button or an outage sentence. */
+export function withheldOf(e: unknown): Withheld | null {
+  return e instanceof ApiError && e.withheld ? e.withheld : null;
 }
 
 // 503 "warming" handling lives in ./warming (loadable by node --test); get()
 // below waits it out for every caller.
-export { isWarming, untilWarm } from "./warming";
+export { isWarming, untilWarm } from "./warming.ts";
 
 /** The licence guard refusing to redistribute raw bars (daemon returns 451).
  *  Deterministic for a given deployment — retrying never changes it, so a
@@ -45,14 +63,10 @@ export function isAuthError(e: unknown): boolean {
 }
 
 /** ONE user-facing wording for that refusal, shared by every chart surface.
- *  The daemon's own notice is written for an operator — it names the env var
- *  to flip — so it must not be shown to a reader; this is the reader's version.
- *  Kept in one place for the same reason the daemon keeps the guard in one
- *  function: two copies of a legal explanation drift, one cannot. */
-export const LICENCE_REFUSAL_TEXT =
-  "Raw price bars are licensed by the market-data provider and cannot be " +
-  "redistributed, so this deployment does not serve them. Every derived signal " +
-  "here — regimes, forecasts, risk — is computed from them and is unaffected.";
+ *  It is the withholding contract's own Alpaca notice (lib/withheld). It used
+ *  to add that every derived signal "is unaffected", which stopped being true
+ *  on 23 October 2026: derived forecasts and statistics are withheld too. */
+export const LICENCE_REFUSAL_TEXT = WITHHELD_NOTICES.alpaca;
 
 import type { CallDirection, Journal, JournalPick } from "@/lib/journal";
 import type { AskAnswer, AskStatus } from "@/lib/ask";
@@ -311,12 +325,17 @@ async function get<T>(path: string, onWarming?: () => void): Promise<T> {
       // reader and the status adds nothing to it.
       let msg = `API ${res.status}: ${body || path}`;
       let code: string | undefined;
+      let parsed: { error?: string } | null = null;
       try {
-        const parsed = JSON.parse(body) as { error?: string };
+        parsed = JSON.parse(body) as { error?: string };
         if (parsed?.error) msg = code = parsed.error;
       } catch {
         /* not JSON — the raw text is the best message available */
       }
+      // 451 = licence withholding. Its message is the plain notice, never the
+      // body text or "withheld", and it is not a connectivity failure.
+      const withheld = parseWithheld(res.status, parsed);
+      if (withheld) throw new ApiError(res.status, withheld.notice, "withheld", undefined, withheld);
       // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
       // the daemon answered, just not with data. So did a "warming" 503.
       const warming = res.status === 503 && code === "warming";
@@ -372,6 +391,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     if (res.status >= 500) recordFailure();
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
+    const withheld = parseWithheld(res.status, err);
+    if (withheld) throw new ApiError(res.status, withheld.notice, "withheld", undefined, withheld);
     // ApiError, not Error: callers (login 429 countdown, auth checks) need the status.
     throw new ApiError(res.status, err?.error ?? `API ${res.status}`);
   }

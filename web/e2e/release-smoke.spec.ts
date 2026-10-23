@@ -124,6 +124,58 @@ const PREREG_FIXTURE = {
   ],
 };
 
+// The daemon's 451 contract (daemon/internal/api, web/src/lib/withheld.ts),
+// verbatim. A page must show these words, never an outage sentence.
+const ALPACA_NOTICE =
+  "Withheld: SignalDeck's prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only. They are shown only to the operator until Alpaca gives written permission.";
+const KADOA_NOTICE =
+  "Withheld: the congressional trading rows were compiled by Kadoa, whose terms do not permit sharing them without written permission. Collection has stopped and the stored rows are shown only to the operator.";
+
+const LEDGER_FIXTURE = {
+  intact: true,
+  count: 1234,
+  head: "abcdef0123456789abcdef",
+  incremental: true,
+  intactMeans: "The stored rows are internally consistent. That is not proof of when they were written.",
+  computedAt: "2026-10-23T09:00:00Z",
+};
+
+const ME = {
+  member: { id: 2, username: "member", isAdmin: false, member: true },
+  admin: { id: 1, username: "operator", isAdmin: true, member: false },
+} as const;
+
+/** Answer every browser /api/* read the way a published daemon answers a
+ *  non-operator: open routes get fixtures, the rest the 451 contract body. */
+async function withheldDaemon(page: Page, role: "anon" | "member" | "admin"): Promise<void> {
+  await page.route("**/api/**", (route) => {
+    const p = new URL(route.request().url()).pathname;
+    if (p === "/api/auth/me") {
+      return role === "anon"
+        ? route.fulfill({ status: 401, json: { error: "authentication required" } })
+        : route.fulfill({ json: ME[role] });
+    }
+    if (p.startsWith("/api/auth/")) return route.fulfill({ json: { ok: true } });
+    if (p === "/api/health") return route.fulfill({ json: { version: "smoke", uptimeS: 1, alpaca: true } });
+    if (p === "/api/prereg") return route.fulfill({ json: PREREG_FIXTURE });
+    if (p === "/api/ledger/verify") return route.fulfill({ json: LEDGER_FIXTURE });
+    if (p === "/api/watchlist") return route.fulfill({ json: [] });
+    if (p === "/api/ask") return route.fulfill({ status: 403, json: { error: "not available" } });
+    const source = p === "/api/congress" ? "kadoa" : "alpaca";
+    return route.fulfill({
+      status: 451,
+      json: { error: "withheld", reason: "licence", source, notice: source === "kadoa" ? KADOA_NOTICE : ALPACA_NOTICE },
+    });
+  });
+}
+
+async function expectNoOutageWording(page: Page): Promise<void> {
+  const body = page.locator("body");
+  for (const w of ["temporarily unavailable", "unreachable", "is the daemon running"]) {
+    await expect(body).not.toContainText(w, { ignoreCase: true });
+  }
+}
+
 test.describe("release smoke", () => {
   for (const path of PUBLIC_PATHS) {
     test(`${path} renders its own content, not the error boundary`, async ({ page }) => {
@@ -192,9 +244,24 @@ test.describe("release smoke", () => {
     const inUse = page.getByRole("region", { name: "data sources and third-party services" }).locator("p").first();
     // Positive first, so the negative checks below cannot pass on an empty page.
     await expect(inUse).toContainText("Alpaca Markets");
-    for (const retired of ["Kraken", "Coinbase", "Hyperliquid", "FINRA", "Cboe", "FRED"]) {
+    for (const retired of ["Kraken", "Coinbase", "Hyperliquid", "FINRA", "Cboe", "FRED", "Kadoa", "NVIDIA"]) {
       await expect(inUse).not.toContainText(retired);
     }
+  });
+
+  // The 23 October 2026 licence position, in the words a reader can hold us to.
+  // Every withheld notice links to #data-sources, so the anchor is part of it.
+  test("/terms states what is withheld, for whom, and why", async ({ page }) => {
+    await page.goto("/terms");
+    const body = page.locator("body");
+    await expect(body).toContainText("Draft, pending legal review");
+    await expect(body).toContainText("Last updated 23 October 2026");
+    const sources = page.locator("#data-sources");
+    await expect(sources).toHaveAttribute("aria-label", "data sources and third-party services");
+    await expect(sources).toContainText("withheld from everyone except the operator until Alpaca gives written permission");
+    await expect(sources).toContainText("member accounts see the same notice as visitors");
+    await expect(sources).toContainText("collection from Kadoa has stopped");
+    await expect(sources).toContainText("headlines are no longer sent to NVIDIA");
   });
 
   test("/privacy states backup encryption, the deletion record and its draft status", async ({ page }) => {
@@ -202,8 +269,64 @@ test.describe("release smoke", () => {
     const body = page.locator("body");
     await expect(body).toContainText("AES-256-GCM");
     await expect(body).toContainText("Draft, pending legal review");
+    await expect(body).toContainText("Last updated 23 October 2026");
     // The deletion record's own wording: "creation time" alone also matches the
     // collected-data table, so it would pass with the record misdescribed.
     await expect(body).toContainText("email address, username and creation time");
+    await expect(body).toContainText("withheld from everyone except the operator until Alpaca gives written permission");
+    await expect(body).toContainText("headlines are no longer sent to NVIDIA");
+  });
+
+  // ── THE WITHHELD STATE (HTTP 451, web/src/lib/withheld.ts) ────────────────
+  // Every browser read below is answered by withheldDaemon: the routes that
+  // stay open get fixtures, everything else gets the daemon's 451 contract
+  // body, exactly as a published deployment answers a non-operator. The
+  // server-rendered pages (/, /accuracy, /volatility) fetch the daemon from the
+  // Next server, which page.route cannot reach; scratch walks against a stub
+  // daemon cover those.
+  test("/proof shows the licence notice, not an outage, and keeps the chain", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "anon");
+    await page.goto("/proof");
+    const notice = page.getByTestId("withheld").first();
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute("data-source", "alpaca");
+    await expect(notice).toContainText(ALPACA_NOTICE);
+    await expect(notice.getByRole("link", { name: "Why this is withheld" })).toHaveAttribute("href", "/terms#data-sources");
+    // The parts that stay open still render: the registrations and the chain.
+    await expect(page.getByText("200-day moving average", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText("entries in chain")).toBeVisible();
+    await expectNoOutageWording(page);
+    await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
+    expect(crashes.join(" | ")).toBe("");
+  });
+
+  test("/today tells a member once, instead of four empty cards", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "member");
+    await page.goto("/today");
+    await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
+    const notice = page.getByTestId("withheld");
+    await expect(notice.first()).toBeVisible();
+    await page.waitForTimeout(SETTLE_MS);
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toContainText(ALPACA_NOTICE);
+    await expect(page.locator("body")).not.toContainText("proof data unavailable");
+    await expectNoOutageWording(page);
+    expect(crashes.join(" | ")).toBe("");
+  });
+
+  test("/intel/congress shows the Kadoa notice in place of the table", async ({ page }) => {
+    const crashes = watchForCrashes(page);
+    await withheldDaemon(page, "admin");
+    await page.goto("/intel/congress");
+    const notice = page.locator('[data-testid="withheld"][data-source="kadoa"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText(KADOA_NOTICE);
+    // No zeroed stat tiles and no empty table pretending nothing was disclosed.
+    await expect(page.getByText("Disclosures Shown")).toHaveCount(0);
+    await expect(page.getByText("No stored trades")).toHaveCount(0);
+    await expectNoOutageWording(page);
+    expect(crashes.join(" | ")).toBe("");
   });
 });

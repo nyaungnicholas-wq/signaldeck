@@ -62,9 +62,12 @@ export default function TermsPage() {
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
-          SignalDeck publishes statistical market forecasts and grades them in
-          public against rules registered before the results were known. We keep
-          a hash-chained public record of every published directional forecast.
+          SignalDeck makes statistical market forecasts and grades them against
+          rules registered before the results were known. The rules and a
+          hash-chained public record of every published directional forecast
+          stay public. Since 23 October 2026 the forecasts, grades and other
+          figures themselves are withheld from everyone except the operator,
+          for the reason given under Data sources below.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
@@ -174,14 +177,18 @@ export default function TermsPage() {
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
-          &ldquo;Ask the data&rdquo; is switched off for member accounts. If it
-          is ever switched on, it gives general information about the data on
-          the site, not personalised advice. Its answers are generated
-          automatically and may be wrong.
+          SignalDeck&rsquo;s AI features, including &ldquo;Ask the data&rdquo;,
+          ran on a model hosted by NVIDIA. As of the 23 October 2026 release
+          they are switched off for everyone, and so is the AI tagger that
+          marked news headlines as positive or negative: headlines are no
+          longer sent to NVIDIA. If an AI feature is ever switched on again, it
+          gives general information about the data on the site, not
+          personalised advice. Its answers are generated automatically and may
+          be wrong.
         </p>
       </section>
 
-      <section className="panel px-5 py-4" aria-label="data sources and third-party services">
+      <section id="data-sources" className="panel scroll-mt-20 px-5 py-4" aria-label="data sources and third-party services">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">
           Data sources and third-party services
         </h2>
@@ -199,11 +206,31 @@ export default function TermsPage() {
           className="text-[0.85rem] leading-relaxed max-w-prose"
           style={{ color: "var(--dim)" }}
         >
+          What is shown, as of 23 October 2026. Alpaca licenses its market data
+          and news for personal, non-commercial use and does not allow them, or
+          information derived from them, to be displayed publicly or passed on
+          without its written permission. SignalDeck&rsquo;s prices, forecasts,
+          accuracy figures and other statistics are derived from that data, so
+          they are withheld from everyone except the operator until Alpaca
+          gives written permission. Signing in does not change this: member
+          accounts see the same notice as visitors. The method, the
+          pre-registered rules and the hash-chained record of claims stay
+          public. Public-domain data, such as SEC EDGAR filings, is not covered
+          by Alpaca&rsquo;s licence.
+        </p>
+        <p
+          className="text-[0.85rem] leading-relaxed max-w-prose"
+          style={{ color: "var(--dim)" }}
+        >
           Congressional trades are disclosures made public under the STOCK
-          Act. We obtain them through third-party datasets: Kadoa&rsquo;s
-          public congress-trades file, and for older rows the House and
-          Senate Stock Watcher datasets. SignalDeck is free and
-          non-commercial: no ads, no fees and no sale of data.
+          Act. SignalDeck obtained them through third-party datasets:
+          Kadoa&rsquo;s congress-trades file, and for older rows the House and
+          Senate Stock Watcher datasets. Kadoa&rsquo;s terms do not permit
+          automated collection, or making its compilation available to others,
+          without written permission. As of 23 October 2026 collection from
+          Kadoa has stopped, and the rows already stored are shown only to the
+          operator. SignalDeck is free and non-commercial: no ads, no fees and
+          no sale of data.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"
@@ -223,6 +250,8 @@ export default function TermsPage() {
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           <li>the TradingView scanner and StockTwits (retired 21&ndash;22 October 2026);</li>
+          <li>Kadoa&rsquo;s congress-trades file (collection stopped 23 October 2026; the stored rows are withheld from everyone except the operator);</li>
+          <li>the NVIDIA-hosted AI features and the AI news-sentiment tagger (switched off as of the 23 October 2026 release; headlines are no longer sent to NVIDIA);</li>
           <li>crypto market data from Kraken, Coinbase and Hyperliquid (crypto paused since 22 October 2026; crypto history stays on the public record; open crypto direction forecasts were voided, never deleted; open crypto regime calls are marked ungradable when they fall due; nothing was deleted);</li>
           <li>FINRA short-sale data, Cboe put/call statistics and FRED economic data (retired 22 October 2026 after a data-licence review). Rows already stored from FINRA short-sale data and FRED still feed two pre-registered research tests until about 27 October 2026, when those tests&rsquo; 5-day freshness gates lapse; after that they are not used at all.</li>
         </ul>

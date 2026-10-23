@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, withheldFromMessage } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import {
   HORIZONS,
   JOURNAL_FOOTER,
@@ -363,7 +364,10 @@ export default function MemberJournal() {
         </div>
       )}
 
-      {loadErr ? (
+      {withheldFromMessage(loadErr) ? (
+        // Grades are measured against licensed market data (lib/withheld).
+        <Withheld notice={loadErr as string} source={withheldFromMessage(loadErr)?.source} title="Your calls" />
+      ) : loadErr ? (
         <div className="flex flex-wrap items-center gap-3">
           <p role="alert" className="m-0 text-[0.85rem]" style={{ color: "var(--ask)" }}>
             {loadErr}

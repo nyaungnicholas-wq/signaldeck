@@ -33,6 +33,7 @@ import {
   api,
   ApiError,
   LICENCE_REFUSAL_TEXT,
+  withheldFromMessage,
   candlePatterns,
   chartOverlays,
   pollMs,
@@ -82,6 +83,7 @@ import { StatTile } from "@/components/ui/Kit";
 import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import Withheld from "@/components/Withheld";
 
 const TF_LIMIT: Record<Tf, number> = { "1d": 365, "1h": 168, "1m": 390 };
 const TFS: Tf[] = ["1d", "1h", "1m"];
@@ -691,12 +693,13 @@ function OperatorSymbolPage({
         </div>
         <div className="p-2">
           {barsRefusedByLicence ? (
-            <div
-              className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]"
-              style={{ color: "var(--dim)" }}
-            >
-              <span style={{ color: "var(--text)" }}>Price chart unavailable on this deployment</span>
-              <span className="max-w-[46ch] leading-relaxed">{LICENCE_REFUSAL_TEXT}</span>
+            <div className="flex h-[420px] items-center justify-center px-4">
+              <Withheld
+                compact
+                title="Price chart"
+                notice={withheldFromMessage(barsErr)?.notice ?? LICENCE_REFUSAL_TEXT}
+                source={withheldFromMessage(barsErr)?.source ?? "alpaca"}
+              />
             </div>
           ) : barsErr ? (
             <div className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]" style={{ color: "var(--bad)" }}>

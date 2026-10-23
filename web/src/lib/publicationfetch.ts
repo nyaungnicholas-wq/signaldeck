@@ -8,7 +8,12 @@
 // timeouts in half an hour). It is not publishable either: only a 2xx carrying
 // status OK is.
 //
+// A 451 is a third fact: the daemon answered and is withholding the record
+// under a data licence (lib/withheld). Not an outage, not a grader refusal.
+//
 // Pure functions, no I/O, so node --test can exercise them.
+
+import { parseWithheld, type Withheld } from "./withheld.ts";
 
 export type Unavailable = { kind: "unavailable"; cause: "timeout" | "unreachable" | "http"; detail: string };
 
@@ -16,6 +21,7 @@ export type PublicationFetch =
   | { kind: "ok"; body: Record<string, unknown> }
   | { kind: "private" }
   | { kind: "refused"; status: string; reason?: string; gradedAt?: string; refusedSince?: string }
+  | ({ kind: "withheld" } & Withheld)
   | Unavailable;
 
 // Every refusal daemon/internal/api/accuracy.go emits. Anything else is not a
@@ -38,6 +44,8 @@ export function classifyPublicationFetch(
     };
   }
   if (res.status === 401 || res.status === 403) return { kind: "private" };
+  const withheld = parseWithheld(res.status, body);
+  if (withheld) return { kind: "withheld", ...withheld };
   const env =
     typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
   const status = env ? str(env.status) : undefined;

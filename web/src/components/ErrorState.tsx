@@ -1,5 +1,8 @@
 "use client";
 
+import Withheld from "@/components/Withheld";
+import { withheldFromMessage } from "@/lib/withheld";
+
 /** Shared fetch-failure panel: message, daemon hint, and an optional Retry button. */
 export default function ErrorState({
   message,
@@ -16,6 +19,10 @@ export default function ErrorState({
   hint?: string | null;
   className?: string;
 }) {
+  // A 451 licence withholding reaches most pages as e.message, i.e. its notice.
+  // It is not a failure: no red, no "on our side", no Retry (lib/withheld).
+  const withheld = withheldFromMessage(message);
+  if (withheld) return <Withheld notice={withheld.notice} source={withheld.source} className={className} />;
   // A symbol SignalDeck does not track is the reader's input, not an outage:
   // "on our side" plus a Retry button sent people waiting on a page that could
   // never load (/s/stocks/ZZZZQ, 2026-10-05 audit).

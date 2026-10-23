@@ -19,6 +19,7 @@ import {
   chartOverlays,
   isLicenceRefusal,
   LICENCE_REFUSAL_TEXT,
+  withheldOf,
   movers,
   type Bar,
   type ChartOverlayMarker,
@@ -128,7 +129,7 @@ export default function BigCandle({
         if (!alive) return;
         // A licence refusal is a permanent property of the deployment, not a
         // fault: it gets an explanation, never an outage hint or a retry.
-        if (isLicenceRefusal(e)) return setBarsState({ key, refused: LICENCE_REFUSAL_TEXT });
+        if (isLicenceRefusal(e)) return setBarsState({ key, refused: withheldOf(e)?.notice ?? LICENCE_REFUSAL_TEXT });
         setBarsState({ key, error: e instanceof Error ? e.message : String(e) });
       });
     return () => {

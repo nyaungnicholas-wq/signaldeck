@@ -20,6 +20,8 @@ import {
 import RefusalNotice from "@/components/RefusalNotice";
 import { bindingMismatch, labelOfPublished, unapprovedLabels, withheldHorizons } from "@/lib/accuracybinding";
 import { classifyPublicationFetch, unavailableReason } from "@/lib/publicationfetch";
+import Withheld from "@/components/Withheld";
+import type { Withheld as WithheldInfo } from "@/lib/withheld";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 
@@ -348,6 +350,8 @@ async function loadPublicationStatus(): Promise<{
   refusedSince?: string;
   rows: PublishedRow[];
   withheldHorizons?: string[];
+  /** 451: withheld under the data licence; the page ends before the registry file is read. */
+  licence?: WithheldInfo;
 }> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   let res: Response | null = null;
@@ -382,6 +386,10 @@ async function loadPublicationStatus(): Promise<{
   }
   const got = classifyPublicationFetch(res, body, error);
   switch (got.kind) {
+    case "withheld":
+      // Not an outage and not the grader's refusal: the daemon answered and
+      // withholds Alpaca-derived figures from everyone but the operator.
+      return { status: "PRIVATE", rows: [], licence: { source: got.source, notice: got.notice } };
     case "unavailable":
       // Unreachable daemon is not "no news". It is an unknown, and an unknown
       // about whether these numbers are current resolves to not publishing
@@ -427,6 +435,39 @@ type PublishedRow = {
 
 export default async function AccuracyPage() {
   const pub = await loadPublicationStatus();
+
+  // Withheld under the data licence. Checked FIRST and returns before
+  // loadRegistry: the registry file on disk holds the same figures, so reading
+  // it on this path would be a second door to them.
+  if (pub.licence) {
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+          <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            Every predictor, its claim, and what the live record supports, regraded daily against the
+            naive baseline on independent (symbol, horizon, trading day) observations, with failures
+            listed first. Descriptive, not advice.
+          </p>
+        </header>
+        <Withheld notice={pub.licence.notice} source={pub.licence.source} title="The registry" />
+        <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          How the grading works is unchanged and stays public: each claim, its baseline and its
+          minimum evidence were registered and hash-chained before any outcome existed, and a
+          predictor that loses to its baseline is retired by a rule written in advance. Those
+          registrations are readable on the{" "}
+          <Link href="/proof" style={{ color: "var(--accent)" }}>
+            receipts page
+          </Link>
+          . Every term is in the{" "}
+          <Link href="/glossary" style={{ color: "var(--accent)" }}>
+            glossary
+          </Link>
+          .
+        </p>
+      </div>
+    );
+  }
 
   // Fail closed. A refusal, or a daemon that cannot be reached, ends the page —
   // but they are different facts and are said differently: an outage is a

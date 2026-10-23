@@ -13,12 +13,16 @@ import {
   companiesList,
   structuralRegimes,
   volRegime,
+  withheldOf,
+  withheldFromMessage,
+  type Withheld as WithheldInfo,
   type CompanyDirRow,
   type MemberWatchRow,
   type StructRegimeForecast,
   type VolRegimeForecast,
 } from "@/lib/api";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import Withheld from "@/components/Withheld";
 import HelpTip from "@/components/HelpTip";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 
@@ -42,6 +46,9 @@ export default function MemberWatchlist() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [regimes, setRegimes] = useState<StructRegimeForecast[]>([]);
   const [vols, setVols] = useState<VolRegimeForecast[]>([]);
+  // The regime and volatility reads are derived from licensed market data; the
+  // list itself is the member's own and stays.
+  const [readsWithheld, setReadsWithheld] = useState<WithheldInfo | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [rowErr, setRowErr] = useState<{ key: string; msg: string } | null>(null);
@@ -62,6 +69,7 @@ export default function MemberWatchlist() {
         setLoadErr(errText(w.reason));
       }
       if (v.status === "fulfilled") setVols(v.value.forecasts ?? []);
+      else setReadsWithheld(withheldOf(v.reason));
       // Only the watched symbols' regime rows (REGIMES-SIZE): the member read
       // of /api/regimes is sliced, so it is asked for once the list is known.
       const syms = w.status === "fulfilled" ? [...new Set((w.value ?? []).map((x) => x.symbol))] : [];
@@ -69,8 +77,11 @@ export default function MemberWatchlist() {
       try {
         const r = await structuralRegimes({ symbols: syms });
         if (alive) setRegimes(Object.values(r.forecasts ?? {}).flat());
-      } catch {
-        // As before: a failed regimes read leaves the chips as they were.
+      } catch (e) {
+        // As before: a failed regimes read leaves the chips as they were. A
+        // licence withholding is said once, above the list (lib/withheld).
+        const wh = withheldOf(e);
+        if (alive && wh) setReadsWithheld(wh);
       }
     };
     void load();
@@ -211,7 +222,12 @@ export default function MemberWatchlist() {
         )}
       </div>
 
-      {loadErr ? (
+      {readsWithheld && !loadErr ? (
+        <Withheld compact title="Regime and volatility reads" notice={readsWithheld.notice} source={readsWithheld.source} />
+      ) : null}
+      {withheldFromMessage(loadErr) ? (
+        <Withheld notice={loadErr as string} source={withheldFromMessage(loadErr)?.source} title="Your watchlist" />
+      ) : loadErr ? (
         <div className="flex flex-wrap items-center gap-3">
           <p role="alert" className="m-0 text-[0.85rem]" style={{ color: "var(--ask)" }}>
             {loadErr}
@@ -266,7 +282,7 @@ export default function MemberWatchlist() {
                       </span>
                     ))}
                   </div>
-                ) : (
+                ) : readsWithheld ? null : (
                   <span className="text-[0.8rem]" style={{ color: "var(--faint)" }}>
                     No validated read for this symbol yet
                   </span>

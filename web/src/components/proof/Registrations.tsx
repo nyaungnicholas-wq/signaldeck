@@ -17,7 +17,8 @@
 // daemon, not from prose here.
 
 import { useEffect, useState } from "react";
-import { prereg, ApiError, type PreregResponse, type PreregRecord } from "@/lib/api";
+import { prereg, ApiError, withheldFromMessage, type PreregResponse, type PreregRecord } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import Skeleton from "@/components/Skeleton";
 import { specFields, type SpecField } from "@/lib/specfields";
 import FullRecord from "@/components/proof/FullRecord";
@@ -54,6 +55,10 @@ export default function Registrations() {
     };
   }, []);
 
+  const withheld = withheldFromMessage(err);
+  if (withheld) {
+    return <Withheld compact title="Pre-registration chain" notice={withheld.notice} source={withheld.source} />;
+  }
   if (err) {
     // An unavailable chain says so. It must never render as "nothing was
     // registered", which is the same sentence a reader would write down as a

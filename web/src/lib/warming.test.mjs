@@ -164,9 +164,11 @@ const js = (name) => {
   const output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  return output.replace(/from "\.\/(freshness|warming)"/g, 'from "./$1.mjs"');
+  // api.ts imports its siblings with a .ts extension (node --test loads it directly).
+  return output.replace(/from "\.\/(freshness|warming|withheld)(\.ts)?"/g, 'from "./$1.mjs"');
 };
 writeFileSync(join(dir, "warming.mjs"), js("warming.ts"));
+writeFileSync(join(dir, "withheld.mjs"), js("withheld.ts"));
 writeFileSync(join(dir, "api.mjs"), js("api.ts"));
 const freshnessStub = `
 export const counts = { failure: 0, success: 0 };

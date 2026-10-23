@@ -623,7 +623,7 @@ export default function ProofPage() {
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
         style={{ color: "var(--bad)" }}
       >
-        accuracy registry — every verdict, failures first (flagship retired 2026-07-24) →
+        accuracy registry — every verdict, failures first →
       </Link>
 
       {/* Verb-first, so it reads as the next thing to do rather than a link

@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { congress, pollMs, POLL_SLOW, type CongressMirrorStatus, type CongressTrade } from "@/lib/api";
+import { congress, pollMs, POLL_SLOW, withheldFromMessage, type CongressMirrorStatus, type CongressTrade } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import { fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -110,6 +111,21 @@ export default function CongressPage() {
       {err !== null && rows !== null && <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>poll failed</span>}
     </div>
   );
+
+  // Kadoa's compilation is withheld (451): collection stopped, stored rows are
+  // the operator's only. No tiles, no table, no outage wording — just why.
+  const withheld = withheldFromMessage(err);
+  if (withheld) {
+    return (
+      <div className="page-enter space-y-4">
+        <PageHero
+          title="Congress Trades"
+          subtitle="Trades members of Congress disclose under the STOCK Act. Disclosures lag the trade by 30–45 days by law."
+        />
+        <Withheld notice={withheld.notice} source={withheld.source} title="Congressional trades" />
+      </div>
+    );
+  }
 
   return (
     <div className="page-enter space-y-4">

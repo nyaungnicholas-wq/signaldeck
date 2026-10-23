@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { OPERATOR_NAME, CONTACT_EMAIL, LEGAL_UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = { title: "Privacy Notice" };
@@ -347,12 +348,22 @@ export default function PrivacyPage() {
                   AI answers
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Switched off for member accounts
+                  Switched off for everyone as of the 23 October 2026 release, together with the AI news-sentiment tagger, so no question and no headline is sent to NVIDIA
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="panel px-5 py-4" aria-label="Data sources">
+        <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Data sources</h2>
+        <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
+          As of 23 October 2026: SignalDeck&rsquo;s prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only, so they are withheld from everyone except the operator until Alpaca gives written permission. Collection of the congressional trading rows compiled by Kadoa has stopped, and the stored rows are shown only to the operator. The NVIDIA-hosted AI features and the AI news-sentiment tagger are switched off as of this release, so headlines are no longer sent to NVIDIA. None of this changes what we hold about you. The{" "}
+          <Link href="/terms#data-sources" style={{ color: "var(--dim)", textDecoration: "underline" }}>
+            Terms of Use
+          </Link>{" "}
+          give the detail.
+        </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Backups and deletion">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Backups and deletion</h2>

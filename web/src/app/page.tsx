@@ -10,7 +10,9 @@ import CountUp from "@/components/landing/CountUp";
 import HashChain from "@/components/landing/HashChain";
 import Marquee from "@/components/landing/Marquee";
 import SignupCTA from "@/components/landing/SignupCTA";
+import Withheld from "@/components/Withheld";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
+import { parseWithheld } from "@/lib/withheld";
 import "@/components/landing/landing.css";
 
 /**
@@ -73,6 +75,7 @@ type Live =
   | { kind: "ok"; gradedAt: string; rows: Row[] }
   | { kind: "refused"; status: string; reason: string; gradedAt?: string; refusedSince?: string }
   | { kind: "private" }
+  | { kind: "withheld"; source: string; notice: string }
   | { kind: "unreachable"; detail: string };
 
 type Envelope = {
@@ -106,6 +109,11 @@ async function loadLive(): Promise<Live> {
   } catch {
     body = null;
   }
+  // 451: the daemon withholds Alpaca-derived figures from everyone but the
+  // operator, and this fetch carries no session, so the public front door
+  // always gets this answer on a published deployment.
+  const withheld = parseWithheld(res.status, body);
+  if (withheld) return { kind: "withheld", ...withheld };
   if (res.ok && body?.status === "OK") {
     return { kind: "ok", gradedAt: body.graded_at ?? "", rows: body.rows ?? [] };
   }
@@ -214,7 +222,10 @@ const REFUSALS: ReadonlyArray<readonly [string, string]> = [
     // chance rather than anti-predictive, so "failed" overstated even the part
     // that was measured -- in the direction of sounding more rigorous, which is
     // the easiest kind of overclaim to leave standing.
-    "No directional predictor here has ever cleared its own baseline. Some were retired on measured evidence, some came back indistinguishable from chance, and some are withheld right now because the window they would be graded on is degenerate. Those are three different states and this site names which one applies, rather than filing them all under failure.",
+    // No result is stated here any more (23 Oct 2026): a sentence summarising
+    // how the predictors scored is itself derived from the licensed market
+    // data, so it is withheld with the figures. The rule is method, not result.
+    "A predictor counts as skilful only once it beats its own registered baseline over enough independent days. Retired on measured evidence, indistinguishable from chance, and withheld because the window is degenerate are three different states, and the record names which one applies rather than filing them all under failure.",
   ],
   [
     "It will not move the goalposts.",
@@ -233,7 +244,7 @@ const CHECKS = [
   {
     href: "/accuracy",
     title: "The grades",
-    body: "Every predictor with its sample size, its baseline, its interval and its verdict. Failures sorted first.",
+    body: "Every predictor with its sample size, its baseline, its interval and its verdict, failures first. The figures are withheld from the public for now, and the page says why.",
   },
   {
     href: "/proof",
@@ -252,7 +263,7 @@ const CHECKS = [
     // tool, and both horizons currently read INSUFFICIENT. Advertising a
     // feature the page does not have is how a reader arrives expecting a number
     // for their ticker and leaves thinking the site is broken.
-    body: "How the volatility forecast has scored against two simple baselines, day by day. Not a per-symbol risk lookup: it is the scoreboard for one pre-registered estimate, and it shows how much evidence has accrued so far.",
+    body: "How the volatility forecast scores against two simple baselines, day by day. Not a per-symbol risk lookup: it is the scoreboard for one pre-registered estimate. Its figures are withheld from the public for now.",
   },
   {
     href: "/glossary",
@@ -322,6 +333,30 @@ function StillTrue() {
 }
 
 function LiveRecord({ live }: { live: Live }) {
+  if (live.kind === "withheld") {
+    // The method stays explained; only the measured figures are withheld.
+    return (
+      <Withheld notice={live.notice} source={live.source} title="The live record">
+        <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          <li>
+            Every claim is still written down and hash-chained before its outcome exists, and the
+            chain still recomputes in public.{" "}
+            <Link href="/proof" style={{ color: "var(--accent)" }}>
+              The receipts
+            </Link>
+          </li>
+          <li>
+            Each claim&rsquo;s question, baseline and loss function stay readable as they were
+            registered, so the rules cannot move while the results are out of view.
+          </li>
+          <li>
+            Grading continues privately under those same rules. Nothing is regraded or deleted while
+            it is withheld.
+          </li>
+        </ul>
+      </Withheld>
+    );
+  }
   if (live.kind === "refused") {
     return (
       <RefusalNotice
@@ -549,7 +584,7 @@ export default async function Landing() {
             cycle={[
               "every claim is written before the outcome",
               "every record is hash-chained",
-              "every grade is published — failures first",
+              "every grade is kept — failures first",
               "retired models stay retired",
             ]}
           />
@@ -559,6 +594,13 @@ export default async function Landing() {
             afterwards, and graded against what actually happened under a loss function
             registered in advance. <strong style={{ color: "var(--text)" }}>Including the claims that failed. Especially those.</strong>
           </p>
+          {live.kind === "withheld" && (
+            <p className="m-0 max-w-[58ch] text-[0.9rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+              For now the graded figures are shown only to the operator: they are derived from
+              market data licensed for personal use. The method, the registered rules and the hash
+              chain stay public.
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <Link href="/signup" className="cta-primary">
               Create free account
@@ -647,14 +689,16 @@ export default async function Landing() {
         <SignupCTA />
       </Reveal>
 
-      <Section eyebrow="Stay in touch" title="Get told when the volatility record can be judged">
+      {/* Was "when the volatility record can be judged", with its current
+          verdict in the copy. Both are results derived from the licensed data,
+          so the promise is now about publication, which is a rights question. */}
+      <Section eyebrow="Stay in touch" title="Get told when the volatility record can be published">
         <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
           The volatility forecast is already registered and already accruing &mdash; it is not
           &ldquo;being&rdquo; pre-registered, and the chain it was frozen on is readable on the
-          receipts page. What it does not yet have is enough independent trading days to
-          support a verdict either way, which is why both horizons currently read INSUFFICIENT
-          rather than a score. One email when that record crosses its registered evidence
-          threshold and can actually be judged. Nothing else, ever.
+          receipts page. Its graded figures are withheld from the public while the market-data
+          licence does not permit sharing them. One email when they can be published. Nothing
+          else, ever.
         </p>
         <WaitlistForm />
       </Section>

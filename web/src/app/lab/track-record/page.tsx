@@ -918,7 +918,7 @@ function RegimeMissesPanel({
       ) : rows.length === 0 ? (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           no high-conviction regime misses resolved yet — this list is expected to be
-          non-empty over time; a 96% tier is still wrong ~1 in 25 times.
+          non-empty over time; even a high-accuracy tier is still wrong some of the time.
         </p>
       ) : (
         <ul className="max-h-[420px] overflow-y-auto px-4 py-2">
