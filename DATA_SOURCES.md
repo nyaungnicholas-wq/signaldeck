@@ -71,10 +71,50 @@ inflates oversold and mean-reversion results.
 accuracy number, backtest, or verdict quoted externally must be built
 exclusively from rows created at or after the epoch. This is enforced in code:
 `tools/accuracy_registry.py` carries `SURVIVORSHIP_EPOCH = 2026-07-24`, both
-graders filter to `ts >=` the epoch at the SQL layer, and every row published
-to `data/accuracy_registry.json` is stamped `survivorship_clean: true` because
-no pre-epoch row can reach a tally. Pre-epoch data remains in the database for
-private inspection only.
+graders filter to `ts >=` the epoch at the SQL layer, so no pre-epoch row can
+reach a tally. Pre-epoch data remains in the database for private inspection
+only.
+
+The epoch filter is not the same thing as a clean universe, and the published
+rows do not claim one. Each row's `survivorship_clean` is measured every cycle
+by `measure_universe_completeness` in the pinned grader: a graded symbol counts
+as resolvable when it carries `delisted_at` or has `active = 1`, and the row
+publishes `false` plus a reason otherwise.
+
+### What `survivorship_clean` does and does not measure
+
+`symbols.active` is the lean **watch** flag, not a listing status. The 13:15 PT
+weekday sweep (`ops/signaldeck-refresh.sh`) sets it on every stock and then
+prunes back to the most liquid names plus held ones. So the registry's
+"inactive symbol(s) with no delisted_at" is **not a count of delistings**
+(measured 2026-10-23: 701 of the 702 directional ones printed a 1d bar within 5
+sessions, and 1 had no recent bar), and the flag moves with whether the grade
+overlaps the sweep. The grader is SHA-pinned in the pre-registration chain and
+is not edited; its rule and every historical result stay as published.
+
+Beside it, after each grade, `tools/survivorship_status.py` writes
+`data/survivorship_status.json`: **survivorship-status v1 (2026-10-23)**, a
+separately versioned measure over the same graded symbols. It keeps watch
+status, universe membership, listing evidence and effective-dated exits apart:
+
+| class | rule (first match wins) |
+|---|---|
+| RETIRED_SOURCE | crypto with a dated exit: a retired data source, not a listing event |
+| UNKNOWN (conflict) | a dated exit contradicted by a later 1d bar or by SEC listing the ticker on a national exchange; reported, never resolved |
+| EXITED_DATED | `delisted_at` on or before the as-of date |
+| WATCHED | `active = 1`, no dated exit, a 1d bar within N sessions (current date only) |
+| UNWATCHED_TRADING | not watched, no dated exit, a 1d bar within N sessions |
+| TRADING | the same at a historical as-of date, where watch status was not recorded |
+| UNKNOWN | no dated exit and no recent 1d bar, watched or not (`active = 1` is not listing evidence) |
+
+Silence is never read as an exit, and a missing Form 25 or notice is never read
+as "still listed". Delisting, merger, ticker change and exchange transfer are not
+told apart because no corporate-action record is persisted; the report names
+only the evidence it has (a retired source, an archived reused-ticker row, an
+OTC mapping in SEC data). Historical runs use only bars, exits, graded rows and
+SEC rows dated on or before the as-of date. Exits are effective-dated, because
+the time a stamp was written is not stored. The tool's docstring holds the full
+definitions, and the generated live-accuracy block quotes its counts.
 
 ## The shape that is sellable
 

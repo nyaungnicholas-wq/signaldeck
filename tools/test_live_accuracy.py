@@ -475,5 +475,72 @@ class TestSD30ReadmeRenderer(unittest.TestCase):
         self.assertNotIn("SD-30", md)
 
 
+class TestSurvivorshipWording(unittest.TestCase):
+    """The registry's undated-inactive count is a WATCH-flag count, not delistings.
+
+    tools/accuracy_registry.py is pinned and keeps its rule; the generator is
+    where the published sentence is decided, so the clarification and the
+    survivorship-status v1 counts are pinned here.
+    """
+    REASON = ("listing status resolvable for 1/3 graded symbols (33.3%): "
+              "2 inactive symbol(s) with no delisted_at")
+    STATUS = {"measure_id": "survivorship-status v1 (2026-10-23)", "as_of": "2026-10-22",
+              "sessions": 5,
+              "scopes": {"graded:prediction_outcomes": {"symbols": 3, "counts": {
+                  "WATCHED": 1, "UNWATCHED_TRADING": 1, "TRADING": 0, "EXITED_DATED": 0,
+                  "UNKNOWN": 1, "RETIRED_SOURCE": 0},
+                  "registry_v1_inactive_undated": {"total": 2, "by_class": {
+                      "UNWATCHED_TRADING": 1, "UNKNOWN": 1}}}}}
+    MEASURED = ("of those undated-inactive graded symbols, directional 1 of 2 printed a 1d bar "
+                "within 5 sessions of 2026-10-22, per survivorship-status v1 (2026-10-23)")
+
+    def _gen(self, t, status=None):
+        reg = json.loads(json.dumps(FIXTURE_OK))
+        for r in reg["rows"]:
+            r["survivorship_reason"] = self.REASON
+        with open(t.registry, "w", encoding="utf-8") as f:
+            json.dump(reg, f)
+        sp = os.path.join(os.path.dirname(t.registry), "survivorship_status.json")
+        if status is not None:
+            with open(sp, "w", encoding="utf-8") as f:
+                json.dump(status, f)
+        r = t.gen("--write")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return t.read(t.partial)
+
+    def test_undated_inactive_reason_is_qualified_as_not_delistings(self):
+        with TmpRepo() as t:
+            out = self._gen(t)
+            self.assertIn(self.REASON, out, "the pinned registry's own reason still publishes")
+            self.assertIn("`active` is the lean watch flag", out)
+            self.assertIn("not a count of delistings", out)
+
+    def test_status_counts_render_only_when_the_measure_ran(self):
+        with TmpRepo() as t:
+            self.assertNotIn("survivorship-status v1", self._gen(t),
+                             "an absent measurement must read as absent")
+            out = self._gen(t, self.STATUS)
+            self.assertIn("survivorship-status v1 (2026-10-23) as of 2026-10-22 — directional "
+                          "3 symbols: 1 watched, 1 unwatched but trading, 1 unknown", out)
+
+    def test_the_still_trading_share_is_stated_only_from_a_report(self):
+        """How many undated-inactive names still print is a MEASUREMENT: with no
+        report (the wiring deletes it when the measure fails) the block states
+        only the definitional clause, never a share."""
+        with TmpRepo() as t:
+            out = self._gen(t)
+            self.assertNotIn("still-trading", out)
+            self.assertNotIn("printed a 1d bar", out)
+            self.assertIn(self.MEASURED, self._gen(t, self.STATUS))
+
+    def test_effect_line_no_longer_calls_every_inactive_name_dead(self):
+        with TmpRepo() as t:
+            out = self._gen(t)
+            if "measured effect" not in out:
+                self.skipTest("ops/revalidation-status.json carries no arms")
+            self.assertNotIn("INFLATED by excluding dead names", out)
+            self.assertIn("mixes watch-set selection with survivorship", out)
+
+
 if __name__ == "__main__":
     unittest.main()

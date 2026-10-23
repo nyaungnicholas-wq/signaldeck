@@ -87,7 +87,7 @@ Sample-size notices carried by the registry itself (statements about the sample,
 
 **Multiplicity:** family_size=18, looks=94, divisor=1692, corrected_alpha=2.955082742316785e-05.
 
-**Survivorship:** epoch 2026-07-24; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
+**Survivorship:** epoch 2026-07-24; measured effect +0.55pp (active-only 83.59% minus survivorship-clean 83.04%, n=76,506 clean vs 18,258 active, revalidation of 2026-10-01T10:20:22+00:00) — POSITIVE means the active-only figure is higher than the all-names figure; `active` is the lean watch flag, so the gap mixes watch-set selection with survivorship and is not a delisting effect alone.
 
 <!-- END GENERATED live_accuracy -->
 
