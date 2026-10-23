@@ -29,15 +29,17 @@ CLASSES (decision list over one symbol; the first rule that matches wins)
                      national exchange (NYSE, Nasdaq, CBOE, TXSE). Reported with
                      its reasons and never resolved here.
   EXITED_DATED       delisted_at <= as_of with no conflicting evidence.
-  WATCHED            active=1 (current as-of only; see LOOK-AHEAD).
+  WATCHED            active=1 and a 1d bar within N sessions of as_of (current
+                     as-of only; see LOOK-AHEAD). The flag alone is not listing
+                     evidence: a watched name with no recent bar is UNKNOWN.
   UNWATCHED_TRADING  active=0, no dated exit, a 1d bar within N sessions of
                      as_of: excluded from the lean watch set, still trading.
   TRADING            historical as-of only: no dated exit and a 1d bar within N
                      sessions. Watch status is not recorded point-in-time, so it
                      is not split into WATCHED / UNWATCHED_TRADING.
-  UNKNOWN            no dated exit and no 1d bar within N sessions (or no 1d bar
-                     at all, or no symbols row). Silence is not an exit and a
-                     missing notice is not "still listed".
+  UNKNOWN            no dated exit and no 1d bar within N sessions, watched or
+                     not (or no 1d bar at all, or no symbols row). Silence is
+                     not an exit and a missing notice is not "still listed".
 delisted_at = 0 is read as "no exit" (the Go convention, store.go); the registry
 reads only NULL as undated, so its rule is reproduced verbatim in
 registry_v1_inactive_undated for comparison.
@@ -93,10 +95,10 @@ DAY = 86400
 
 DEFINITIONS = {
     "RETIRED_SOURCE": "market='crypto' with delisted_at <= as_of: a retired data source, not a listing event",
-    "UNKNOWN": "no dated exit and no 1d bar within N sessions of as_of, OR a dated exit contradicted by "
-               "other evidence (reasons listed per symbol); never resolved silently",
+    "UNKNOWN": "no dated exit and no 1d bar within N sessions of as_of (watched or not), OR a dated exit "
+               "contradicted by other evidence (reasons listed per symbol); never resolved silently",
     "EXITED_DATED": "delisted_at <= as_of with no contradicting evidence",
-    "WATCHED": "active=1 (current as-of only)",
+    "WATCHED": "active=1 and a 1d bar within N sessions of as_of (current as-of only)",
     "UNWATCHED_TRADING": "active=0, no dated exit, a 1d bar within N sessions of as_of (lean-mode exclusion)",
     "TRADING": "historical as-of: no dated exit and a 1d bar within N sessions; watch status is not point-in-time",
 }
@@ -159,13 +161,15 @@ def classify_symbol(sym, last_bar_ts, post_exit, sec, *, current, cutoff_day, as
         else:
             kind = "unattributed"
         return "EXITED_DATED", kind, []
-    if current and sym["active"] == 1:
-        return "WATCHED", None, []
+    watched = current and sym["active"] == 1
     if last_bar_ts is not None and last_bar_ts // DAY >= cutoff_day:
-        return ("UNWATCHED_TRADING" if current else "TRADING"), None, []
+        return ("WATCHED" if watched else "UNWATCHED_TRADING" if current else "TRADING"), None, []
+    # active=1 is the watch flag, not listing evidence: a watched name that has
+    # stopped printing is as unknown as an unwatched one (WBD, VTAK, SOBR live)
+    note = "watched (active=1) but " if watched else ""
     if last_bar_ts is None:
-        return "UNKNOWN", None, ["no 1d bar at or before as_of and no dated exit"]
-    return "UNKNOWN", None, ["no 1d bar since %s (outside the session window) and no dated exit"
+        return "UNKNOWN", None, [note + "no 1d bar at or before as_of and no dated exit"]
+    return "UNKNOWN", None, [note + "no 1d bar since %s (outside the session window) and no dated exit"
                              % _day(last_bar_ts)]
 
 

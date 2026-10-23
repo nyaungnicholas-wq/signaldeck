@@ -222,6 +222,28 @@ class TestSurvivorshipStatus(unittest.TestCase):
         self.assertEqual(u['counts']['WATCHED'], 2)
         self.assertEqual(u['watch']['watched'], 3)
 
+    def test_a_watched_name_that_stopped_printing_is_unknown_not_watched(self):
+        """active=1 is the watch flag, not listing evidence (WBD, VTAK, SOBR live,
+        2026-10-23): a watched, undated name whose 1d bars stop 2026-09-15 is
+        UNKNOWN, and its watch status is still counted on its own axis."""
+        con_w = sqlite3.connect(self.db)
+        con_w.execute("INSERT INTO symbols VALUES (13, 'STALEW', 'stocks', 'STALEW', 1, ?, 0, NULL)",
+                      (ADDED_AT,))
+        for d in WEEKDAYS:
+            if d <= dt.date(2026, 9, 15):
+                con_w.execute("INSERT INTO bars VALUES (13, '1d', ?, 100.0, 1000.0)",
+                              (T(d.year, d.month, d.day, 4),))
+        con_w.commit()
+        con_w.close()
+        u = ss.evaluate(self.con, AS_OF, sessions=5, today=AS_OF)['scopes']['universe']
+        self.assertEqual(u['counts']['WATCHED'], 2)
+        self.assertEqual(u['counts']['UNKNOWN'], 5)
+        self.assertEqual(u['watch']['watched'], 3)
+        unk = {x['symbol']: x for x in u['unknown']}
+        self.assertEqual(unk['STALEW']['reasons'],
+                         ['watched (active=1) but no 1d bar since 2026-09-15 '
+                          '(outside the session window) and no dated exit'])
+
 
 ACCURACY_SH = os.path.join(os.path.dirname(HERE), "ops", "accuracy-registry.sh")
 
