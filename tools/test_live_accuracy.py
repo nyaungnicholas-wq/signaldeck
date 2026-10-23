@@ -485,9 +485,14 @@ class TestSurvivorshipWording(unittest.TestCase):
     REASON = ("listing status resolvable for 1/3 graded symbols (33.3%): "
               "2 inactive symbol(s) with no delisted_at")
     STATUS = {"measure_id": "survivorship-status v1 (2026-10-23)", "as_of": "2026-10-22",
+              "sessions": 5,
               "scopes": {"graded:prediction_outcomes": {"symbols": 3, "counts": {
-                  "WATCHED": 1, "UNWATCHED_TRADING": 2, "TRADING": 0, "EXITED_DATED": 0,
-                  "UNKNOWN": 0, "RETIRED_SOURCE": 0}}}}
+                  "WATCHED": 1, "UNWATCHED_TRADING": 1, "TRADING": 0, "EXITED_DATED": 0,
+                  "UNKNOWN": 1, "RETIRED_SOURCE": 0},
+                  "registry_v1_inactive_undated": {"total": 2, "by_class": {
+                      "UNWATCHED_TRADING": 1, "UNKNOWN": 1}}}}}
+    MEASURED = ("of those undated-inactive graded symbols, directional 1 of 2 printed a 1d bar "
+                "within 5 sessions of 2026-10-22, per survivorship-status v1 (2026-10-23)")
 
     def _gen(self, t, status=None):
         reg = json.loads(json.dumps(FIXTURE_OK))
@@ -508,7 +513,7 @@ class TestSurvivorshipWording(unittest.TestCase):
             out = self._gen(t)
             self.assertIn(self.REASON, out, "the pinned registry's own reason still publishes")
             self.assertIn("`active` is the lean watch flag", out)
-            self.assertIn("NOT delistings", out)
+            self.assertIn("not a count of delistings", out)
 
     def test_status_counts_render_only_when_the_measure_ran(self):
         with TmpRepo() as t:
@@ -516,7 +521,17 @@ class TestSurvivorshipWording(unittest.TestCase):
                              "an absent measurement must read as absent")
             out = self._gen(t, self.STATUS)
             self.assertIn("survivorship-status v1 (2026-10-23) as of 2026-10-22 — directional "
-                          "3 symbols: 1 watched, 2 unwatched but trading", out)
+                          "3 symbols: 1 watched, 1 unwatched but trading, 1 unknown", out)
+
+    def test_the_still_trading_share_is_stated_only_from_a_report(self):
+        """How many undated-inactive names still print is a MEASUREMENT: with no
+        report (the wiring deletes it when the measure fails) the block states
+        only the definitional clause, never a share."""
+        with TmpRepo() as t:
+            out = self._gen(t)
+            self.assertNotIn("still-trading", out)
+            self.assertNotIn("printed a 1d bar", out)
+            self.assertIn(self.MEASURED, self._gen(t, self.STATUS))
 
     def test_effect_line_no_longer_calls_every_inactive_name_dead(self):
         with TmpRepo() as t:
