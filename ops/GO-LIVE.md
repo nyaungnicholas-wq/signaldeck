@@ -73,9 +73,12 @@ from the CSV does not restore those rows; the backup from (a) does.
 ```
 # (f) Verify, from the repo root:
 bin/sdmaint.exe ledger-verify      # must print "chain: intact" and "anchors: N/N verify", exit 0
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8322/api/accuracy   # must print 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8322/api/accuracy   # must print 451 (published deployment, licence)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $SIGNALDECK_API_TOKEN" http://127.0.0.1:8322/api/accuracy   # must print 200 (operator)
 powershell -NoProfile -File ops/check-grader-health.ps1   # last line must be "RESULT: ok"
 ```
+
+On a published deployment /mcp answers 451 to every caller, the operator's MCP key included, until the data licence is resolved.
 
 **Rollback means rolling forward.** `ops/signaldeck-ctl.sh` keeps the previous
 binary, but that build (c8e18a2c) re-wires every retired source (Kraken,

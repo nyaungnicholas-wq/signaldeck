@@ -127,7 +127,7 @@ from it; `TestBudgetDBDefaultMatchesRefreshScript` fails if either drifts.
 >
 > | tier | documented expectation | measured |
 > |---|---|---|
-> | hot `data/signaldeck.db` | "low-hundreds-of-MB, stops growing" | **4.8 GB**, still growing |
+> | hot `data/signaldeck.db` | "low-hundreds-of-MB, stops growing" | **11.2 GB** on 2026-10-23, still growing, over the 10,240 MB daemon budget (gap-fill paused) |
 > | cold `data/archive/` | grows slowly | **1.1 GB** across 7 table dirs |
 > | `data/backups/` | — | **19 GB** |
 > | `freeze/` snapshots | — | **8.6 GB** |
