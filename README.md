@@ -111,7 +111,7 @@ Coinbase, Hyperliquid) paused 2026-10-22. TradingView scanner and StockTwits ret
 
 | Component | Version | Notes |
 |---|---|---|
-| Go | ≥ 1.25 (`go.mod`); tested on 1.26.5 | daemon |
+| Go | ≥ 1.26 (`go.mod`); builds with the go1.26.10 toolchain it pins (`GOTOOLCHAIN=auto` fetches it) | daemon |
 | Node.js | ≥ 20; tested on 24.18.0 | web app |
 | Python | ≥ 3.11; tested on 3.12.10 | `tools/` (`.venv/Scripts/python.exe` on Windows) |
 | SQLite | bundled | no server to install |

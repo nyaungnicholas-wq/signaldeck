@@ -19,6 +19,22 @@ jobs:
         with:
           go-version-file: daemon/go.mod
           cache-dependency-path: daemon/go.sum
+      # setup-go@v5 reads only the `go` line of go-version-file and installs
+      # 1.26.0; the `toolchain` line is honoured only because Go's default
+      # GOTOOLCHAIN=auto switches to it, so nothing showed which compiler CI
+      # actually used. That line is a security floor (go1.26.6 reached 10
+      # stdlib vulns fixed in go1.26.10, govulncheck 2026-10-23), so prove the
+      # switch happened, and that the Dockerfile builder image — whose official
+      # golang base sets GOTOOLCHAIN=local and so ignores the line — is pinned
+      # to the same release.
+      - name: Toolchain is go.mod's toolchain directive, here and in the Dockerfile
+        run: |
+          want=$(awk '$1 == "toolchain" { print $2 }' go.mod)
+          got=$(go env GOVERSION)
+          echo "go.mod toolchain=$want go env GOVERSION=$got"
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::CI builds with $got but go.mod pins toolchain $want"; exit 1; }
+          grep -q "^FROM golang:${want#go}-alpine " ../Dockerfile || { echo "::error::Dockerfile builder is not golang:${want#go}-alpine"; exit 1; }
+          echo "toolchain OK: $got"
       - run: go build ./...
       - run: go vet ./...
       # The production box is Windows, and the only code that runs there was
