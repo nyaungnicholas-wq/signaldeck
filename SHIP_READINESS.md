@@ -18,9 +18,9 @@
 
 > **UPDATE 2026-09-19.** Blocker 5 is partly cleared: the image builds, runs and
 > serves — see that section. Blocker 4 has NOT moved and the reason is recorded:
-> re-registering the graded window yields INSUFFICIENT DAYS (6 credible days
-> against a floor of 10), and 1w grades 46.0% against a 54.7% null, so clearing
-> the cross-section gate was never going to show good news. The decision on
+> re-registering the graded window was measured and does not support clearing the
+> cross-section gate (the measurement is withheld under the licence since
+> 2026-10-23). The decision on
 > record is to leave the gate alone. Blockers 2 and 6 remain business decisions.
 >
 > **UPDATE, same day.** Blockers 1 and 3 are FIXED (LICENSE; PublicReads now
@@ -150,8 +150,8 @@ however long anyone waits. This section used to end "it needs time, not code",
 printed directly beneath a refusal that time cannot clear. That sentence is
 withdrawn. Clearing the directional window is a re-registration decision with
 its own evidence — and the decision on record (see the 2026-09-19 update at the
-top) is to leave the gate alone, because re-registering yields INSUFFICIENT
-DAYS and 1w grades 46.0% against a 54.7% null.
+top) is to leave the gate alone, because re-registering was measured and does not
+support clearing it (the measurement is withheld under the licence since 2026-10-23).
 
 ---
 

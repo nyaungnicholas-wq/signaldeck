@@ -18,9 +18,9 @@
 | Known-browser marker | cookie `signaldeck_device` (HttpOnly, path `/api/auth`, 180 days); an HMAC of the username, no personal data stored server-side | Lets a browser that signed in before keep signing in while someone else's failed guesses lock the name. It is per name, so it outlives a password reset; it grants a separate rate-limited ladder, never access | 180 days in the browser |
 | Emailed link tokens, stored only as hashes | `auth_tokens` | Confirmation (24 h) and reset (1 h) links | Until used or expired; deleted with the account |
 | Watchlist | `member_symbols` | Your list | Until you remove a symbol or delete the account |
-| Your calls and their notes | `member_calls` | Your journal, graded | Until the account is deleted; a call cannot be edited once made |
+| Your calls and their notes | `member_calls` | Your journal, graded (grades withheld from member accounts and member exports since 2026-10-23: Alpaca-derived) | Until the account is deleted; a call cannot be edited once made, and withdrawing an open call is paused for member accounts |
 | Alert settings (digest on/off, optional Telegram chat id) | `member_alert_prefs`, `member_digest_tries` | The opt-in daily digest (sent to the operator's account only since 2026-10-23; a member's switch is stored but nothing is sent) | Until the account is deleted |
-| Notification-list email (the landing page form, no account) | `waitlist` | One email when the volatility record can be judged | **DECIDED 2026-10-22**: up to 12 months, or sooner on request to the contact address |
+| Notification-list email (the landing page form, no account) | `waitlist` | One email when the volatility record's figures can be published | **DECIDED 2026-10-22**: up to 12 months, or sooner on request to the contact address |
 | Failed sign-in | daemon log: a 12-character digest of the typed name and its length, no name and no address | Spotting a name under attack | Log rotation by size (20 MB × 3 files, plus a daily rotation over 10 MB); **DECIDED 2026-10-22**: the limit is 30 days after a log file's last entry (see the interim note under Backups). Rotation is by size, not date, so on a quiet site one file can cover months and an entry can be kept longer than 30 days |
 | Requests | daemon log: method, path, status, user id, duration; no IP address, no user agent | Operating the service | As above |
 

@@ -20,8 +20,8 @@ Not an auto-trader. Not financial advice. A measuring instrument.
 | What | State | Where to check |
 |---|---|---|
 | Directional (up/down) forecasting | **Retired 2026-07-24** by a pre-registered auto-retire rule; retirement does not lapse | `/accuracy`, `proofs/P2_LIVE_RECORD_RECONCILIATION.md` |
-| Accuracy publication | Every figure **withheld from the public** since 2026-10-23 (licence: grades are computed from Alpaca market data, personal use only; shown only to the operator). Underneath that, directional figures are also withheld (SD-30: the old label was partly realised at issue; a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors). Structural claims are backtested numbers still accruing live blocks; no live verdict yet | `/`, `/accuracy`, `GET /api/accuracy` |
-| Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing, 32 and 28 of the 60 required distinct trading days (two horizons, 2026-10-22); no verdict | `/volatility` |
+| Accuracy publication | Every figure **withheld from the public on the website and its API** since 2026-10-23 (licence: grades are computed from Alpaca market data, personal use only; shown only to the operator). This repository still carries figures committed before then (the frozen backtest claims in `PREREGISTRATION.md` and `daemon/internal/prereg`, the `repro/` day tallies, measured tables in older documents and `STRATEGY_DECK.md` §8); withdrawing them is an open owner decision (`DATA_SOURCES.md`). Underneath that, directional figures are also withheld (SD-30: the old label was partly realised at issue; a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors). Structural claims are backtested numbers still accruing live blocks; no live verdict yet | `/`, `/accuracy`, `GET /api/accuracy` |
+| Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing toward the 60 distinct trading days each horizon requires; progress and figures withheld (licence); no verdict | `/volatility` |
 | Prediction ledger | Hash-chained, ~765k entries (2026-10-22; grows ~4k/day), recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
 | Forecast coverage | ~6–10% of symbols receive a forecast, by design: every measured leg that ranks backwards is dropped, never down-weighted | `/lab/forecasts` |
 | Paper trading | Simulation only, operator-only (not shown to visitors or members): a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` (operator) |
@@ -35,8 +35,9 @@ retirement history, and the landing page, `/accuracy`, the generated documents a
 published registry all follow it. Refused means no numbers. The licence switch sits above it:
 until the operator records Alpaca's written permission (`SIGNALDECK_PUBLISH_DERIVED=1`),
 a published deployment's `/api/accuracy` answers 451 to every caller but the operator, and
-the generated blocks in this repository carry
-no figures at all.
+the generated live-accuracy blocks in this repository carry no figures. `STRATEGY_DECK.md`
+§8 still carries database measurements generated before 2026-10-23 and is no longer
+regenerated without that permission.
 
 <!-- LIVE-ACCURACY:BEGIN -->
 ## Live accuracy (auto-updated)
@@ -158,15 +159,18 @@ calling web work done.
   through are not backfilled; daily bars are polled separately and are complete.
 - **Directional figures are withheld right now** (SD-30) and return only as the corrected
   window accrues resolved days; nothing here can or should hurry it.
-- **No demonstrated forecasting edge.** Every directional predictor tested has failed against
-  its own baseline; the volatility test has 32 of 60 required days (2026-10-22). No return, Sharpe or
+- **No demonstrated forecasting edge is claimed.** How the predictors have scored, and the
+  volatility test's progress, are withheld under the licence. No return, Sharpe or
   profitability figure exists in this product and none may be quoted from it.
 - **Congress trade feeds**: retired 2026-10-23. Kadoa's terms bar automated access and sharing
   its rows, and the volunteer House/Senate Stock Watcher mirrors answer 403. No stored row
   records its source, so every row is treated as Kadoa's and shown only to the operator.
-- **External timestamps start on 2026-09-30.** The anchors repository,
-  [github.com/nyaungnicholas-wq/signaldeck-anchors](https://github.com/nyaungnicholas-wq/signaldeck-anchors),
-  is public since 2026-10-04. Since 2026-09-30 each publish commits a statement of the
+- **External timestamps start on 2026-09-30.** The anchors repository
+  (`nyaungnicholas-wq/signaldeck-anchors`) is public since 2026-10-04. Since 2026-10-23
+  `ops/anchor-publish.sh` no longer refreshes its `README.md` and `accuracy_registry.json`,
+  but the copies committed before then, which carry live accuracies, are still there;
+  replacing them is the owner's decision, and until then neither this README nor `/proof`
+  links it. Since 2026-09-30 each publish commits a statement of the
   current ledger head, timestamped by two RFC 3161 authorities (FreeTSA, DigiCert) and
   OpenTimestamps, and `tools/verify_public_record.py` (published there as `verify.py`)
   checks all of it offline. Its `--site` step recomputes the chain through `/api/ledger/range`,
@@ -188,8 +192,11 @@ anonymous caller actually meets. On a published deployment the licence gate then
 **451** to every caller except the operator (admin session or loopback token) on any route not
 classified as rights-cleared (`datalicense.NonOperatorRoutes`), so it fails closed. Since
 2026-10-23 that includes the derived analytics: Alpaca licenses its data for personal use only,
-derivations included, so prices, forecasts, grades and statistics are shown only to the
-operator until Alpaca gives written permission. The gate is skipped when the daemon is only
+derivations included, so on the website and its API prices, forecasts, grades and
+statistics are shown only to the operator until Alpaca gives written permission (this
+repository's older committed figures are listed in the Status table above). Raw vendor rows
+stay refused there even to the operator unless `SIGNALDECK_ALLOW_RAW_EXPORT=true` records an
+agreement. The gate is skipped when the daemon is only
 reachable privately, so an operator can read their own data on their own box. Read each
 provider's terms before hosting a copy.
 

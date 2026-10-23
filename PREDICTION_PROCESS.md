@@ -44,8 +44,9 @@
 > at a time when the platform withheld every interval for this claim (distinct-day
 > counts 9/5/4/4 against the `min_distinct_blocks = 10` floor). P6 removed both the
 > interval claim and the verdict. The 1d sample has since crossed the floor and the
-> registry now publishes an interval for it, in the generated block — so the verdict
-> is once again available, but from the registry, not from this prose. See
+> registry computes an interval for it, shown in the generated block when that block
+> carries figures (withheld under the licence since 2026-10-23) — so the verdict
+> comes from the registry, not from this prose. See
 > `proofs/P6_GOVERNANCE_CLEANUP.md` §3 and `proofs/P10_FREEZE_LIFT.md` §3.
 >
 > Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
@@ -166,8 +167,9 @@ The operational consequence is what stands: `modelhealth` set
 (trend21, vol21, liquidity21) are correctly `PENDING`, with 0 resolvable before
 **2026-08-07**, because a 21-day horizon cannot be graded sooner. The outstanding
 forecast counts are not typed here: they change daily and were previously stated
-two ways in this file. Read them per predictor from the generated block above,
-which is regenerated from `data/accuracy_registry.json`.
+two ways in this file. They appear per predictor in the generated block above,
+regenerated from `data/accuracy_registry.json`, when it carries figures (withheld
+under the licence since 2026-10-23).
 
 ### Why inversion is not a rescue
 

@@ -208,9 +208,9 @@ log "=== sweep start (trading day $target, maxwait ${MAXWAIT}s) ==="
 #          splice WOULD reach the graded tallies: the grader has no
 #          delisted-symbol carve-out (tools/accuracy_registry.py, "NO
 #          delisted-symbol carve-out, deliberately"), so this choice does
-#          change what it grades. Current exposure: 0 of 1,902 stamped stocks
-#          have a 1d bar in the last 10 days (re-measured read-only
-#          2026-10-23). Narrowing the recheck (recent stamps only, or bars to
+#          change what it grades. The current exposure was re-measured
+#          read-only on 2026-10-23 (the count is Alpaca-derived and is
+#          not published). Narrowing the recheck (recent stamps only, or bars to
 #          quarantine) is a design decision, not a one-line guard.
 was_up=$(sd_is_running signaldeckd && echo yes || echo no)
 trap on_interrupt EXIT INT TERM HUP

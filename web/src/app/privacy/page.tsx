@@ -125,7 +125,7 @@ export default function PrivacyPage() {
                   Your private journal, graded (withheld from member accounts since 23 October 2026, because the grades are derived from Alpaca market data; stored calls are kept)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until you delete your account. A call cannot be edited once made; an open call can be withdrawn and stays marked &ldquo;withdrawn&rdquo;
+                  Until you delete your account. A call cannot be edited once made; withdrawing an open call is paused for member accounts while the journal is withheld (a call withdrawn earlier stays marked &ldquo;withdrawn&rdquo;)
                 </td>
               </tr>
               <tr>
@@ -144,7 +144,7 @@ export default function PrivacyPage() {
                   Waitlist email (the landing-page form, no account needed), trimmed and lower-cased, with the time it was added
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send one email when the volatility record can be judged (nothing sends it yet)
+                  To send one email when the volatility record&rsquo;s figures can be published (nothing sends it yet)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Up to 12 months, or sooner if you ask us to remove it (email the contact address)
@@ -389,7 +389,7 @@ export default function PrivacyPage() {
           On your Account page you can:
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          <li>Download your data: a JSON file of your account record, watchlist, calls, alert settings and digest delivery records, without the password hash or any token. The waitlist and server logs are not included.</li>
+          <li>Download your data: a JSON file of your account record, watchlist, calls, alert settings and digest delivery records, without the password hash or any token. A member&rsquo;s export omits each call&rsquo;s hit/miss grade, which is derived from Alpaca market data. The waitlist and server logs are not included.</li>
           <li>Delete your account, confirmed with your password. Your tokens, sessions, watchlist, calls, alert settings and account are erased in one step. If you signed up with Google, first set a password with &ldquo;Forgot password&rdquo;. This does not remove a waitlist entry for the same address; ask us to.</li>
           <li>Turn the digest off, or use the unsubscribe link in any digest.</li>
         </ul>
