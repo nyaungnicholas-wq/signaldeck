@@ -36,6 +36,8 @@ SCRIPT = os.path.join(REPO, "tools", "live_accuracy.py")
 
 BEGIN = "<!-- BEGIN GENERATED live_accuracy -->"
 END = "<!-- END GENERATED live_accuracy -->"
+README_BEGIN = "<!-- LIVE-ACCURACY:BEGIN -->"
+README_END = "<!-- LIVE-ACCURACY:END -->"
 
 # A registry in the state the real one is in: the top-level grade REFUSED, zero
 # published rows, and the last successful grade preserved under
@@ -84,9 +86,15 @@ FIXTURE = {
 FIXTURE_OK = dict(FIXTURE["stale_last_registry"])
 
 
-def run(*args, cwd=None):
+# The renderer of the figures runs only with the operator's recorded permission
+# (SIGNALDECK_PUBLISH_DERIVED=1); every test below that pins a figure says so.
+# TestLicenceWithholding pins the default, which withholds.
+PERMITTED = dict(os.environ, SIGNALDECK_PUBLISH_DERIVED="1")
+
+
+def run(*args, cwd=None, env=None):
     return subprocess.run([sys.executable, SCRIPT, *args], cwd=cwd or REPO,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env or PERMITTED)
 
 
 class TmpRepo:
@@ -117,8 +125,8 @@ class TmpRepo:
         with open(p, encoding="utf-8") as f:
             return f.read()
 
-    def gen(self, *extra):
-        return run("--registry", self.registry, "--out", self.partial, *extra)
+    def gen(self, *extra, env=None):
+        return run("--registry", self.registry, "--out", self.partial, *extra, env=env)
 
 
 class TestGenerator(unittest.TestCase):
@@ -401,7 +409,7 @@ class TestSD30Withholding(unittest.TestCase):
                 json.dump(FIXTURE_OK, f)
             out = os.path.join(tmp, "partials", "live_accuracy.md")
             p = subprocess.run([sys.executable, script, "--registry", registry, "--out", out, "--write"],
-                               capture_output=True, text=True, encoding="utf-8")
+                               capture_output=True, text=True, encoding="utf-8", env=PERMITTED)
             text = ""
             if os.path.exists(out):
                 with open(out, encoding="utf-8") as f:
@@ -473,6 +481,167 @@ class TestSD30ReadmeRenderer(unittest.TestCase):
         self.assertEqual(len(row), 1, md)
         self.assertIn("46.3%", row[0])
         self.assertNotIn("SD-30", md)
+
+
+def env_without_permission(value=None):
+    e = dict(os.environ)
+    e.pop("SIGNALDECK_PUBLISH_DERIVED", None)
+    if value is not None:
+        e["SIGNALDECK_PUBLISH_DERIVED"] = value
+    return e
+
+
+class TestLicenceWithholding(unittest.TestCase):
+    """Alpaca-derived figures reach the committed documents only with the
+    operator's recorded permission (SIGNALDECK_PUBLISH_DERIVED=1); anything else
+    renders the withheld block, which reads nothing from the registry."""
+
+    FIGURES = ("2,257", "1,644", "73.1%", "46.3%", "52.9%", "-6.6pp", "family_size",
+               "INSUFFICIENT DAYS", "directional-ensemble", "trend21", "2026-08-03T23:06:30")
+
+    def assertWithheld(self, text):
+        self.assertIn("Withheld (licence): no live-record figures are published here.", text)
+        for fig in self.FIGURES:
+            self.assertNotIn(fig, text, "a registry figure %r reached a withheld block" % fig)
+
+    def test_default_and_any_value_but_1_withhold_every_figure(self):
+        for value in (None, "", "0", "true", "yes", " 1"):
+            with TmpRepo() as t:
+                r = t.gen("--write", env=env_without_permission(value))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertWithheld(t.read(t.partial))
+        with TmpRepo() as t:  # the permitted renderer is the other branch of the same switch
+            self.assertEqual(t.gen("--write").returncode, 0)
+            self.assertIn("2,257", t.read(t.partial))
+
+    def test_withheld_documents_pass_check_and_drift_still_fails(self):
+        env = env_without_permission()
+        with TmpRepo() as t:
+            doc = t.doc("DOC.md", "intro\n%s\nold 46.3%%\n%s\noutro\n" % (BEGIN, END))
+            self.assertEqual(t.gen("--write", "--inject", doc, env=env).returncode, 0)
+            body = t.read(doc)
+            self.assertWithheld(body)
+            self.assertTrue(body.startswith("intro\n") and body.endswith("\noutro\n"), body)
+            ok = t.gen("--check", "--inject", doc, env=env)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            t.doc("DOC.md", body.replace("no live-record figures", "some figures"))
+            bad = t.gen("--check", "--inject", doc, env=env)
+            self.assertEqual(bad.returncode, 1, bad.stdout + bad.stderr)
+            self.assertIn("DRIFT", bad.stderr)
+            # Permission on: the same withheld document is now stale against the registry.
+            t.doc("DOC.md", body)
+            self.assertEqual(t.gen("--check", "--inject", doc).returncode, 1)
+
+    def test_readme_section_is_withheld_and_checked(self):
+        env = env_without_permission()
+        with TmpRepo() as t:
+            stamp = FIXTURE_OK["generated"]
+            numeric = ("# x\n\n%s\n## Live accuracy (auto-updated)\n\n_Regenerated %s · v_\n\n"
+                       "| directional-ensemble (1d) | 46.3%% | 2,257 |\n%s\n\n## Run it\n"
+                       % (README_BEGIN, stamp, README_END))
+            readme = t.doc("README.md", numeric)  # beside data/, where --check looks
+            # Permitted, a README stamped with the current grade passes the freshness check.
+            self.assertEqual(t.gen("--write").returncode, 0)
+            good = t.gen("--check")
+            self.assertEqual(good.returncode, 0, good.stderr)
+            # Withheld, the same README carries a grade it may not publish.
+            self.assertEqual(t.gen("--write", env=env).returncode, 0)
+            bad = t.gen("--check", env=env)
+            self.assertEqual(bad.returncode, 1, bad.stdout + bad.stderr)
+            self.assertIn("not the licence-withheld section", bad.stderr)
+
+            w = t.gen("--readme", readme, env=env)
+            self.assertEqual(w.returncode, 0, w.stderr)
+            md = t.read(readme)
+            self.assertWithheld(md)
+            self.assertTrue(md.startswith("# x\n\n" + README_BEGIN + "\n## Live accuracy"), md)
+            self.assertTrue(md.endswith(README_END + "\n\n## Run it\n"), md)
+            ok = t.gen("--check", env=env)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            # Permission on again: the withheld README no longer renders the grade.
+            self.assertEqual(t.gen("--write").returncode, 0)
+            self.assertEqual(t.gen("--check").returncode, 1)
+
+    def test_readme_mode_is_refused_with_permission(self):
+        with TmpRepo() as t:
+            text = "# x\n%s\nkept\n%s\n" % (README_BEGIN, README_END)
+            readme = t.doc("README.md", text)
+            r = t.gen("--readme", readme)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertEqual(t.read(readme), text, "--readme must not touch README with permission on")
+
+
+class TestSurvivorshipWording(unittest.TestCase):
+    """The registry's undated-inactive count is a WATCH-flag count, not delistings.
+
+    tools/accuracy_registry.py is pinned and keeps its rule; the generator is
+    where the published sentence is decided, so the clarification and the
+    survivorship-status v1 counts are pinned here.
+    """
+    REASON = ("listing status resolvable for 1/3 graded symbols (33.3%): "
+              "2 inactive symbol(s) with no delisted_at")
+    STATUS = {"measure_id": "survivorship-status v1 (2026-10-23)", "as_of": "2026-10-22",
+              "sessions": 5,
+              "scopes": {"graded:prediction_outcomes": {"symbols": 3, "counts": {
+                  "WATCHED": 1, "UNWATCHED_TRADING": 1, "TRADING": 0, "EXITED_DATED": 0,
+                  "UNKNOWN": 1, "RETIRED_SOURCE": 0},
+                  "registry_v1_inactive_undated": {"total": 2, "by_class": {
+                      "UNWATCHED_TRADING": 1, "UNKNOWN": 1}}}}}
+    MEASURED = ("of those undated-inactive graded symbols, directional 1 of 2 printed a 1d bar "
+                "within 5 sessions of 2026-10-22, per survivorship-status v1 (2026-10-23)")
+
+    def _gen(self, t, status=None):
+        reg = json.loads(json.dumps(FIXTURE_OK))
+        for r in reg["rows"]:
+            r["survivorship_reason"] = self.REASON
+        with open(t.registry, "w", encoding="utf-8") as f:
+            json.dump(reg, f)
+        sp = os.path.join(os.path.dirname(t.registry), "survivorship_status.json")
+        if status is not None:
+            with open(sp, "w", encoding="utf-8") as f:
+                json.dump(status, f)
+        r = t.gen("--write")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return t.read(t.partial)
+
+    def test_undated_inactive_reason_is_qualified_as_not_delistings(self):
+        with TmpRepo() as t:
+            out = self._gen(t)
+            self.assertIn(self.REASON, out, "the pinned registry's own reason still publishes")
+            self.assertIn("`active` is the lean watch flag", out)
+            self.assertIn("not a count of delistings", out)
+
+    def test_status_counts_render_only_when_the_measure_ran(self):
+        with TmpRepo() as t:
+            self.assertNotIn("survivorship-status v1", self._gen(t),
+                             "an absent measurement must read as absent")
+            out = self._gen(t, self.STATUS)
+            self.assertIn("survivorship-status v1 (2026-10-23) as of 2026-10-22 — directional "
+                          "3 symbols: 1 watched, 1 unwatched but trading, 1 unknown", out)
+
+    def test_the_still_trading_share_is_stated_only_from_a_report(self):
+        """How many undated-inactive names still print is a MEASUREMENT: with no
+        report (the wiring deletes it when the measure fails) the block states
+        only the definitional clause, never a share."""
+        with TmpRepo() as t:
+            out = self._gen(t)
+            self.assertNotIn("still-trading", out)
+            self.assertNotIn("printed a 1d bar", out)
+            self.assertIn(self.MEASURED, self._gen(t, self.STATUS))
+
+    def test_effect_line_no_longer_calls_every_inactive_name_dead(self):
+        with TmpRepo() as t:
+            # The full revalidation snapshot is read from beside the registry
+            # (data/); the committed ops/ copy is a figure-free licence stamp.
+            with open(os.path.join(os.path.dirname(t.registry), "revalidation-status.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump({"generated": "2026-10-01T10:20:22+00:00",
+                           "arms": {"active_only": {"accuracy": 0.84, "n": 100},
+                                    "survivorship_clean": {"accuracy": 0.83, "n": 120}}}, f)
+            out = self._gen(t)
+            self.assertIn("measured effect", out)
+            self.assertNotIn("INFLATED by excluding dead names", out)
+            self.assertIn("mixes watch-set selection with survivorship", out)
 
 
 if __name__ == "__main__":

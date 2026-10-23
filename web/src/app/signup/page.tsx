@@ -160,7 +160,7 @@ export default function SignupPage() {
               <p role="status" className="mb-4 text-xs leading-relaxed text-[var(--dim)]">
                 New accounts are paused until the site&apos;s bot check is set up. Everything
                 public needs no account: the{" "}
-                <Link href="/accuracy" className="text-[var(--accent)]">live grades</Link>, the{" "}
+                <Link href="/accuracy" className="text-[var(--accent)]">accuracy registry</Link>, the{" "}
                 <Link href="/volatility" className="text-[var(--accent)]">volatility record</Link>{" "}
                 and the <Link href="/proof" className="text-[var(--accent)]">receipts</Link>.
               </p>

@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/tombstone"
 )
@@ -32,6 +33,17 @@ func (d Deps) accountExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpInternal(w, err)
 		return
+	}
+	// A call's hit/miss grade is computed from Alpaca closes, which are licensed
+	// for the operator's personal use only (datalicense.NonOperatorRoutes). The
+	// member's own calls, notes and dates are theirs and stay.
+	if d.withheldFrom(r) {
+		if calls, ok := data["member_calls"].([]map[string]any); ok {
+			for _, c := range calls {
+				delete(c, "outcome")
+			}
+		}
+		data["withheld"] = "outcome (hit or miss) on member_calls: " + datalicense.WithheldNotice("alpaca")
 	}
 	data["exportedAt"] = time.Now().UTC().Format(time.RFC3339)
 	w.Header().Set("Content-Disposition", `attachment; filename="signaldeck-my-data.json"`)

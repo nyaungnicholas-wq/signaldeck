@@ -36,7 +36,8 @@ import type {
   Market,
   StructRegimeForecast,
 } from "@/lib/api";
-import { structuralRegimes } from "@/lib/api";
+import { structuralRegimes, withheldOf, type Withheld as WithheldInfo } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
@@ -116,12 +117,16 @@ function pct(x: number): string {
 export default function TodaysRead({
   dash,
   watchSymbols: watchList,
+  onWithheld,
 }: {
   dash?: DashboardResponse;
   watchSymbols?: string[];
+  /** The page shows one licence notice for all its cards; without it, this card shows its own. */
+  onWithheld?: (w: WithheldInfo) => void;
 }) {
   const [byKind, setByKind] = useState<Record<string, Forecast[]> | null>(null);
   const [failed, setFailed] = useState(false);
+  const [withheld, setWithheld] = useState<WithheldInfo | null>(null);
 
   // One fetch of the validated regime forecasts. Failure is non-fatal: the card
   // falls back to an honest empty state rather than to the directional number.
@@ -135,13 +140,18 @@ export default function TodaysRead({
       .then((r) => {
         if (alive) setByKind(r.forecasts as Record<string, Forecast[]>);
       })
-      .catch(() => {
-        if (alive) setFailed(true);
+      .catch((e: unknown) => {
+        if (!alive) return;
+        const w = withheldOf(e);
+        if (w) {
+          setWithheld(w);
+          onWithheld?.(w);
+        } else setFailed(true);
       });
     return () => {
       alive = false;
     };
-  }, [symKey]);
+  }, [symKey, onWithheld]);
 
   const watchSymbols = useMemo(
     () => new Set(watchList ?? (dash?.watchlist?.sparks ?? []).map((s) => s.symbol)),
@@ -153,6 +163,12 @@ export default function TodaysRead({
   );
   const dir = useMemo(() => (dash ? directionalNote(dash) : null), [dash]);
   const watchlistEmpty = watchSymbols.size === 0;
+
+  if (withheld) {
+    return onWithheld ? null : (
+      <Withheld compact title="Today's read" notice={withheld.notice} source={withheld.source} />
+    );
+  }
 
   return (
     <section

@@ -463,6 +463,22 @@ if [ -z "$refusal_reason" ]; then
   rm -f "$STAGE"
 fi
 
+# SURVIVORSHIP STATUS v1 -- a SEPARATE, unpinned measure, run AFTER the pinned
+# grade above and never before or instead of it. tools/survivorship_status.py
+# reads the database read-only (mode=ro) and classifies the same graded symbols
+# into watched / unwatched-but-trading / dated exit / unknown / retired source,
+# because the registry's "inactive with no delisted_at" count reads the lean
+# WATCH flag as listing status. It touches no input of the grade, no verdict
+# and no exit code here: a failure is logged, its stale output is removed (an
+# absent measurement must read as absent, not as yesterday's), and the run goes
+# on exactly as it would have without it. It sits above the REFUSAL PATH so
+# both paths' live_accuracy --write render the same cycle's file.
+SURV_STATUS="$SD/data/survivorship_status.json"
+"$PY" "$SD/tools/survivorship_status.py" --json "$SURV_STATUS" >> "$LOG" 2>&1 || {
+  echo "WARN: survivorship_status.py failed (exit $?); $SURV_STATUS removed. The pinned grade is unaffected." >> "$LOG"
+  rm -f "$SURV_STATUS"
+}
+
 # REFUSAL PATH — the whole point of this branch is that a grading outage must be
 # impossible to mistake for a healthy run. It never adds or improves a number:
 # it removes the accuracy tables from README.md and puts the refusal in their
@@ -493,10 +509,19 @@ if [ -n "$refusal_reason" ]; then
     rm -f "$PREV"
   fi
 
-  refusal_text=$("$PY" - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" <<'PY'
+  # LICENCE GATE, refusal side (23 Oct 2026). The envelope below always goes to
+  # data/accuracy_registry.json (gitignored). README.md is public, and the
+  # refusal notice quotes the reason (a collapse refusal carries day counts) and
+  # grade ages, so it is written only with SIGNALDECK_PUBLISH_DERIVED=1 -- the
+  # same exact-"1" switch as the success path. Otherwise README gets the
+  # licence-withheld section from live_accuracy.py --readme, which reads nothing.
+  publish_derived=0
+  [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ] && publish_derived=1
+  refusal_text=$("$PY" - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" "$publish_derived" <<'PY'
 import datetime as dt, json, pathlib, re, sys
 
 sd, out_p, err_p, reason = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+publish = sys.argv[5] == "1"
 now = dt.datetime.now()
 
 try:
@@ -583,14 +608,18 @@ elif "## Run it" in text:
     new = text.replace("## Run it", block + "\n\n## Run it", 1)
 else:
     new = text.rstrip() + "\n\n" + block + "\n"
-if new != text:
+if publish and new != text:
     readme_path.write_text(new)
 
 print(f"ACCURACY GRADING REFUSED ({reason}). Last successful grade {graded_at or 'never'} "
-      f"({age} old). README accuracy tables removed; no numbers published.")
+      f"({age} old). " + ("README accuracy tables removed; no numbers published." if publish else
+      "README left to the licence-withheld section (SIGNALDECK_PUBLISH_DERIVED is not 1)."))
 PY
 )
   { echo "ACCURACY REGISTRY REFUSED:"; echo "$refusal_text"; } >> "$LOG"
+  if [ "$publish_derived" != 1 ]; then
+    "$PY" "$SD/tools/live_accuracy.py" --readme >> "$LOG" 2>&1       || echo "WARN: README.md not reset to the licence-withheld section on the refusal path" >> "$LOG"
+  fi
 
   # THE REFUSAL HAS TO REACH EVERY SURFACE, NOT JUST README.
   #
@@ -624,7 +653,14 @@ PY
   #
   # Same WARN-not-fatal treatment as its siblings above: this reads the multi-GB
   # database, and a slow or failed read must not wedge the grader.
-  "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+  # Licence: §8's measurements come from the Alpaca-derived database, so the
+  # deck is re-injected only with SIGNALDECK_PUBLISH_DERIVED=1, as on the
+  # success path.
+  if [ "$publish_derived" = 1 ]; then
+    "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+  else
+    echo "licence: STRATEGY_DECK.md section 8 not re-injected on the refusal path (Alpaca-derived; SIGNALDECK_PUBLISH_DERIVED=1 only with Alpaca's written permission)." >> "$LOG"
+  fi
 
   # The snapshot docs_gate reads. Regenerated on BOTH paths so it states what
   # the grader actually did; left stale it asserted grader OK for 37 days while
@@ -660,6 +696,19 @@ if ! "$PY" "$SD/tools/grader_heartbeat.py" --success >> "$LOG" 2>&1; then
   exit 1
 fi
 
+# LICENCE GATE (23 Oct 2026), the same switch as ops/anchor-publish.sh. README.md,
+# partials/live_accuracy.md, the INCLUDES documents and STRATEGY_DECK.md section 8
+# are committed to the public repo, and what this block writes into them is
+# computed from Alpaca market data, which Alpaca licenses for personal use only
+# and forbids publishing, derivations included. They are regenerated only when
+# the operator records Alpaca's written permission with
+# SIGNALDECK_PUBLISH_DERIVED=1. The registry itself (data/, gitignored) is still
+# graded and written above. The REFUSAL PATH reads the same exact-"1" switch: with
+# it off, README gets the licence-withheld section and §8 is not re-injected.
+# ops/data-integrity.json is written on both paths by docs_gate write-integrity,
+# which withholds its database counts under the same switch.
+docs_stale=0
+if [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ]; then
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the
 # fresh registry, between the LIVE-ACCURACY markers. The point: a FAILED verdict
 # must be one click from the headline, not buried in a log only this Mac reads.
@@ -819,7 +868,6 @@ PY
 # live_accuracy --check and deck_facts --check -- sit behind an `exit 0` guard in
 # ci.yml (lines 197-211) for the gitignored data/, so on a runner they never
 # execute at all. That left the WARNs below with no reader anywhere.
-docs_stale=0
 "$PY" "$SD/tools/live_accuracy.py" --write \
   || { echo "WARN: partials/live_accuracy.md not regenerated"; docs_stale=1; }
 "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt") \
@@ -827,6 +875,9 @@ docs_stale=0
 # deck_facts reads the 4.9 GB database; a failure here is not fatal to grading.
 "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md" \
   || { echo "WARN: STRATEGY_DECK.md §8 not re-injected"; docs_stale=1; }
+else
+  echo "licence: README.md, partials/live_accuracy.md, the INCLUDES documents and STRATEGY_DECK.md section 8 not regenerated (Alpaca-derived statistics; SIGNALDECK_PUBLISH_DERIVED=1 only with Alpaca's written permission). The registry was graded." >> "$LOG"
+fi
 
 # H9: page on VERDICT TRANSITIONS — a predictor changing state (PENDING→FAILED,
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.

@@ -27,8 +27,12 @@ func newAttributionServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	d := Deps{
-		St:      st,
-		Cfg:     config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true},
+		St: st,
+		// HTTPAddr: a loopback, unpublished box (see baseCfg). Left empty it
+		// reads as published, and the operator-only guard then answers these
+		// anonymous requests with a 451 before attribution logic runs.
+		Cfg: config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true,
+			HTTPAddr: "127.0.0.1:8322"},
 		Version: "test",
 		Started: time.Now(),
 	}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -154,8 +155,22 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			return
 		}
 
-		// 7. LICENCE. Defence in depth behind publicRoutes, for the route
-		// somebody adds next month and forgets to think about. Gated on
+		// 6c. OPERATOR-ONLY CONTENT (23 Oct 2026). On a published deployment
+		// nobody but the operator may receive Alpaca- or Kadoa-derived content
+		// (datalicense.NonOperatorRoutes says why). Anonymous visitors and
+		// member accounts alike reach only the rights-cleared allowlist; every
+		// other path, including one added next month, is a 451 naming the
+		// source. Below the auth and member tiers, so it only ever narrows them.
+		if d.withheldFrom(r) {
+			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared {
+				writeWithheld(w, src)
+				return
+			}
+		}
+
+		// 7. LICENCE. Since 6c, only the operator gets this far on a published
+		// deployment with a governed path: raw vendor rows stay refused even to
+		// the operator there unless AllowRawExport records an agreement. Gated on
 		// published() for the same reason rawDataRefused is: the operator's own
 		// unpublished box may read its own data, while a tunnelled box's
 		// visitors arrive through the loopback web proxy looking local, so
@@ -176,6 +191,29 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 	})
 
 	return d.withAccessLog(guarded)
+}
+
+// withheldFrom is true for every caller who is not the operator on a published
+// deployment: anonymous visitors and member accounts. Handlers on the
+// rights-cleared allowlist strip their derived fields for exactly this caller.
+func (d Deps) withheldFrom(r *http.Request) bool {
+	return d.published() && !d.isOperator(r)
+}
+
+// writeWithheld is the 451 contract the web tier renders: status 451, JSON,
+// {"error":"withheld","reason":"licence","source":...,"notice":...}. no-store,
+// because RFC 7725 makes a 451 cacheable by default, and a shared cache that
+// kept one would answer the operator with it.
+func writeWithheld(w http.ResponseWriter, source string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnavailableForLegalReasons)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+		Source string `json:"source"`
+		Notice string `json:"notice"`
+	}{"withheld", "licence", source, datalicense.WithheldNotice(source)})
 }
 
 // withAccessLog records every request that reaches the daemon.

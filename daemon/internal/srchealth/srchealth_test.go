@@ -110,6 +110,28 @@ func TestLicenceRetiredSourcesArePaused(t *testing.T) {
 	}
 }
 
+// TestKadoaCongressSourceIsPaused: the congress-poller was retired on 23 Oct
+// 2026 (Kadoa's terms). congress_trades stops growing by design, so it must be
+// reported, with its last row, as paused for that reason and never as stale.
+func TestKadoaCongressSourceIsPaused(t *testing.T) {
+	st := fixtureStore(t)
+	ctx := context.Background()
+	old := openNow.UTC().AddDate(0, -3, 0).Unix() // far past the 7d budget
+	if _, err := st.InsertCongressTrade(ctx, store.CongressTradeRow{ID: "k1", Chamber: "house",
+		Member: "Rep. Example", Symbol: "AAPL", TxTs: old - 86400, DisclosedTs: old}); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := srchealth.Evaluate(ctx, st, openNow, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bySource(t, reports, "congress_trades")
+	if got.Stale || got.LastTs != old || !strings.HasPrefix(got.Note, "paused: retired 23 Oct 2026") ||
+		!strings.Contains(got.Note, "Kadoa") {
+		t.Errorf("congress_trades must be reported (with its last row) as paused for Kadoa's terms, never stale: %+v", got)
+	}
+}
+
 func TestEvaluateMarketOpenClassifies(t *testing.T) {
 	st := fixtureStore(t)
 	reports, err := srchealth.Evaluate(context.Background(), st, openNow, false)
@@ -170,5 +192,38 @@ func TestWebhookSilentFailure(t *testing.T) {
 	}
 	if srchealth.StaleCount(reports) == 0 {
 		t.Error("expected a nonzero stale count")
+	}
+}
+
+// The LLM headline tagger was retired 2026-10-23 (NVIDIA trial terms), so its
+// sentiment_daily aggregate stops growing by design: reported as paused with
+// the NVIDIA reason, never stale, with or without an old row.
+func TestLLMSentimentTaggerIsPaused(t *testing.T) {
+	st := fixtureStore(t)
+	ctx := context.Background()
+	const want = "paused: retired 2026-10-23: the LLM headline tagger ran on NVIDIA's hosted API, whose trial terms do not permit production use — not checked"
+	reports, err := srchealth.Evaluate(ctx, st, openNow, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bySource(t, reports, "news_sentiment_llm"); got.Stale || got.Note != want {
+		t.Errorf("no rows: must be paused, never stale: %+v", got)
+	}
+	sym, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "")
+	old := openNow.UTC().AddDate(0, -1, 0)
+	if err := st.InsertNews(ctx, store.NewsItem{ID: "n1", SymbolID: sym.ID, Ts: old.Unix(), Headline: "h"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RateNews(ctx, "n1", "bullish", 0.5, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertSentimentDaily(ctx, old.Format("2006-01-02")); err != nil {
+		t.Fatal(err)
+	}
+	if reports, err = srchealth.Evaluate(ctx, st, openNow, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := bySource(t, reports, "news_sentiment_llm"); got.Stale || got.Note != want || got.LastTs == 0 {
+		t.Errorf("a month-old aggregate must be reported (with its last row) as paused, never stale: %+v", got)
 	}
 }

@@ -36,8 +36,12 @@ func newTrackRecordServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	d := Deps{
-		St:           st,
-		Cfg:          config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true},
+		St: st,
+		// HTTPAddr: a loopback, unpublished box (see baseCfg). Left empty it
+		// reads as published, and the operator-only guard (23 Oct 2026) then
+		// answers these anonymous requests with a 451 before the handler runs.
+		Cfg: config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true,
+			HTTPAddr: "127.0.0.1:8322"},
 		Version:      "test",
 		Started:      time.Now(),
 		RegistryPath: healthyRegistry(t),
@@ -362,7 +366,7 @@ func TestChartOverlays_ScoreExtremeCrossingDedup(t *testing.T) {
 // marker nor the graded window can be checked, and /api/accuracy refuses on the
 // same read. The route used to skip every gate and publish its win rate.
 func TestTrackRecordRefusesOnAnUnreadableRegistry(t *testing.T) {
-	sd30Off(t) // with SD-30 on, 1d is withheld whatever the registry says
+	sd30Off(t)                    // with SD-30 on, 1d is withheld whatever the registry says
 	setRegistryWait(t, func() {}) // the malformed case would otherwise re-read for ~1s
 	st, err := store.Open(filepath.Join(t.TempDir(), "noreg.db"))
 	if err != nil {

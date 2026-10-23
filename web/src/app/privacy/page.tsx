@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { OPERATOR_NAME, CONTACT_EMAIL, LEGAL_UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = { title: "Privacy Notice" };
@@ -55,7 +56,7 @@ export default function PrivacyPage() {
                   Gmail address, normalised (lower-cased; googlemail.com becomes gmail.com; dots and +tags removed)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Account confirmation, password reset, and the daily digest if you turn it on
+                  Account confirmation, password reset, and the daily digest if you turn it on (paused for member accounts since 23 October 2026: it goes only to the operator)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Until you delete your account
@@ -121,10 +122,10 @@ export default function PrivacyPage() {
                   Your calls and their notes (up to 280 characters each)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Your private journal, graded
+                  Your private journal, graded (withheld from member accounts since 23 October 2026, because the grades are derived from Alpaca market data; stored calls are kept)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Until you delete your account. A call cannot be edited once made; an open call can be withdrawn and stays marked &ldquo;withdrawn&rdquo;
+                  Until you delete your account. A call cannot be edited once made; withdrawing an open call is paused for member accounts while the journal is withheld (a call withdrawn earlier stays marked &ldquo;withdrawn&rdquo;)
                 </td>
               </tr>
               <tr>
@@ -132,7 +133,7 @@ export default function PrivacyPage() {
                   Alert settings: digest on or off, the date of your last digest, today&rsquo;s delivery attempts, and, if you link Telegram, your Telegram chat id and a 15-minute link code
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send the daily digest you asked for
+                  To send the daily digest you asked for (paused for member accounts since 23 October 2026; the setting is kept and nothing is sent)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Until you delete your account
@@ -143,7 +144,7 @@ export default function PrivacyPage() {
                   Waitlist email (the landing-page form, no account needed), trimmed and lower-cased, with the time it was added
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send one email when the volatility record can be judged (nothing sends it yet)
+                  To send one email when the volatility record&rsquo;s figures can be published (nothing sends it yet)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Up to 12 months, or sooner if you ask us to remove it (email the contact address)
@@ -260,7 +261,7 @@ export default function PrivacyPage() {
                   Your email address and the mail we send you; that mail can include your username, and the digest lists forecasts for the symbols you watch
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  To send account mail and the digest
+                  To send account mail and the digest (the digest is paused for member accounts)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Always
@@ -316,7 +317,7 @@ export default function PrivacyPage() {
                   Your chat id and the digest text
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Delivers the digest, if you link Telegram
+                  Delivers the digest, if you link Telegram (paused for member accounts)
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
                   Not switched on today
@@ -347,12 +348,22 @@ export default function PrivacyPage() {
                   AI answers
                 </td>
                 <td className="border-t px-2 py-1.5 align-top" style={{ borderColor: "var(--border)" }}>
-                  Switched off for member accounts
+                  Switched off for everyone as of the 23 October 2026 release, together with the AI news-sentiment tagger, so no question and no headline is sent to NVIDIA
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="panel px-5 py-4" aria-label="Data sources">
+        <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Data sources</h2>
+        <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
+          As of 23 October 2026: SignalDeck&rsquo;s prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only, so they are withheld from everyone except the operator, signed-in members included, until Alpaca gives written permission. Collection of the congressional trading rows compiled by Kadoa has stopped, and the stored rows are shown only to the operator. The NVIDIA-hosted AI features and the AI news-sentiment tagger are switched off as of this release, so headlines are no longer sent to NVIDIA. None of this changes what we hold about you. The{" "}
+          <Link href="/terms#data-sources" style={{ color: "var(--dim)", textDecoration: "underline" }}>
+            Terms of Use
+          </Link>{" "}
+          give the detail.
+        </p>
       </section>
       <section className="panel px-5 py-4" aria-label="Backups and deletion">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Backups and deletion</h2>
@@ -378,7 +389,7 @@ export default function PrivacyPage() {
           On your Account page you can:
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          <li>Download your data: a JSON file of your account record, watchlist, calls, alert settings and digest delivery records, without the password hash or any token. The waitlist and server logs are not included.</li>
+          <li>Download your data: a JSON file of your account record, watchlist, calls, alert settings and digest delivery records, without the password hash or any token. A member&rsquo;s export omits each call&rsquo;s hit/miss grade, which is derived from Alpaca market data. The waitlist and server logs are not included.</li>
           <li>Delete your account, confirmed with your password. Your tokens, sessions, watchlist, calls, alert settings and account are erased in one step. If you signed up with Google, first set a password with &ldquo;Forgot password&rdquo;. This does not remove a waitlist entry for the same address; ask us to.</li>
           <li>Turn the digest off, or use the unsubscribe link in any digest.</li>
         </ul>

@@ -5,10 +5,12 @@
     python verify.py --selftest
 
 REPO is a clone of github.com/nyaungnicholas-wq/signaldeck-anchors. Every line
-printed starts PASS, FAIL, WARN, SKIP or INFO; the last line is the verdict:
-PASS (exit 0) when every check ran and none FAILed, FAIL (exit 1), or
+printed starts PASS, FAIL, WARN, SKIP, WITHHELD or INFO; the last line is the
+verdict: PASS (exit 0) when every check ran and none FAILed, FAIL (exit 1),
 INCOMPLETE (exit 3) when none FAILed but a check was SKIPped -- without --site
-the forecasts are never recomputed, and that is not a PASS. See VERIFY.md for
+the forecasts are never recomputed, and that is not a PASS -- or WITHHELD (exit
+4) when the site answered HTTP 451: it withholds the ledger under its data
+licence, which is neither a pass nor evidence of tampering. See VERIFY.md for
 what each check proves and, as importantly, what it does not.
 """
 import argparse
@@ -24,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 
 MAGIC = b"\x00OpenTimestamps\x00\x00Proof\x00\xbf\x89\xe2\xe8\x84\xe8\x92\x94"
@@ -58,7 +61,7 @@ UTC = dt.timezone.utc
 
 class Report:
     def __init__(self, quiet=False):
-        self.n = dict.fromkeys(["PASS", "FAIL", "WARN", "SKIP", "INFO"], 0)
+        self.n = dict.fromkeys(["PASS", "FAIL", "WARN", "SKIP", "WITHHELD", "INFO"], 0)
         self.quiet = quiet
 
     def __call__(self, kind, msg):
@@ -333,6 +336,19 @@ def check_chain(site, stmts, n_stmts, rep):
         url = "%s/api/ledger/range?from=%d&limit=5000" % (site.rstrip("/"), nxt)
         try:
             page = fetch(url)
+        except urllib.error.HTTPError as e:
+            if e.code != 451:
+                rep("FAIL", "chain: %s: %s" % (url, e))
+                return None
+            # 451 is the site withholding the ledger under its data licence
+            # (Alpaca market data, personal use only), not a broken chain.
+            try:
+                notice = json.loads(e.read().decode("utf-8")).get("notice") or ""
+            except Exception:
+                notice = ""
+            rep("WITHHELD", "chain: %s answered HTTP 451 (licence); the ledger was not recomputed. %s"
+                % (url, notice))
+            return None
         except Exception as e:
             rep("FAIL", "chain: %s: %s" % (url, e))
             return None
@@ -418,6 +434,11 @@ def main(argv):
     if rep.n["FAIL"]:
         print("VERIFY RESULT: FAIL (%d fail, %d pass, %d warn)" % (rep.n["FAIL"], rep.n["PASS"], rep.n["WARN"]))
         return 1
+    if rep.n["WITHHELD"]:
+        print("VERIFY RESULT: WITHHELD (licence) (%d pass, %d warn) -- nothing failed, but the site withheld the "
+              "ledger under its data licence, so the forecasts were not recomputed. This is not a PASS and it "
+              "is not evidence of tampering" % (rep.n["PASS"], rep.n["WARN"]))
+        return 4
     # A skipped check proved nothing, so it cannot contribute to a PASS: without
     # --site this used to print PASS having never recomputed a single forecast.
     if rep.n["SKIP"] or not rep.n["PASS"]:

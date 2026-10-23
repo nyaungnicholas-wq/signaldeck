@@ -37,7 +37,9 @@ func TestJournalMemberFlow(t *testing.T) {
 	ctx := context.Background()
 	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
 		lim := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
-		return d.httpServerWith(d.routes(lim), lim).Handler
+		// The member journal is withheld from members by the operator-only guard
+		// (23 Oct 2026); its member logic is tested behind memberLogicOnly.
+		return memberLogicOnly(d, d.routes(lim))
 	})
 	base := srv.URL
 	mira := signupVerified(t, srv, mb, "mira", "mira@gmail.com")
@@ -199,7 +201,11 @@ func TestJournalMemberFlow(t *testing.T) {
 // are distinctive serves its grade and none of the closes or the return.
 func TestJournalNeverServesPrices(t *testing.T) {
 	ctx := context.Background()
-	base, st, member, _ := newAlertPrefsServer(t, nil, false)
+	// Behind memberLogicOnly: the guard withholds /api/journal from members.
+	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
+		return memberLogicOnly(d, d.routes(newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)))
+	})
+	base, member := srv.URL, signupVerified(t, srv, mb, "mira", "mira@gmail.com")
 	u, _, err := st.GetUserByName(ctx, "mira")
 	if err != nil {
 		t.Fatal(err)

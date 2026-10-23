@@ -33,6 +33,7 @@ func (f *fixture) restart(t *testing.T) {
 		Telegram:  f.w.Telegram,
 		Now:       f.w.Now,
 		Cap:       f.w.Cap,
+		everyone:  f.w.everyone,
 	}
 	f.st = st2
 }

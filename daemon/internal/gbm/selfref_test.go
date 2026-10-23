@@ -269,19 +269,22 @@ func TestExcludedKey_RetiredSources(t *testing.T) {
 }
 
 // FINRA, Cboe put/call and FRED keys (retired 22 Oct 2026) and the TradingView
-// webhook alert key (retired 2026-10-22) are excluded with their presence bits;
-// CFTC and EDGAR keys, and postmortem's macro_event code, stay trainable.
+// webhook alert key (retired 2026-10-22) and the LLM headline-sentiment keys
+// (retired 2026-10-23, NVIDIA trial terms) are excluded with their presence
+// bits; CFTC and EDGAR keys, postmortem's macro_event code and the headline
+// COUNT z-score (news_vol_z, no LLM) stay trainable.
 func TestExcludedKey_LicenceRetiredSources(t *testing.T) {
 	for _, k := range []string{
 		"short_vol_z", "short_int_dtc__has", "pc_total", "vix_level", "vix_regime__has",
 		"vix_high_vol", "macro_dgs10_pct", "macro_hy_spread_chg__has", "macro_oil_pct",
 		"tv_webhook_signal", "tv_webhook_signal__has",
+		"sentiment_score", "sentiment_score__has", "sentiment_n", "sentiment_n__has",
 	} {
 		if !ExcludedKey(k) || !RetiredSourceKey(k) {
 			t.Errorf("%q must be excluded as a retired source", k)
 		}
 	}
-	for _, k := range []string{"cot_spx_net", "insider_net_ratio", "macro_event", "vol_pct", "mkt_trend"} {
+	for _, k := range []string{"cot_spx_net", "insider_net_ratio", "macro_event", "vol_pct", "mkt_trend", "news_vol_z"} {
 		if ExcludedKey(k) {
 			t.Errorf("%q must stay trainable", k)
 		}

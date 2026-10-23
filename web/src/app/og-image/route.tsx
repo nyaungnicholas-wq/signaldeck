@@ -67,7 +67,7 @@ export function GET() {
             maxWidth: 900,
           }}
         >
-          A market instrument that grades itself in public.
+          A market instrument that registers its claims in public before the outcome.
         </div>
         <div
           style={{

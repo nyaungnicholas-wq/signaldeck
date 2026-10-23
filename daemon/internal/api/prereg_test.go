@@ -151,3 +151,40 @@ func TestPreregServesTheStoredPayloadWholeAndOnlyGradesTimingWhereItApplies(t *t
 		t.Errorf("registeredBefore is false; expected true (only one record is after cutoff and it is not compared, so aggregate should be true)")
 	}
 }
+
+// TestClaimTextKeepsOnlyTheFieldsTheSpecFroze: a non-operator's spec is the
+// claim wording the frozen JSON actually holds. The HAR volatility registration
+// (seq 105) and the forward-test registration (seq 87) froze no horizonDays and
+// no resolution; decoding them into prereg.Spec showed "horizon days 0" and an
+// empty rule on /proof, neither of which was ever registered.
+func TestClaimTextKeepsOnlyTheFieldsTheSpecFroze(t *testing.T) {
+	rv := claimText(`{"question":"Does a HAR model beat a random walk?","horizons":[1,5],"claimedLoss":0.8}`)
+	got, ok := rv.(map[string]any)
+	if !ok {
+		t.Fatalf("RV-shaped spec with a question: got %#v, want its wording", rv)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"question": "Does a HAR model beat a random walk?"}) {
+		t.Errorf("RV-shaped spec: got %#v, want the question alone (no invented horizonDays, kind or resolution)", got)
+	}
+
+	fwd, _ := claimText(`{"kind":"forward-test-registration","question":"q?"}`).(map[string]any)
+	if _, has := fwd["horizonDays"]; has || fwd["kind"] != "forward-test-registration" {
+		t.Errorf("forward-test spec: got %#v, want kind and question only", fwd)
+	}
+	if _, has := fwd["resolution"]; has {
+		t.Errorf("forward-test spec: invented an empty resolution: %#v", fwd)
+	}
+
+	full, _ := claimText(`{"kind":"trend21","question":"q?","horizonDays":21,"resolution":"r",` +
+		`"bands":[{"minConviction":0.5,"claimedAccuracy":0.9}],"baseline":"b","knownWeakness":"w"}`).(map[string]any)
+	want := map[string]any{"kind": "trend21", "question": "q?", "horizonDays": 21, "resolution": "r"}
+	if !reflect.DeepEqual(full, want) {
+		t.Errorf("structural spec: got %#v, want %#v", full, want)
+	}
+
+	for _, raw := range []string{`{"kind":"x"}`, `{"question":""}`, `not json`, `{"question":7}`} {
+		if v := claimText(raw); v != nil {
+			t.Errorf("claimText(%s) = %#v, want nil (no claim wording to show)", raw, v)
+		}
+	}
+}

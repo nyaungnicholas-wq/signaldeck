@@ -78,6 +78,9 @@ func TestLicenceRetiredSourcesAreNotRedistributable(t *testing.T) {
 			t.Errorf("%s note must record the retirement: %q", n, Sources[n].Note)
 		}
 	}
+	if !contains(Sources["kadoa"].Note, "RETIRED 23 Oct 2026") {
+		t.Errorf("kadoa note must record the retirement: %q", Sources["kadoa"].Note)
+	}
 	if n := Sources["edgar"].Note; contains(n, "public domain") || !contains(n, "free to access and reuse") {
 		t.Errorf("edgar note = %q, want the SEC's reuse wording, not public domain", n)
 	}
@@ -193,7 +196,9 @@ func TestEveryNonRedistributableSourceWithARouteIsGoverned(t *testing.T) {
 		"finra":       "/api/short-interest",
 		"cboe":        "/api/cboe-pc",
 		"fred":        "/api/macro-series",
-		// kadoa: no route of its own; /api/congress serves the disclosure facts.
+		// kadoa: /api/congress is withheld from non-operators through
+		// NonOperatorSource, not RestrictedRoutes, so the operator can still
+		// read the rows stored before the retirement.
 		// cryptohist: no route of its own. It is a PriceBarSources member and
 		// reaches users only through /api/bars, which is governed as alpaca.
 	}
@@ -219,6 +224,58 @@ func TestEveryNonRedistributableSourceWithARouteIsGoverned(t *testing.T) {
 		if src != key {
 			t.Errorf("%s is governed by %q, want %q -- the refusal would name the wrong provider",
 				route, src, key)
+		}
+	}
+}
+
+// TestNonOperatorAllowlistFailsClosed: the non-operator gate is an allowlist.
+// Every entry says why its payload is clear, none is also a refused route, and
+// a path on no list is withheld under Alpaca's terms rather than served.
+func TestNonOperatorAllowlistFailsClosed(t *testing.T) {
+	if len(NonOperatorRoutes) < 20 {
+		t.Fatalf("only %d rights-cleared routes; the table was truncated", len(NonOperatorRoutes))
+	}
+	for p, why := range NonOperatorRoutes {
+		if why == "" {
+			t.Errorf("%s is cleared with no reason", p)
+		}
+		if src, cleared := NonOperatorSource(p); !cleared || src != "" {
+			t.Errorf("NonOperatorSource(%s) = %q, %v; it is on the allowlist", p, src, cleared)
+		}
+		if src, ok := RestrictedRoutes[p]; ok {
+			t.Errorf("%s is cleared for non-operators AND refused under %s", p, src)
+		}
+	}
+	for path, want := range map[string]string{
+		"/api/congress":                  "kadoa",
+		"/api/bars":                      "alpaca",
+		"/api/macro-series":              "fred",
+		"/api/accuracy":                  "alpaca",
+		"/api/ledger/range":              "alpaca",
+		"/api/a-route-nobody-classified": "alpaca",
+		"/mcp":                           "alpaca",
+	} {
+		if src, cleared := NonOperatorSource(path); cleared || src != want {
+			t.Errorf("NonOperatorSource(%s) = %q, %v; want %q, withheld", path, src, cleared, want)
+		}
+	}
+	for src := range Sources {
+		if n := WithheldNotice(src); !contains(n, "Withheld: ") || !contains(n, "operator") {
+			t.Errorf("WithheldNotice(%s) = %q", src, n)
+		}
+	}
+}
+
+// NVIDIA's hosted API was retired 2026-10-23: its trial terms do not permit
+// production use. It must stay Restricted, not redistributable, and say why.
+func TestNVIDIAIsRetiredAndRestricted(t *testing.T) {
+	s, ok := Sources["nvidia"]
+	if !ok || s.Class != Restricted || s.Redistrib {
+		t.Fatalf("nvidia must be Restricted and not redistributable: %+v", s)
+	}
+	for _, want := range []string{"RETIRED 2026-10-23", "trial terms", "production use"} {
+		if !contains(s.Note, want) {
+			t.Errorf("nvidia note must say %q: %q", want, s.Note)
 		}
 	}
 }

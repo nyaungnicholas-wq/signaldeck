@@ -102,12 +102,23 @@ var Sources = map[string]Source{
 		Note: "RETIRED 22 Oct 2026: Cboe's website terms bar storing its market statistics " +
 			"in a retrieval system, displaying them and deriving from them",
 		Redistrib: false},
-	// The congress-poller's fallback when the Stock Watcher mirrors fail. Its own
-	// terms are unverified, so only the underlying public disclosure facts may be
-	// passed on, never the compilation.
+	// Not a data feed but a processor: the sentiment tagger and the AI layer sent
+	// Alpaca/Benzinga headlines and SignalDeck data to it. llm.ProviderRetired
+	// refuses its hosts; sentiment_score/sentiment_n are retired model inputs.
+	"nvidia": {Name: "nvidia", Class: Restricted, Provider: "NVIDIA",
+		Note: "RETIRED 2026-10-23: the hosted API (integrate.api.nvidia.com) was used under " +
+			"NVIDIA's trial terms, which do not permit production use; nothing is sent to it " +
+			"any more, and its stored sentiment ratings are not a model input",
+		Redistrib: false},
+	// Every stored congress_trades row is treated as Kadoa's: no row records its
+	// source, Kadoa was the fallback from 7 Sep 2026 and the Stock Watcher
+	// mirrors answer 403. Its terms (s.4, s.8) bar automated access,
+	// reproduction and making the data available to third parties without written
+	// permission, so the poller is unwired and the stored rows are operator-only.
 	"kadoa": {Name: "kadoa", Class: Restricted, Provider: "Kadoa (congress trades dataset)",
-		Note: "third-party aggregation of STOCK Act disclosures; licence status unclear, so " +
-			"not redistributable beyond the disclosure facts themselves",
+		Note: "RETIRED 23 Oct 2026: Kadoa's terms (s.4, s.8) bar automated access, reproduction " +
+			"and sharing its compiled rows without written permission; stored rows are kept " +
+			"and shown only to the operator",
 		Redistrib: false},
 	// ── genuinely free ────────────────────────────────────────────────────
 	"edgar": {Name: "edgar", Class: Public, Provider: "SEC EDGAR",
@@ -248,7 +259,10 @@ var RestrictedRoutes = map[string]string{
 }
 
 // RouteRedistributable reports whether the path may be served, and the source
-// governing it. ok=true for any path this table does not govern.
+// governing it. ok=true for any path this table does not govern. That fails
+// OPEN, which is acceptable only because it now answers for the OPERATOR alone:
+// every other caller on a published deployment goes through NonOperatorSource,
+// which fails closed.
 func RouteRedistributable(path string) (source string, redistributable bool, governed bool) {
 	key, ok := RestrictedRoutes[path]
 	if !ok {
@@ -261,4 +275,108 @@ func RouteRedistributable(path string) (source string, redistributable bool, gov
 		return key, false, true
 	}
 	return key, s.Redistrib, true
+}
+
+// ── Operator-only content (23 Oct 2026) ──────────────────────────────────
+//
+// Alpaca licenses its market data AND news for personal, non-commercial use and
+// forbids displaying, republishing or transmitting it to anyone else without
+// written consent; its Developer Relations team wrote on 2026-09-03 that
+// DERIVATIONS may not be provided to third parties either, and the NYSE
+// agreement counts information derived from market data as market data.
+// Nearly every number SignalDeck shows (prices, forecasts, grades, accuracy
+// statistics) is computed from Alpaca bars. Kadoa's terms (s.4, s.8) bar
+// sharing its compiled congress rows. So on a published deployment only the
+// operator receives that content. A member account is not the operator, and a
+// login is not a licence.
+//
+// NonOperatorRoutes is the WHOLE surface a non-operator may reach there, each
+// entry with the reason its payload carries nothing derived from a licensed
+// source. It is an allowlist for the reason api.publicRoutes is one: a route
+// added next month is withheld until somebody checks its payload, instead of
+// being served because nobody remembered it. RestrictedRoutes cannot do this
+// job: it names refused routes, so an unlisted route passes it. The auth tiers
+// still apply on top; this list never opens a route to a caller who could not
+// reach it before.
+var NonOperatorRoutes = map[string]string{
+	"/api/health":  "probe; a non-operator gets the summary only (degraded flag, sign-up switches)",
+	"/api/ready":   "probe; a non-operator gets ready true/false only",
+	"/api/version": "build identity (version, revision, row stamp); no data",
+
+	"/api/auth/register": "account flow", "/api/auth/login": "account flow",
+	"/api/auth/logout": "account flow", "/api/auth/me": "the session's own identity",
+	"/api/auth/verify": "account flow", "/api/auth/resend": "account flow",
+	"/api/auth/forgot": "account flow", "/api/auth/reset": "account flow",
+	"/api/auth/google":        "account flow",
+	"/api/alerts/unsubscribe": "tokened off-switch for the daily email; a fixed sentence",
+	"/api/waitlist":           "takes an email and answers ok; serves nothing back",
+	"/api/tv-webhook":         "the operator's own inbound TradingView alerts; serves nothing back",
+
+	"/api/prereg": "frozen claim wording, resolution rules and chain hashes; the measured " +
+		"numbers are stripped for a non-operator (api/prereg.go)",
+	"/api/ledger/verify":  "chain integrity: count, head hash, anchor and tamper status; no forecast",
+	"/api/ledger/anchors": "signed chain heads: hashes, counts, signatures, keys; no forecast",
+
+	"/api/account/export":              "the caller's own account rows; journal grades stripped (api/accountdata.go)",
+	"/api/account/delete":              "erases the caller's own account; status only",
+	"/api/alert-prefs":                 "the caller's own email and Telegram switches",
+	"/api/alert-prefs/telegram-link":   "a one-time link code for the caller's own chat",
+	"/api/alert-prefs/telegram-unlink": "the caller's own switches",
+
+	"/api/watchlist": "the member's own symbols, identity only: no close, spark, score or bar time",
+	"/api/watch":     "adds to the caller's own list; answers the symbol's identity",
+	"/api/unwatch":   "removes from the caller's own list; answers the symbol's identity",
+	"/api/subscribe": "answers the symbol's identity; the member tier refuses it (starts ingestion)",
+	"/api/unsubscribe": "answers the symbol's identity; the member tier refuses it " +
+		"(can stop a feed)",
+
+	"/api/companies": "SEC company map, EDGAR share count and float; price, volume, day " +
+		"change and market cap stripped for a non-operator (api/companies.go)",
+	"/api/filings":      "SEC EDGAR filing index rows",
+	"/api/insiders":     "SEC Form 4 rows as filed: shares, price and value come from the filing",
+	"/api/institutions": "SEC 13F holdings as reported",
+	"/api/dilution":     "flag built from SEC filings and XBRL share counts only",
+	"/api/fundamentals": "SEC EDGAR XBRL company facts",
+	"/api/company/profile": "EDGAR identity, peers, Form 4, 13F, filings and XBRL facts; the " +
+		"LLM summary never runs for a non-operator",
+}
+
+// withheldBy names the governing source of a withheld route that is neither
+// in RestrictedRoutes nor built on Alpaca data (the default).
+var withheldBy = map[string]string{"/api/congress": "kadoa"}
+
+// NonOperatorSource reports whether a non-operator may be served path on a
+// published deployment and, when not, the source whose terms withhold it. A
+// path on no list is withheld under Alpaca's terms: this fails CLOSED.
+func NonOperatorSource(path string) (source string, cleared bool) {
+	if _, ok := NonOperatorRoutes[path]; ok {
+		return "", true
+	}
+	if s, ok := withheldBy[path]; ok {
+		return s, false
+	}
+	if s, ok := RestrictedRoutes[path]; ok {
+		return s, false
+	}
+	return "alpaca", false
+}
+
+// WithheldNotice is the plain sentence a withheld caller is shown for source.
+func WithheldNotice(source string) string {
+	switch source {
+	case "alpaca":
+		return "Withheld: SignalDeck's prices, forecasts and statistics are derived from Alpaca " +
+			"market data, which is licensed for personal use only. They are shown only to the " +
+			"operator until Alpaca gives written permission."
+	case "kadoa":
+		return "Withheld: the congressional trading rows were compiled by Kadoa, whose terms do " +
+			"not permit sharing them without written permission. Collection has stopped and the " +
+			"stored rows are shown only to the operator."
+	}
+	if s, ok := Sources[source]; ok {
+		return "Withheld: this data comes from " + s.Provider + ", whose terms do not permit " +
+			"SignalDeck to share it. It is shown only to the operator."
+	}
+	return "Withheld: the licence for this data does not permit sharing it. It is shown only " +
+		"to the operator."
 }

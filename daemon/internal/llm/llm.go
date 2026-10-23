@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -92,7 +93,33 @@ var (
 	// provider wording three times in six weeks, so matching "503" or
 	// "ResourceExhausted" would be a fix with a known expiry date.
 	ErrTransient = fmt.Errorf("llm: transient failure, retries exhausted")
+	// ErrRetired is returned, without dialing, for a request to a retired
+	// provider host (see ProviderRetired).
+	ErrRetired = fmt.Errorf("llm: provider retired")
 )
+
+// nvidiaRetired is why NVIDIA-hosted endpoints are refused.
+const nvidiaRetired = "NVIDIA trial API terms do not permit production use (2026-10-23)"
+
+// ProviderRetired reports whether baseURL points at a provider SignalDeck may
+// no longer call, and why. Retired 2026-10-23: NVIDIA's hosted API
+// (integrate.api.nvidia.com, any host that is nvidia.com or ends in
+// .nvidia.com) is used under trial terms that do not permit production use,
+// and the sentiment tagger sent Alpaca/Benzinga headlines to it. New drops the
+// keys of a client built for a retired provider and attempt refuses a retired
+// host without dialing. There is deliberately no env override. Reversal =
+// delete this rule, as with gbm.RetiredSourceKey.
+func ProviderRetired(baseURL string) (bool, string) {
+	s := strings.TrimSpace(baseURL)
+	if !strings.Contains(s, "://") {
+		s = "https://" + s // a scheme-less "integrate.api.nvidia.com/v1" must not slip through
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return false, ""
+	}
+	return hostRetired(u.Hostname())
+}
 
 // SpendStore persists the daily call counter so a daemon restart can't reset
 // the spend cap. IncrAndGetSpend atomically increments and returns the count
@@ -101,8 +128,35 @@ type SpendStore interface {
 	IncrAndGetSpend(ctx context.Context, day string) (int, error)
 }
 
+func hostRetired(host string) (bool, string) {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "nvidia.com" || strings.HasSuffix(h, ".nvidia.com") {
+		return true, nvidiaRetired
+	}
+	return false, ""
+}
+
+// RetiredReason is why c refuses to call its provider ("" when it is not
+// retired), for the startup log and the AI status surface.
+func RetiredReason(c Client) string {
+	if h, ok := c.(*httpClient); ok {
+		return h.retired
+	}
+	return ""
+}
+
+// refuseRetiredRedirect stops a redirect from carrying a request to a retired
+// host: attempt only checks the first hop.
+func refuseRetiredRedirect(req *http.Request, _ []*http.Request) error {
+	if bad, why := hostRetired(req.URL.Hostname()); bad {
+		return fmt.Errorf("%w: %s", ErrRetired, why)
+	}
+	return nil
+}
+
 // httpClient is the concrete OpenAI-compatible client.
 type httpClient struct {
+	retired                     string // non-empty: provider retired, keys dropped
 	keys                        []string
 	baseURL                     string
 	model, deepModel, fastModel string
@@ -150,14 +204,19 @@ func New(keys []string, baseURL, model, deepModel, fastModel string, dailyCap in
 	if fastModel == "" {
 		fastModel = model
 	}
+	retired, why := ProviderRetired(baseURL)
+	if retired {
+		cleaned = nil // no keys: Enabled() is false and every agent no-ops
+	}
 	return &httpClient{
+		retired:   why,
 		keys:      cleaned,
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		model:     model,
 		deepModel: deepModel,
 		fastModel: fastModel,
 		dailyCap:  dailyCap,
-		http:      &http.Client{}, // per-attempt ctx deadline governs timeout
+		http:      &http.Client{CheckRedirect: refuseRetiredRedirect}, // per-attempt ctx deadline governs timeout
 		stats:     Stats{DailyCap: dailyCap},
 	}
 }
@@ -436,6 +495,12 @@ func (c *httpClient) attempt(ctx context.Context, key string, body []byte, timeo
 	req, err := http.NewRequestWithContext(actx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", false, err
+	}
+	// Defence in depth behind New: whatever built this client, a retired host
+	// is refused here, before the key is attached and before any dial.
+	if bad, why := hostRetired(req.URL.Hostname()); bad {
+		c.record(0, 0, now, "retired")
+		return "", false, fmt.Errorf("%w: %s", ErrRetired, why)
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")

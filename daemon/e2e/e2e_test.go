@@ -403,10 +403,10 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("expected a fleet of workers, saw only %v\nlast body: %s\nlogs:\n%s",
 			names, body, d.logs.String())
 	}
-	for n := range names { // retired sources: crypto 2026-10-22, StockTwits, TradingView, FINRA, Cboe, FRED
+	for n := range names { // retired sources: crypto 2026-10-22, StockTwits, TradingView, FINRA, Cboe, FRED, Kadoa 2026-10-23
 		switch {
 		case n == "crypto-live", n == "crypto-bars", n == "crypto-perp", n == "tv-rating", n == "tv-quotes", strings.HasPrefix(n, "stocktwits"),
-			n == "finra-shorts", n == "finra-shortint", n == "cboe-pc", n == "fred-poller":
+			n == "finra-shorts", n == "finra-shortint", n == "cboe-pc", n == "fred-poller", n == "congress-poller":
 			t.Errorf("retired-source worker %q is in the running fleet (saw %v)", n, names)
 		}
 	}

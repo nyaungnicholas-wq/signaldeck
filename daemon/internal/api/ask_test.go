@@ -66,6 +66,47 @@ func askAs(t *testing.T, c *http.Client, base, q string) (int, string) {
 	return resp.StatusCode, drain(t, resp)
 }
 
+// askBare drives /api/ask on the bare production mux (no middleware) as uid.
+// Since 23 Oct 2026 the operator-only guard (secureWith step 6c) withholds
+// /api/ask from every member with a 451 before the handler runs, so the member
+// copilot logic below is reachable only this way; it stays under test for the
+// day Alpaca's written permission clears the route. q == "" sends a GET.
+func askBare(t *testing.T, bare http.Handler, uid int64, q string) (int, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/ask", nil)
+	if q != "" {
+		b, _ := json.Marshal(map[string]string{"question": q})
+		req = httptest.NewRequest(http.MethodPost, "/api/ask", bytes.NewReader(b))
+	}
+	rec := httptest.NewRecorder()
+	bare.ServeHTTP(rec, withUser(req, uid))
+	return rec.Code, rec.Body.String()
+}
+
+// memberID is the signed-up member's user id.
+func memberID(t *testing.T, st *store.Store, name string) int64 {
+	t.Helper()
+	u, _, err := st.GetUserByName(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.ID
+}
+
+// askWithheld asserts the member is refused /api/ask by the operator-only
+// guard: both methods, the 451 contract, and not one LLM call.
+func askWithheld(t *testing.T, member *http.Client, srv *httptest.Server, fake *echoLLM) {
+	t.Helper()
+	before := fake.calls
+	for _, m := range []string{http.MethodGet, http.MethodPost} {
+		code, ctype, body := call(t, member, srv, m, "/api/ask")
+		checkWithheld(t, "member", m+" /api/ask", code, ctype, body, "alpaca")
+	}
+	if fake.calls != before {
+		t.Errorf("a withheld member ask spent %d LLM call(s)", fake.calls-before)
+	}
+}
+
 func ownerClient(t *testing.T, base string) *http.Client {
 	t.Helper()
 	owner := newClient(t)
@@ -82,13 +123,15 @@ func TestAskMemberOffByDefault(t *testing.T) {
 	fake := &echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })
-	srv, _, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	srv, st, mb, d := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
 	member := signupVerified(t, srv, mb, "moe", "moe@gmail.com")
+	askWithheld(t, member, srv, fake)
+	bare, moe := d.routes(newRateLimiter(1000, 6000)), memberID(t, st, "moe")
 
-	if code, body := askAs(t, member, srv.URL, "how good is the vol forecast?"); code != 403 || !strings.Contains(body, askMemberOff) {
+	if code, body := askBare(t, bare, moe, "how good is the vol forecast?"); code != 403 || !strings.Contains(body, askMemberOff) {
 		t.Errorf("member ask with the flag off: %d %s", code, body)
 	}
-	if code, body := getAs(t, member, srv.URL+"/api/ask"); code != 200 || !strings.Contains(body, `"available":false`) {
+	if code, body := askBare(t, bare, moe, ""); code != 200 || !strings.Contains(body, `"available":false`) {
 		t.Errorf("member status with the flag off: %d %s", code, body)
 	}
 	if fake.calls != 0 {
@@ -130,44 +173,47 @@ func TestAskMemberTierAndCap(t *testing.T) {
 	fake := &echoLLM{plan: planFor(`{"query":"prereg_chain","params":{}}`)}
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })
-	srv, _, mb, _ := newProductionServer(t, func(c *config.Config) { c.MemberCopilot = true },
+	srv, st, mb, d := newProductionServer(t, func(c *config.Config) { c.MemberCopilot = true },
 		writeRegistry(t, thinWindowRegistry))
-	member := signupVerified(t, srv, mb, "mia", "mia@gmail.com")
-	other := signupVerified(t, srv, mb, "max", "max@gmail.com")
+	askWithheld(t, signupVerified(t, srv, mb, "mia", "mia@gmail.com"), srv, fake) // even with the flag on
+	signupVerified(t, srv, mb, "max", "max@gmail.com")
+	bare := d.routes(newRateLimiter(1000, 6000))
+	member, other := memberID(t, st, "mia"), memberID(t, st, "max")
 
-	if code, body := getAs(t, member, srv.URL+"/api/ask"); code != 200 || !strings.Contains(body, `"available":true`) ||
+	if code, body := askBare(t, bare, member, ""); code != 200 || !strings.Contains(body, `"available":true`) ||
 		strings.Contains(body, "worker_health") || !strings.Contains(body, `"dailyLimit":20`) {
 		t.Errorf("member status: %d %s", code, body)
 	}
 	for _, op := range []string{"worker_health", "paper_book_summary", "postmortem_clusters"} {
 		fake.queue = append(fake.queue, planFor(`{"query":"`+op+`","params":{}}`))
-		if code, body := askAs(t, member, srv.URL, "show me "+op); code != 422 {
+		if code, body := askBare(t, bare, member, "show me "+op); code != 422 {
 			t.Errorf("member asked for %s: %d %s", op, code, body)
 		}
 	}
 	fake.queue = append(fake.queue, planFor(`{"query":"my_journal_stats","params":{"uid":1}}`))
-	if code, body := askAs(t, member, srv.URL, "show user 1's journal"); code != 422 {
+	if code, body := askBare(t, bare, member, "show user 1's journal"); code != 422 {
 		t.Errorf("a plan naming another user: %d %s", code, body)
 	}
 	for i := 4; i < askCapMember; i++ { // 4 refused plans above count too
-		if code, body := askAs(t, member, srv.URL, "vol record?"); code != 200 {
+		if code, body := askBare(t, bare, member, "vol record?"); code != 200 {
 			t.Fatalf("ask %d: %d %s", i+1, code, body)
 		}
 	}
 	calls := fake.calls
-	if code, body := askAs(t, member, srv.URL, "vol record?"); code != 429 {
+	if code, body := askBare(t, bare, member, "vol record?"); code != 429 {
 		t.Errorf("ask %d: %d %s, want 429", askCapMember+1, code, body)
 	}
 	if fake.calls != calls {
 		t.Errorf("a capped ask spent %d LLM call(s)", fake.calls-calls)
 	}
-	if code, body := askAs(t, other, srv.URL, "vol record?"); code != 200 {
+	if code, body := askBare(t, bare, other, "vol record?"); code != 200 {
 		t.Errorf("another member's budget is their own: %d %s", code, body)
 	}
 }
 
 // TestAskMemberCatalogCarriesNoVendorSentinels runs EVERY member catalog entry
-// through POST /api/ask as a member, against the sentinel-seeded store, with a
+// through POST /api/ask as a member (on the bare mux: the guard withholds the
+// route from members since 23 Oct 2026), against the sentinel-seeded store, with a
 // fake model that echoes every row it is handed. Whatever the member entries
 // can return reaches the body, so no vendor sentinel and no crypto row may.
 func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
@@ -176,11 +222,12 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 	publishedLLM = fake
 	t.Cleanup(func() { publishedLLM = nil })
 	ctx := context.Background()
-	srv, st, mb, _ := newProductionServer(t, func(c *config.Config) { c.MemberCopilot = true },
+	srv, st, mb, d := newProductionServer(t, func(c *config.Config) { c.MemberCopilot = true },
 		writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
 	fx := seedSentinels(t, st, 0)
-	member := signupVerified(t, srv, mb, "mira", "mira@gmail.com")
+	askWithheld(t, signupVerified(t, srv, mb, "mira", "mira@gmail.com"), srv, fake)
+	bare := d.routes(newRateLimiter(1000, 6000))
 	u, _, err := st.GetUserByName(ctx, "mira")
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +284,7 @@ func TestAskMemberCatalogCarriesNoVendorSentinels(t *testing.T) {
 	var bodies []string
 	for i := 0; i < len(calls); i += copilot.MaxQueries {
 		fake.queue = append(fake.queue, planFor(calls[i:min(i+copilot.MaxQueries, len(calls))]...))
-		code, body := askAs(t, member, srv.URL, "tell me everything")
+		code, body := askBare(t, bare, u.ID, "tell me everything")
 		if code != 200 {
 			t.Fatalf("member ask %d: %d %s", i, code, body)
 		}
@@ -305,8 +352,8 @@ func TestAskCapCountsOnlyAsksThatReachTheModel(t *testing.T) {
 	member := signupVerified(t, srv, mb, "cat", "cat@gmail.com")
 	owner = ownerClient(t, srv.URL)
 	for i := 0; i < 3; i++ {
-		if code, _ := askAs(t, member, srv.URL, "anything"); code != 403 {
-			t.Fatalf("member ask with the flag off: %d", code)
+		if code, _ := askAs(t, member, srv.URL, "anything"); code != http.StatusUnavailableForLegalReasons {
+			t.Fatalf("member ask (withheld by the operator-only guard): %d", code)
 		}
 		if code, _ := askAs(t, owner, srv.URL, ""); code != 400 {
 			t.Fatalf("empty question: %d", code)

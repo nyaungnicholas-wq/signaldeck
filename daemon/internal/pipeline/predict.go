@@ -396,14 +396,6 @@ const featureVersion = 12
 // the training-set layout; this stamps the committed prediction).
 const ledgerModelVersion = 1
 
-// Sentiment feature gates: the daily aggregate joins the blend only when it
-// rests on at least sentimentMinHeadlines rated headlines and is at most
-// sentimentMaxAgeDays old. Thin or stale sentiment is ABSENT, not zero.
-const (
-	sentimentMinHeadlines = 3
-	sentimentMaxAgeDays   = 3
-)
-
 // buildFeatureVector assembles the EXACT inputs used for one prediction into
 // a flat name->value map (the feature store's row payload). Optional signals
 // are simply absent — absence is information, not zero. The regime label is
@@ -423,7 +415,7 @@ const (
 // (micro_*) for crypto symbols and FRED VIX (vix_*) for all symbols. Each is
 // merged verbatim; absence of a map means those features are simply not present
 // for this row (absence is information, not zero).
-func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, regimeLbl string, rankPct *float64, sentN int, extra ...map[string]float64) map[string]float64 {
+func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, regimeLbl string, rankPct *float64, extra ...map[string]float64) map[string]float64 {
 	vec := map[string]float64{
 		"pressure_score": c.PressureScore,
 		"pred_raw":       raw,
@@ -442,10 +434,8 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, re
 		}
 		vec["comp_"+comp.Name] = comp.Contrib
 	}
-	if c.SentimentScore != nil {
-		vec["sentiment_score"] = *c.SentimentScore
-		vec["sentiment_n"] = float64(sentN)
-	}
+	// sentiment_score / sentiment_n are no longer written (retired
+	// 2026-10-23, gbm.RetiredSourceKey): they were LLM headline ratings.
 	// STAGE 6 gated model legs: recorded ONLY when they cleared their OOS gate
 	// (LegProbabilities semantics), so the labeled training set (and the adaptive
 	// attribution reading it back) sees exactly the leg the live blend used.
@@ -891,14 +881,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// slope, distance-to-support/resistance, channel) as learnable features;
 		// see trendfeat.go. Absent-when-uncomputable, gated by OOS lift.
 		trendMap := trendFeatures(daily)
-		// Sentiment feature (per symbol, shared across horizons): the latest
-		// daily aggregate, only when fresh (<=3 days) AND resting on enough
-		// headlines (n>=3). Best-effort — a read error means "absent".
-		var sentScore *float64
-		sentN := 0
-		if mean, sn, ok, err := w.St.LatestSentiment(ctx, s.ID, sentimentMaxAgeDays); err == nil && ok && sn >= sentimentMinHeadlines {
-			sentScore, sentN = &mean, sn
-		}
+		// No sentiment input (retired 2026-10-23): sentiment_daily is the mean
+		// of LLM headline ratings from the NVIDIA-hosted tagger, whose trial
+		// terms do not permit production use. SentimentScore stays nil, so the
+		// ensemble's sentiment leg and the vector's sentiment keys are absent.
 		// Global learned weights for THIS symbol's regime cell (the fallback
 		// when the symbol has no personal model of its own).
 		regimeWts, _ := adaptive.Pick(learned, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]))
@@ -912,7 +898,6 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 			c := ensemble.Components{
 				PressureScore:       sc.Score,
-				SentimentScore:      sentScore,
 				RequireMeasuredLegs: strictLegs,
 			}
 			// RANKING GATE. Every leg below already carries a graded
@@ -1092,7 +1077,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				if l := hmmLbls[s.ID]; l != "" {
 					hmmMap = map[string]float64{"hmm_" + l: 1}
 				}
-				vec := buildFeatureVector(sc, c, raw, cal, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]), rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap, hmmMap)
+				vec := buildFeatureVector(sc, c, raw, cal, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]), rankPct, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap, hmmMap)
 				if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 					featErrs++
 					slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)

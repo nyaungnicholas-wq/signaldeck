@@ -10,7 +10,9 @@ cd signaldeck-anchors
 python verify.py .
 ```
 
-Add `--site <SignalDeck address>` to also download the forecast ledger and recompute it, from the very first entry, against every published head. It pages through the whole chain (over 600,000 forecasts), so it takes several minutes:
+Add `--site <SignalDeck address>` to also download the forecast ledger and recompute it, from the very first entry, against every published head. It pages through the whole chain (over 600,000 forecasts), so it takes several minutes.
+
+**Withheld since 23 October 2026.** The forecasts are derived from Alpaca market data, which is licensed for personal use only, so the site now answers `/api/ledger/range` with HTTP 451 to everyone except its operator until Alpaca gives written permission. A `--site` run therefore prints a `WITHHELD` line and ends `VERIFY RESULT: WITHHELD` (exit 4): nothing failed, but checks 3 and 4 below did not run. That is not a PASS, and it is not evidence of tampering. Checks 1 and 2 still run offline from this repository.
 
 ```bash
 python verify.py . --site https://signaldeck.nicholasnyaung.com
@@ -18,7 +20,7 @@ python verify.py . --site https://signaldeck.nicholasnyaung.com
 
 For a quick check of only the newest interval, add `--statements 2`. That does not re-check older forecasts, and the checker says so.
 
-The last line says `VERIFY RESULT: PASS` (exit 0), `VERIFY RESULT: FAIL` (exit 1) or `VERIFY RESULT: INCOMPLETE` (exit 3), and the lines above it say which check produced which verdict. INCOMPLETE means nothing failed but a check was skipped: without `--site` the forecasts themselves are not recomputed, so the short version above ends INCOMPLETE, never PASS.
+The last line says `VERIFY RESULT: PASS` (exit 0), `VERIFY RESULT: FAIL` (exit 1), `VERIFY RESULT: INCOMPLETE` (exit 3) or `VERIFY RESULT: WITHHELD` (exit 4, the site withheld the ledger under its data licence), and the lines above it say which check produced which verdict. INCOMPLETE means nothing failed but a check was skipped: without `--site` the forecasts themselves are not recomputed, so the short version above ends INCOMPLETE, never PASS.
 
 ## Trust roots
 
@@ -48,8 +50,8 @@ The RFC 3161 checks are only as good as the certificates they are checked agains
 
 1. **Each statement existed by its timestamp.** `openssl ts -verify` checks each RFC 3161 token against the statement's exact bytes. A token cannot be produced after the fact for different content.
 2. **Nothing published was rewritten.** It walks this repository's git history: `anchors.log` and `prereg.log` only ever grew, and no statement or token was ever modified or deleted after it was added. (A `.ots` proof may be updated in place by `ots upgrade`, which only adds the Bitcoin attestation; it must still commit to its statement.) Two statements that name different heads for the same ledger position are reported as a rewrite on the spot.
-3. **The forecasts on the site are the ones that were committed** (with `--site`). It downloads the ledger by sequence number from `/api/ledger/range`, recomputes every hash link, and checks the result equals the head every statement committed to. Any edited, inserted, deleted or reordered forecast breaks the match.
-4. **Which forecasts were committed before their outcome could be known** (with `--site`). For each forecast it finds the first timestamped statement that covers it and compares that time with the end of the forecast's horizon. It reports the share per horizon, plainly, including the ones that miss.
+3. **The forecasts on the site are the ones that were committed** (with `--site`; withheld under the data licence since 23 October 2026, see above). It downloads the ledger by sequence number from `/api/ledger/range`, recomputes every hash link, and checks the result equals the head every statement committed to. Any edited, inserted, deleted or reordered forecast breaks the match.
+4. **Which forecasts were committed before their outcome could be known** (with `--site`; withheld with check 3). For each forecast it finds the first timestamped statement that covers it and compares that time with the end of the forecast's horizon. It reports the share per horizon, plainly, including the ones that miss.
 
 ## What it does not prove
 

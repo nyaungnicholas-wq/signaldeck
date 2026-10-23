@@ -157,6 +157,16 @@ func TestCompositeScorerRetiredTilesStayUnfed(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	ids := seedCompositePreds(t, st, ctx, 30)
+	// A prediction frozen before 2026-10-23 still carries an LLM sentiment
+	// score in its components; the tile must not be fed from it.
+	sent := 0.8
+	comps, _ := json.Marshal(ensemble.Components{PressureScore: 0.4, SentimentScore: &sent})
+	if err := st.UpsertPrediction(ctx, store.Prediction{
+		SymbolID: ids[0], Horizon: md.H1d, Ts: time.Now().Truncate(time.Minute).Unix() - 60,
+		RawProb: 0.7, CalProb: 0.7, NUsed: 1, Components: string(comps),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	rows := make([]store.ShortVolumeRow, 30)
 	now := time.Now().UTC()
@@ -186,8 +196,9 @@ func TestCompositeScorerRetiredTilesStayUnfed(t *testing.T) {
 	}
 
 	want := map[string]string{
-		composite.FactorShortVol: composite.ShortVolRetiredReason,
-		composite.FactorTVRating: composite.TVRatingRetiredReason,
+		composite.FactorShortVol:  composite.ShortVolRetiredReason,
+		composite.FactorTVRating:  composite.TVRatingRetiredReason,
+		composite.FactorSentiment: composite.SentimentRetiredReason,
 	}
 	seen := 0
 	for _, f := range p.Factors {
@@ -198,8 +209,8 @@ func TestCompositeScorerRetiredTilesStayUnfed(t *testing.T) {
 			}
 		}
 	}
-	if seen < 2 {
-		t.Fatalf("expected both retired factors, saw %d", seen)
+	if seen < 3 {
+		t.Fatalf("expected all three retired factors, saw %d", seen)
 	}
 }
 

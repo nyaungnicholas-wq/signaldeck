@@ -11,7 +11,8 @@
 // "EDGAR sweep pending" empty state — nothing is ever estimated here.
 
 import { useEffect, useState } from "react";
-import { fundamentals, pollMs, POLL_SLOW, type FundamentalRow } from "@/lib/api";
+import { fundamentals, pollMs, POLL_SLOW, withheldFromMessage, type FundamentalRow } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import { ago, fmtDate } from "@/lib/format";
 import Spark from "@/components/Spark";
 
@@ -88,11 +89,15 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
         </span>
       </div>
 
-      {err !== null && latest === null && (
+      {err !== null && latest === null && (withheldFromMessage(err) ? (
+        <div className="px-4 py-3">
+          <Withheld compact notice={err} source={withheldFromMessage(err)?.source} />
+        </div>
+      ) : (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
-      )}
+      ))}
       {latest === null && err === null && (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading EDGAR facts…

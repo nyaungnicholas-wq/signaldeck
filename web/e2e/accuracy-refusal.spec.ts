@@ -61,6 +61,15 @@ test("/api/accuracy either publishes with a grade stamp or refuses with a reason
   const res = await page.request.get("/api/accuracy");
   const body = await res.json();
 
+  // 451: withheld under the data licence (any caller but the operator on a
+  // published deployment, since 23 Oct 2026). The contract body, and no rows.
+  if (res.status() === 451) {
+    expect(body).toMatchObject({ error: "withheld", reason: "licence", source: "alpaca" });
+    expect(body.notice).toMatch(/^Withheld: /);
+    expect(body.rows, "a withholding must publish no rows").toBeUndefined();
+    return;
+  }
+
   expect(typeof body.status).toBe("string");
 
   if (res.ok()) {
@@ -86,10 +95,20 @@ test("/api/accuracy either publishes with a grade stamp or refuses with a reason
 });
 
 test("a refused registry shows the refusal and no accuracy figures", async ({ page }) => {
-  const refused = !(await page.request.get("/api/accuracy")).ok();
+  const api = await page.request.get("/api/accuracy");
+  const refused = !api.ok();
   test.skip(!refused, "the grader is currently fresh; the refusal path is exercised when it is not");
 
   await page.goto("/accuracy");
+
+  // Withheld under the data licence: the licence notice replaces the figures,
+  // and it is not dressed as a refusal or an outage.
+  if (api.status() === 451) {
+    await expect(page.getByTestId("withheld")).toBeVisible();
+    await expect(page.getByTestId("accuracy-status-banner")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
+    return;
+  }
 
   const banner = page.getByTestId("accuracy-status-banner").first();
   await expect(banner).toBeVisible();

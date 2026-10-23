@@ -37,7 +37,9 @@ func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 	ctx := t.Context()
 	srv, st, mb := startPublished(t, nil, true, func(d Deps) http.Handler {
 		lim := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
-		return d.httpServerWith(d.routes(lim), lim).Handler
+		// The member journal is withheld from members by the operator-only guard
+		// (23 Oct 2026); its member logic is tested behind memberLogicOnly.
+		return memberLogicOnly(d, d.routes(lim))
 	})
 	must := func(err error) {
 		t.Helper()
@@ -59,7 +61,7 @@ func TestJournalPickerOffersWhatTheJournalAccepts(t *testing.T) {
 		return s
 	}
 	bar(sym("STALE", "Stale Tape Inc"), md.TF1d, staleTs) // tape stopped: a delisted ticker
-	sym("SPY", "SPDR S&P 500 ETF Trust", md.TF1d) // an ETF: no SEC directory row
+	sym("SPY", "SPDR S&P 500 ETF Trust", md.TF1d)         // an ETF: no SEC directory row
 	sym("AAPL", "AAPL", md.TF1d)
 	sym("NOBAR", "No Bars Corp")
 	sym("HOURLY", "Hourly Only Inc", md.TF1h)

@@ -45,7 +45,8 @@ Known plaintext gap (2026-10-22): with a backup key configured `ops/signaldeck-b
 1. **Git for Windows** — required, and it must be Git Bash, never WSL. The ops
    scripts address `C:\Users\...` directly; WSL's filesystem cannot see those
    paths the way they expect.
-2. **Go 1.26.5+**, **Node.js 20+**, **sqlite3** on `PATH`.
+2. **Go 1.26.10+** (the toolchain `daemon/go.mod` pins; an older Go fetches it
+   under the default `GOTOOLCHAIN=auto`), **Node.js 20+**, **sqlite3** on `PATH`.
 3. Set `SIGNALDECK_OFFSITE_DIR` if your backups are not in OneDrive. With
    neither that variable nor OneDrive, `signaldeck-backup-offline.sh` logs
    `offsite SKIPPED` and there is nothing here to recover from — check

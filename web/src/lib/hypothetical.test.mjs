@@ -20,7 +20,7 @@ test("hypothetical note says it in the required words", () => {
   assert.match(HYPOTHETICAL_SHORT, /does not predict future results/);
   assert.equal(
     WHAT_SIGNALDECK_IS,
-    "SignalDeck publishes the same statistical forecasts to every member. It does not know your portfolio and does not tell you what to buy or sell.",
+    "SignalDeck does not tailor its statistical forecasts to anyone, and while the market-data licence is unresolved they are shown only to the operator. It does not know your portfolio and does not tell you what to buy or sell.",
   );
 });
 
@@ -50,10 +50,10 @@ for (const [file, needle] of [
 
 test("/today renders ProofStrip (which carries the note) and the what-it-is line", () => {
   const c = src("../app/today/page.tsx");
-  assert.ok(c.includes("<ProofStrip />"));
+  assert.ok(c.includes("<ProofStrip onWithheld={setWithheld} />"));
   assert.ok(c.includes("{WHAT_SIGNALDECK_IS}"));
   // a member is never pointed at the operator's trade page
-  assert.ok(c.includes("<VolRegimeLead memberView />"));
+  assert.ok(c.includes("<VolRegimeLead memberView onWithheld={setWithheld} />"));
 });
 
 test("members never see the symbol model called an agent", () => {
@@ -86,6 +86,6 @@ test("Risk first (step 9): live note wording, rendered beside the forecast, moun
   assert.ok(rf.includes("<HypotheticalNote live />"));
   assert.ok(rf.includes("riskHeadline(rec)"), "the headline must come from the verdict helper");
   const today = src("../app/today/page.tsx");
-  const i = today.indexOf("<RiskFirst watchSymbols={watch} />");
+  const i = today.indexOf("<RiskFirst watchSymbols={watch} onWithheld={setWithheld} />");
   assert.ok(i > 0 && i < today.indexOf("<TodaysRead "), "RiskFirst must sit above TodaysRead");
 });

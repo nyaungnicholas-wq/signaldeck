@@ -61,16 +61,19 @@ func TestEdgarClientSharedAcrossWaves(t *testing.T) {
 }
 
 // TestLicenceRetiredWorkersAreNotWired: FINRA (Reg SHO volume and short
-// interest), Cboe put/call and FRED were retired on 22 Oct 2026 because their
-// terms do not permit SignalDeck's use. The waves that used to build their
-// pollers must not build them any more.
+// interest), Cboe put/call and FRED were retired on 22 Oct 2026, and the
+// congress-poller (whose every stored row came from Kadoa) on 23 Oct 2026,
+// because their terms do not permit SignalDeck's use. The waves that used to
+// build their pollers must not build them any more.
 func TestLicenceRetiredWorkersAreNotWired(t *testing.T) {
-	retired := map[string]bool{"finra-shorts": true, "finra-shortint": true, "cboe-pc": true, "fred-poller": true}
+	retired := map[string]bool{"finra-shorts": true, "finra-shortint": true, "cboe-pc": true, "fred-poller": true,
+		"congress-poller": true}
 	cfg := config.Config{AlpacaKey: "k", AlpacaSecret: "s"}
 	var fleet []workers.Worker
 	fleet = append(fleet, freeDataWorkers(cfg, nil, edgar.New())...)
 	fleet = append(fleet, finraShortsWorkers(nil)...)
 	fleet = append(fleet, dataExpansionWorkers(nil)...)
+	fleet = append(fleet, congressWorkers(nil)...)
 	if len(fleet) == 0 {
 		t.Fatal("no workers built; the scan would pass vacuously")
 	}
@@ -82,7 +85,7 @@ func TestLicenceRetiredWorkersAreNotWired(t *testing.T) {
 	// run() also appends workers inline and through ~40 other waves, so the
 	// constructors above are not the whole fleet. No source file of this
 	// package may construct a retired poller at all.
-	ctor := regexp.MustCompile(`pipeline\.(ShortVolPoller|ShortInterestPoller|CboePCPoller|FredPoller)\{`)
+	ctor := regexp.MustCompile(`pipeline\.(ShortVolPoller|ShortInterestPoller|CboePCPoller|FredPoller|CongressPoller)\{`)
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
 		src, err := os.ReadFile(f)

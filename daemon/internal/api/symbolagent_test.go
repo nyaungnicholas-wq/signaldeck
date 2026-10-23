@@ -172,7 +172,9 @@ func TestSymbolAgentEndpoint_UnknownSymbol(t *testing.T) {
 // A member gets no per-signal hit rate and no personality quoting one; the
 // operator and the public read keep the measured rows.
 func TestSymbolAgentEndpoint_MembersGetNoHitRates(t *testing.T) {
-	srv, st, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	// symbol-agent is withheld from members by the operator-only guard
+	// (23 Oct 2026); its member logic is tested behind memberLogicOnly.
+	srv, st, mb, _ := newMemberLogicServer(t, nil, writeRegistry(t, thinWindowRegistry))
 	sym, err := st.UpsertSymbol(t.Context(), "AAPL", md.Stocks, "Apple")
 	if err != nil {
 		t.Fatal(err)

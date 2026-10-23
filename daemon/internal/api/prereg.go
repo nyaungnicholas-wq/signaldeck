@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 )
 
@@ -35,6 +36,13 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, fmt.Errorf("prereg verify: %w", err))
 		return
 	}
+
+	// A non-operator gets the chain and each structural claim's wording only.
+	// The claimed accuracy bands, baselines, known weaknesses, amendment
+	// evidence and notes quote statistics measured on Alpaca bars, and the live
+	// counts are resolutions against Alpaca closes: operator-only
+	// (datalicense.NonOperatorRoutes).
+	withheld := d.withheldFrom(r)
 
 	// Decode each stored spec so the page renders the FROZEN text, not a
 	// re-read of today's constants — which would defeat the purpose entirely.
@@ -68,14 +76,23 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 				registeredBefore = false
 			}
 		}
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"seq": rec.Seq, "ts": rec.Ts, "kind": rec.Kind,
 			"spec": spec, "specHash": rec.SpecHash,
 			"prevHash": rec.PrevHash, "entryHash": rec.EntryHash,
 			"note":                rec.Note,
 			"registeredOn":        when.Format("2006-01-02"),
 			"beforeFirstGradable": beforeFlag,
-		})
+		}
+		if withheld {
+			// specWithheld: the spec shown is not the frozen record, so a nil
+			// here never reads as "registered empty", and specHash cannot be
+			// recomputed from it.
+			row["spec"] = claimText(rec.SpecJSON)
+			row["specWithheld"] = true
+			delete(row, "note")
+		}
+		out = append(out, row)
 	}
 
 	// The live status, from the same count every regime row's caveat states
@@ -83,7 +100,10 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 	// "until the live record starts arriving on 2026-08-07", which read as the
 	// current state long after resolutions began. nil when the count cannot be
 	// read: then nothing is said about it.
-	live := d.St.LiveRegimeResolutions(ctx)
+	var live map[string]int
+	if !withheld {
+		live = d.St.LiveRegimeResolutions(ctx)
+	}
 	var liveResolved any
 	if live != nil {
 		n := 0
@@ -92,7 +112,7 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 		}
 		liveResolved = n
 	}
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"records":            out,
 		"chainVerified":      ok,
 		"brokenAtSeq":        brokenAt,
@@ -117,7 +137,55 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 			"compared against does not describe it — the grading protocol, the retirement rule, the " +
 			"quarantine manifest, and any experiment that registered its own timetable. Null means not " +
 			"evaluated. It never means late.",
-	})
+	}
+	if withheld {
+		resp["withheld"] = "Each record keeps its hashes; spec is the claim's wording and resolution " +
+			"rule only, and notes are omitted. " + datalicense.WithheldNotice("alpaca")
+		// The operator wording points at the track record and the claimed
+		// bands, both withheld here, and promises a recomputation this view
+		// cannot support: entryHash covers the full spec and note.
+		resp["whatThisIs"] = "The claim each structural predictor made, frozen and hash-chained before " +
+			"any of its forecasts resolved. The claimed accuracy bands and the live record they are " +
+			"graded against are withheld under the data licence."
+		resp["whyChained"] = "Each record links to the previous by hash, so rewriting an old claim " +
+			"breaks every link after it. chainVerified is this server's own recomputation. Recomputing " +
+			"it yourself needs each record's full spec and note, which are shown only to the operator " +
+			"while the market-data licence question is open; the hashes are kept here unchanged."
+		resp["howToUseIt"] = "Nothing here can be compared yet: the bands and the live grades are " +
+			"withheld. When they are released, the frozen record is the one that counts, not whatever " +
+			"the code says at that time."
+	}
+	writeJSON(w, resp)
+}
+
+// claimText is what a non-operator sees of one frozen spec: its kind,
+// question, horizon and resolution rule, which are methodology text, and only
+// the ones the frozen JSON actually holds. Decoding into prereg.Spec filled
+// absent fields with zero values, so the HAR volatility and forward-test
+// registrations (no horizonDays, no resolution) showed "horizon days 0" and an
+// empty rule that was never frozen. Everything else a spec holds (bands,
+// baseline, known weakness, any record's evidence) is dropped; a spec with no
+// question is nil.
+func claimText(raw string) any {
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return nil
+	}
+	out := map[string]any{}
+	for _, k := range []string{"kind", "question", "resolution"} {
+		var s string
+		if v, ok := m[k]; ok && json.Unmarshal(v, &s) == nil {
+			out[k] = s
+		}
+	}
+	if q, _ := out["question"].(string); q == "" {
+		return nil
+	}
+	var h int
+	if v, ok := m["horizonDays"]; ok && json.Unmarshal(v, &h) == nil {
+		out["horizonDays"] = h
+	}
+	return out
 }
 
 // preregLiveStatus is the sentence /api/prereg says about the live record:

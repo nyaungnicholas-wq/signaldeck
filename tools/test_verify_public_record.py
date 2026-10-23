@@ -6,6 +6,7 @@ import tempfile
 import io
 import contextlib
 import shutil
+import urllib.error
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -82,6 +83,49 @@ class TestVerdict(unittest.TestCase):
             rep = vpr.Report(quiet=True)
             vpr.check_history(repo, [], rep)
             self.assertEqual((rep.n["SKIP"], rep.n["PASS"]), (1, 0))
+
+    def test_451_is_withheld_not_fail(self):
+        body = b'{"error":"withheld","reason":"licence","source":"alpaca","notice":"Withheld: test notice."}'
+        url = "https://x.test/api/ledger/range"
+        with mock.patch.object(vpr, "fetch", side_effect=urllib.error.HTTPError(url, 451, "Unavailable For Legal Reasons", {}, io.BytesIO(body))):
+            rep = vpr.Report(quiet=True)
+            result = vpr.check_chain("https://x.test", [{"seq": 3, "head": "h", "name": "s1"}], 0, rep)
+            self.assertIsNone(result)
+            self.assertEqual(rep.n["WITHHELD"], 1)
+            self.assertEqual(rep.n["FAIL"], 0)
+
+        calls = []
+        def rec(kind, msg):
+            calls.append((kind, msg))
+        with mock.patch.object(vpr, "fetch", side_effect=urllib.error.HTTPError(url, 451, "Unavailable For Legal Reasons", {}, io.BytesIO(body))):
+            vpr.check_chain("https://x.test", [{"seq": 3, "head": "h", "name": "s1"}], 0, rec)
+        self.assertEqual(len(calls), 1)
+        kind, msg = calls[0]
+        self.assertEqual(kind, "WITHHELD")
+        self.assertIn("Withheld: test notice.", msg)
+        self.assertIn("451", msg)
+
+    def test_other_http_error_still_fails(self):
+        url = "https://x.test/api/ledger/range"
+        with mock.patch.object(vpr, "fetch", side_effect=urllib.error.HTTPError(url, 500, "Internal Server Error", {}, io.BytesIO(b"oops"))):
+            rep = vpr.Report(quiet=True)
+            result = vpr.check_chain("https://x.test", [{"seq": 3, "head": "h", "name": "s1"}], 0, rep)
+            self.assertIsNone(result)
+            self.assertEqual(rep.n["FAIL"], 1)
+            self.assertEqual(rep.n["WITHHELD"], 0)
+
+    def test_withheld_verdict_is_not_pass(self):
+        def fake_verify(repo, site, n_stmts, openssl, rep):
+            rep("PASS", "statements: ok")
+            rep("WITHHELD", "chain: 451")
+        with mock.patch.object(vpr, "verify", side_effect=fake_verify):
+            with tempfile.TemporaryDirectory() as repo:
+                rc, out = self._run_main([repo])
+                self.assertEqual(rc, 4)
+                lines = [ln for ln in out.splitlines() if ln.strip()]
+                self.assertTrue(lines[-1].startswith("VERIFY RESULT: WITHHELD"))
+                self.assertNotIn("VERIFY RESULT: PASS", out)
+                self.assertNotIn("VERIFY RESULT: FAIL", out)
 
 
 if __name__ == "__main__":

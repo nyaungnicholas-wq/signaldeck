@@ -8,7 +8,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, type Withheld as WithheldInfo } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import TodaysRead from "@/components/home/TodaysRead";
 import VolRegimeLead from "@/components/home/VolRegimeLead";
 import RiskFirst from "@/components/home/RiskFirst";
@@ -27,6 +28,9 @@ export default function TodayPage() {
   // undefined until the watchlist answers, so TodaysRead ranks the member's
   // own symbols first from its very first render.
   const [watch, setWatch] = useState<string[] | undefined>(undefined);
+  // One licence notice for the whole page: every card below reads derived data,
+  // so four identical notices would be noise. Each card reports and hides.
+  const [withheld, setWithheld] = useState<WithheldInfo | null>(null);
   useEffect(() => {
     let alive = true;
     api.memberWatchlist().then(
@@ -47,18 +51,20 @@ export default function TodayPage() {
       <header className="panel px-4 py-3">
         <h1 className="m-0 text-lg font-bold">Today</h1>
         <p className="m-0 mt-1 max-w-[75ch] text-[0.85rem]" style={{ color: "var(--dim)" }}>
-          SignalDeck&rsquo;s regime reads, each with the accuracy it measured in backtests, and the
-          live record that grades every call. What it cannot predict, it says so.
+          {withheld
+            ? "Member accounts keep a watchlist. SignalDeck’s reads are withheld while the market-data licence is unresolved."
+            : "SignalDeck’s regime reads, each with the accuracy it measured in backtests, and the live record that grades every call. What it cannot predict, it says so."}
         </p>
         <p className="m-0 mt-1 max-w-[75ch] text-[0.8rem]" style={{ color: "var(--faint)" }}>
           {WHAT_SIGNALDECK_IS}
         </p>
       </header>
       {/* Risk first (plan step 9): leads only when the live volatility verdict passes. */}
-      {watch !== undefined && <RiskFirst watchSymbols={watch} />}
-      {watch !== undefined && <TodaysRead watchSymbols={watch} />}
-      <VolRegimeLead memberView />
-      <ProofStrip />
+      {withheld && <Withheld notice={withheld.notice} source={withheld.source} title="Today’s reads" />}
+      {watch !== undefined && <RiskFirst watchSymbols={watch} onWithheld={setWithheld} />}
+      {watch !== undefined && <TodaysRead watchSymbols={watch} onWithheld={setWithheld} />}
+      <VolRegimeLead memberView onWithheld={setWithheld} />
+      <ProofStrip onWithheld={setWithheld} />
       <nav aria-label="More from SignalDeck" className="panel flex flex-wrap gap-2 px-4 py-3 text-[0.85rem]">
         {MORE.map((m) => (
           <Link key={m.href} href={m.href} className="chip flex min-h-[40px] items-center px-3">

@@ -240,7 +240,7 @@ export default function PairsPage() {
                 oversold it. Both corrected; the figure itself is real. */}
             Binary framings of forward co-movement persistence, over{" "}
             {p.pairsEvaluated.toLocaleString()} pairs. They corroborate the mechanism; they are NOT
-            restatements of trend21&apos;s registered 73.1% claim, which is a BACKTESTED claim about
+            restatements of trend21&apos;s registered accuracy claim, which is a BACKTESTED claim about
             whether a stock stays on its side of its 200-day moving average — a different quantity,
             and not a live record.
           </p>

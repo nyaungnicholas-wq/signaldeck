@@ -38,6 +38,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -495,16 +496,16 @@ type memberProbe struct {
 // ignores session cookies and needs an operator-issued key, so a member
 // session cannot reach it.
 var memberProbeExempt = map[string]string{
-	"/api/auth/register": "account flow: answers with account state, never market data (accounts_test.go)",
-	"/api/auth/login":    "account flow: answers with the session's identity (accounts_test.go)",
-	"/api/auth/logout":   "account flow: ends the session; would sign the probing member out",
-	"/api/auth/verify":   "account flow: redeems an emailed token (accounts_test.go)",
-	"/api/auth/resend":   "account flow: answers the same fixed text whatever the address",
-	"/api/auth/forgot":   "account flow: answers the same fixed text whatever the address",
-	"/api/auth/reset":    "account flow: redeems an emailed token (accounts_test.go)",
-	"/api/auth/google":   "account flow: verifies a Google ID token; off without a client ID",
-	"/api/tv-webhook":    "inbound TradingView POST authenticated by a shared secret; serves nothing back",
-	"/api/waitlist":      "takes an email and answers ok either way; serves nothing back",
+	"/api/auth/register":  "account flow: answers with account state, never market data (accounts_test.go)",
+	"/api/auth/login":     "account flow: answers with the session's identity (accounts_test.go)",
+	"/api/auth/logout":    "account flow: ends the session; would sign the probing member out",
+	"/api/auth/verify":    "account flow: redeems an emailed token (accounts_test.go)",
+	"/api/auth/resend":    "account flow: answers the same fixed text whatever the address",
+	"/api/auth/forgot":    "account flow: answers the same fixed text whatever the address",
+	"/api/auth/reset":     "account flow: redeems an emailed token (accounts_test.go)",
+	"/api/auth/google":    "account flow: verifies a Google ID token; off without a client ID",
+	"/api/tv-webhook":     "inbound TradingView POST authenticated by a shared secret; serves nothing back",
+	"/api/waitlist":       "takes an email and answers ok either way; serves nothing back",
 	"/api/account/delete": "account flow: erases the probing member's own account and answers status only (accountdata_test.go)",
 }
 
@@ -538,7 +539,7 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"POST /api/alerts/unsubscribe": {method: "POST", url: "/api/alerts/unsubscribe?token=probe", body: map[string]string{},
 			marker: "invalid or has expired", status: http.StatusBadRequest,
 			why: "a made-up token: the redeem answers fixed text either way; alertprefs_test.go redeems a real one"},
-		"/api/auth/me":            get("/api/auth/me", `"username":"mira"`),
+		"/api/auth/me": get("/api/auth/me", `"username":"mira"`),
 		// Ask the data (plan step 10): the status read; off for members by
 		// default, so the refusal is served. ask_test.go drives POST against this
 		// store with the flag on and an echoing fake model.
@@ -547,17 +548,17 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 			marker: askMemberOff, status: http.StatusForbidden,
 			why: "the member flag is off here; ask_test.go drives POST through every member entry against this store with it on"},
 		// "n" (resolved pairs), not a bin's "N": SD-30 withholds the bins.
-		"/api/calibration":        get("/api/calibration", fmt.Sprintf(`"n":%d`, n)),
-		"/api/canary":             get("/api/canary", "SNTL_CANARY_MODEL"),
-		"/api/companies":          get("/api/companies?q=SNTL", "Sentinel Corp"),
-		"/api/company/profile":    get("/api/company/profile?symbol=SNTL", "Sentinel Capital"),
-		"/api/congress":           get("/api/congress", "Rep. Sentinel"),
-		"/api/dataset-versions":   get("/api/dataset-versions", `"revisedSymbols":1`),
-		"/api/dilution":           get("/api/dilution", "SNTL share count"),
-		"/api/evidence":           get("/api/evidence", fx.evidenceID),
-		"/api/evidence/{id}":      get("/api/evidence/"+fx.evidenceID, fx.evidenceID),
-		"/api/filings":            get("/api/filings", "0000990001-26-000001"),
-		"/api/fundamentals":       get("/api/fundamentals?symbol=SNTL", "SharesOutstanding"),
+		"/api/calibration":      get("/api/calibration", fmt.Sprintf(`"n":%d`, n)),
+		"/api/canary":           get("/api/canary", "SNTL_CANARY_MODEL"),
+		"/api/companies":        get("/api/companies?q=SNTL", "Sentinel Corp"),
+		"/api/company/profile":  get("/api/company/profile?symbol=SNTL", "Sentinel Capital"),
+		"/api/congress":         get("/api/congress", "Rep. Sentinel"),
+		"/api/dataset-versions": get("/api/dataset-versions", `"revisedSymbols":1`),
+		"/api/dilution":         get("/api/dilution", "SNTL share count"),
+		"/api/evidence":         get("/api/evidence", fx.evidenceID),
+		"/api/evidence/{id}":    get("/api/evidence/"+fx.evidenceID, fx.evidenceID),
+		"/api/filings":          get("/api/filings", "0000990001-26-000001"),
+		"/api/fundamentals":     get("/api/fundamentals?symbol=SNTL", "SharesOutstanding"),
 		// No seedable row: built per request and uncached, so the marker only
 		// has to prove the handler answered. Same below where noted.
 		"/api/health":   get("/api/health", `"openSignup":true`),
@@ -575,17 +576,17 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 			why: "the seeded call is resolved, so it is final; journal_test.go drives the 200"},
 		// The journal's picker: identity only (ticker and name), never a close.
 		"/api/journal/symbols": get("/api/journal/symbols?q=SNTL", `"symbol":"SNTL"`),
-		"/api/institutions":   get("/api/institutions?symbol=SNTL", "Sentinel Capital"),
-		"/api/ledger":         get("/api/ledger?symbol=SNTL&market=stocks", `"count":1`),
-		"/api/ledger/anchors": get("/api/ledger/anchors", `"mode":"stored"`), // per request, uncached
-		"/api/ledger/range":   get("/api/ledger/range", `"featureHash":"sntl"`),
-		"/api/ledger/verify":  get("/api/ledger/verify", fmt.Sprintf(`"count":%d,"head"`, perVariant)), // cached
-		"/api/lineage":        get("/api/lineage?kind=claim&id="+fx.evidenceID, `"id":"`+fx.evidenceID+`"`),
-		"/api/market-regimes": get("/api/market-regimes", `"symbol":"SPY"`),                // the seeded basket call
-		"/api/model-health":   get("/api/model-health", "1 forecasts are outstanding"),     // the seeded regime call
-		"/api/postmortems":    get("/api/postmortems", `{"code":"macro_event","count":1,`), // the one-row cluster
-		"/api/prereg":         get("/api/prereg", `"chainVerified":true`),                  // per request, uncached
-		"/api/quality":        get("/api/quality", "SNTL"),
+		"/api/institutions":    get("/api/institutions?symbol=SNTL", "Sentinel Capital"),
+		"/api/ledger":          get("/api/ledger?symbol=SNTL&market=stocks", `"count":1`),
+		"/api/ledger/anchors":  get("/api/ledger/anchors", `"mode":"stored"`), // per request, uncached
+		"/api/ledger/range":    get("/api/ledger/range", `"featureHash":"sntl"`),
+		"/api/ledger/verify":   get("/api/ledger/verify", fmt.Sprintf(`"count":%d,"head"`, perVariant)), // cached
+		"/api/lineage":         get("/api/lineage?kind=claim&id="+fx.evidenceID, `"id":"`+fx.evidenceID+`"`),
+		"/api/market-regimes":  get("/api/market-regimes", `"symbol":"SPY"`),                // the seeded basket call
+		"/api/model-health":    get("/api/model-health", "1 forecasts are outstanding"),     // the seeded regime call
+		"/api/postmortems":     get("/api/postmortems", `{"code":"macro_event","count":1,`), // the one-row cluster
+		"/api/prereg":          get("/api/prereg", `"chainVerified":true`),                  // per request, uncached
+		"/api/quality":         get("/api/quality", "SNTL"),
 		"/api/ready": {method: "GET", url: "/api/ready", marker: `"ready":false`, status: http.StatusServiceUnavailable,
 			why: "a fixture daemon runs no workers, so it is not ready; the body is the anonymous summary"},
 		"/api/regime-postmortems": get("/api/regime-postmortems", "SNTL"),
@@ -595,18 +596,18 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 		"/api/self-audit":         get("/api/self-audit", "SNTL_AUDIT_DETAIL"),
 		// The seeded sample size, not the personality: a member gets a fixed line in
 		// place of a personality that quotes a hit rate (SD-30 / n=1 rows).
-		"/api/symbol-agent":       get("/api/symbol-agent?symbol=SNTL&market=stocks", `"nSamples":60`),
-		"/api/track-record":       get("/api/track-record", fmt.Sprintf(`"cluster":{"n":%d`, n)),
-		"/api/unwatch":            {method: "POST", url: "/api/unwatch", body: watchBody("SNTW"), marker: "SNTW"},
-		"/api/version":            get("/api/version", `"version":"test"`),
+		"/api/symbol-agent": get("/api/symbol-agent?symbol=SNTL&market=stocks", `"nSamples":60`),
+		"/api/track-record": get("/api/track-record", fmt.Sprintf(`"cluster":{"n":%d`, n)),
+		"/api/unwatch":      {method: "POST", url: "/api/unwatch", body: watchBody("SNTW"), marker: "SNTW"},
+		"/api/version":      get("/api/version", `"version":"test"`),
 		"/api/vol-forecast/record": get("/api/vol-forecast/record", // cached
 			fmt.Sprintf(`"horizon":%d,"n":%d,`, pipeline.RVHorizons[0], perVariant)),
 		// Current HAR forecasts, gated on the record verdict (plan step 9): this
 		// store's record is INSUFFICIENT, so the gate answers and serves none.
 		"/api/vol-forecast/latest": get("/api/vol-forecast/latest", `"available":false`),
-		"/api/vol-regime": get("/api/vol-regime", "SNTL"),
-		"/api/watch":      {method: "POST", url: "/api/watch", body: watchBody("SNTL"), marker: "SNTL"},
-		"/api/watchlist":  get("/api/watchlist", "SNTL"),
+		"/api/vol-regime":          get("/api/vol-regime", "SNTL"),
+		"/api/watch":               {method: "POST", url: "/api/watch", body: watchBody("SNTL"), marker: "SNTL"},
+		"/api/watchlist":           get("/api/watchlist", "SNTL"),
 	}
 }
 
@@ -870,6 +871,16 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 				exempt++
 				continue
 			}
+			// Off the rights-cleared allowlist (23 Oct 2026): the operator-only
+			// guard answers before any handler, so the whole answer is the 451
+			// contract and there is no body to scan for a sentinel.
+			if src, cleared := datalicense.NonOperatorSource(path); !cleared {
+				reqPath := strings.ReplaceAll(path, "{id}", "x")
+				code, ctype, body := call(t, c, srv, method, reqPath)
+				checkWithheld(t, who, ep, code, ctype, body, src)
+				exercised++
+				continue
+			}
 			pr, ok := override[ep]
 			if !ok {
 				pr, ok = probes[ep]
@@ -984,7 +995,8 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 		want int
 	}{
 		{"/api/watch", map[string]string{"symbol": "SNTC/USD", "market": "crypto"}, 400},
-		{"/api/symbol-agent?symbol=SNTC/USD&market=crypto", nil, 404},
+		// /api/symbol-agent left this list on 23 Oct 2026: the operator-only
+		// guard withholds it from members before the handler sees the symbol.
 		// /api/short-interest left this list on 22 Oct 2026: the FINRA licence
 		// guard answers 451 before the handler can refuse the crypto symbol.
 		{"/api/company/profile?symbol=SNTC", nil, 404},

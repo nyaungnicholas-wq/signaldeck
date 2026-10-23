@@ -381,7 +381,7 @@ export default function SmartMoneyPage() {
     <div className="page-enter space-y-4">
       <PageHero
         title="Smart Money"
-        subtitle="The composite of what informed traders are doing - insiders, institutions and congress in one view."
+        subtitle="The composite of what informed traders are doing - insider buying and institutional holdings in one view. Congressional trades are not part of it."
         right={
           <div className="flex items-center gap-2">
             <span className="chip">positioning read · not a forecast</span>

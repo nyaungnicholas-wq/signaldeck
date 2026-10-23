@@ -35,6 +35,8 @@ import {
   type VolRegimeForecast,
 } from "@/lib/api";
 import HelpTip from "@/components/HelpTip";
+import Withheld from "@/components/Withheld";
+import { withheldFromMessage } from "@/lib/withheld";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
@@ -242,11 +244,15 @@ export default function ValidatedSignalsPanel({
       </div>
       {memberView && <HypotheticalNote short className="px-4 pt-2" />}
 
-      {err !== null && rows.length === 0 && (
+      {err !== null && rows.length === 0 && (withheldFromMessage(err) ? (
+        <div className="px-4 py-3">
+          <Withheld compact notice={err} source={withheldFromMessage(err)?.source} />
+        </div>
+      ) : (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
-      )}
+      ))}
       {loading && rows.length === 0 && err === null && (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading the validated regime stack…

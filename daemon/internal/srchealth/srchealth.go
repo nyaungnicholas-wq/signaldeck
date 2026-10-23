@@ -56,6 +56,7 @@ const (
 	pausedTradingView = "TradingView's terms bar non-display use of scanner data (2026-10-21)"
 	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-22)"
 	pausedLicence     = "retired 22 Oct 2026: licence terms do not permit this use"
+	pausedNVIDIA      = "retired 2026-10-23: the LLM headline tagger ran on NVIDIA's hosted API, whose trial terms do not permit production use"
 )
 
 var registry = []spec{
@@ -109,12 +110,21 @@ var registry = []spec{
 	{source: "news", query: `SELECT MAX(ts) FROM news`,
 		budget: 12 * time.Hour, gated: true,
 		note: "Alpaca news headlines (market hours)"},
+	{source: "news_sentiment_llm", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM sentiment_daily`,
+		budget: 2 * 24 * time.Hour, gated: false, paused: pausedNVIDIA,
+		note: "LLM headline sentiment (sentiment-tagger -> sentiment_daily, NVIDIA hosted API)"},
 	{source: "bars_1m_hot", query: `SELECT MAX(ts) FROM bars WHERE tf='1m' AND symbol_id IN (SELECT id FROM symbols WHERE stream=1)`,
 		budget: 30 * time.Minute, gated: true,
 		note: "streamed hot-set 1m bars (live ws, market hours)"},
 	{source: "snapshots_1s", query: `SELECT MAX(ts) FROM snapshots_1s`,
 		budget: 10 * time.Minute, gated: false, paused: pausedCrypto,
 		note: "1s microstructure snapshots (crypto 24/7)"},
+	{source: "congress_trades", query: `SELECT MAX(disclosed_ts) FROM congress_trades`,
+		budget: 7 * 24 * time.Hour, gated: false,
+		paused: "retired 23 Oct 2026: no stored row records its source, so every row is treated as " +
+			"Kadoa's (the fallback from 7 Sep 2026; the Stock Watcher mirrors answer 403), whose terms " +
+			"(s.4, s.8) bar automated access and sharing its rows without written permission",
+		note: "STOCK Act congressional trade disclosures (congress-poller, retired)"},
 	{source: "tv_signals", query: `SELECT MAX(ts) FROM tv_signals`,
 		budget: 6 * time.Hour, gated: true, webhook: true,
 		note: "TradingView inbound webhook alerts (only judged when a secret is set + market open — catches a silent tunnel failure)"},
