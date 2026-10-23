@@ -97,7 +97,7 @@ Retired 2026-10-22 (licence review): FRED, FINRA and Cboe. Crypto (TickStream, K
 Coinbase, Hyperliquid) paused 2026-10-22. TradingView scanner and StockTwits retired
 2026-10-21/22.
 
-- **Daemon** (`daemon/`, Go 1.25+): ingestion, signal and forecast workers, outcome resolution,
+- **Daemon** (`daemon/`, Go 1.26+, toolchain go1.26.10): ingestion, signal and forecast workers, outcome resolution,
   the prediction ledger, the HTTP JSON API (host allowlist, session cookies, bearer token for
   scripts, rate limiting, CSRF header on writes, 128 KB body cap, licence guard on raw data).
 - **Web** (`web/`, Next.js 16 / React 19 / TypeScript / Tailwind): one origin; `/api/*` is
@@ -111,7 +111,7 @@ Coinbase, Hyperliquid) paused 2026-10-22. TradingView scanner and StockTwits ret
 
 | Component | Version | Notes |
 |---|---|---|
-| Go | ≥ 1.25 (`go.mod`); tested on 1.26.5 | daemon |
+| Go | ≥ 1.26 (`go.mod`); builds with the go1.26.10 toolchain it pins (`GOTOOLCHAIN=auto` fetches it) | daemon |
 | Node.js | ≥ 20; tested on 24.18.0 | web app |
 | Python | ≥ 3.11; tested on 3.12.10 | `tools/` (`.venv/Scripts/python.exe` on Windows) |
 | SQLite | bundled | no server to install |

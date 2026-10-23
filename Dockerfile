@@ -26,7 +26,7 @@
 # is deliberate — a demo publishing ungradable numbers is worse than no demo.
 
 # ---- stage 1: the Go daemon ------------------------------------------------
-FROM golang:1.26-alpine AS daemon-build
+FROM golang:1.26.10-alpine AS daemon-build
 WORKDIR /src/daemon
 RUN apk add --no-cache git
 COPY daemon/go.mod daemon/go.sum ./
