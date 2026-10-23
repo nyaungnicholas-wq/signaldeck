@@ -33,7 +33,7 @@ jobs:
           got=$(go env GOVERSION)
           echo "go.mod toolchain=$want go env GOVERSION=$got"
           [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::CI builds with $got but go.mod pins toolchain $want"; exit 1; }
-          grep -q "^FROM golang:${want#go}-alpine " ../Dockerfile || { echo "::error::Dockerfile builder is not golang:${want#go}-alpine"; exit 1; }
+          grep -qxF "FROM golang:${want#go}-alpine AS daemon-build" ../Dockerfile || { echo "::error::Dockerfile builder is not golang:${want#go}-alpine"; exit 1; }
           echo "toolchain OK: $got"
       - run: go build ./...
       - run: go vet ./...
