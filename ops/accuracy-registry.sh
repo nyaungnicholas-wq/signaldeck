@@ -463,6 +463,22 @@ if [ -z "$refusal_reason" ]; then
   rm -f "$STAGE"
 fi
 
+# SURVIVORSHIP STATUS v1 -- a SEPARATE, unpinned measure, run AFTER the pinned
+# grade above and never before or instead of it. tools/survivorship_status.py
+# reads the database read-only (mode=ro) and classifies the same graded symbols
+# into watched / unwatched-but-trading / dated exit / unknown / retired source,
+# because the registry's "inactive with no delisted_at" count reads the lean
+# WATCH flag as listing status. It touches no input of the grade, no verdict
+# and no exit code here: a failure is logged, its stale output is removed (an
+# absent measurement must read as absent, not as yesterday's), and the run goes
+# on exactly as it would have without it. It sits above the REFUSAL PATH so
+# both paths' live_accuracy --write render the same cycle's file.
+SURV_STATUS="$SD/data/survivorship_status.json"
+"$PY" "$SD/tools/survivorship_status.py" --json "$SURV_STATUS" >> "$LOG" 2>&1 || {
+  echo "WARN: survivorship_status.py failed (exit $?); $SURV_STATUS removed. The pinned grade is unaffected." >> "$LOG"
+  rm -f "$SURV_STATUS"
+}
+
 # REFUSAL PATH — the whole point of this branch is that a grading outage must be
 # impossible to mistake for a healthy run. It never adds or improves a number:
 # it removes the accuracy tables from README.md and puts the refusal in their
