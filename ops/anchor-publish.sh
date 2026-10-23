@@ -1,7 +1,8 @@
 #!/bin/bash
 # Externally timestamp what the operator must not be able to rewrite.
 #
-# Five artifacts go to the public repo on every run:
+# Five artifacts go to the public repo on every run (since 23 Oct 2026, 2b, 3
+# and 4 only with SIGNALDECK_PUBLISH_DERIVED=1: see LICENCE GATE below):
 #   1. The newest signed ledger anchor's publish line, appended to anchors.log.
 #      A digest sitting in a third party's git history is the only evidence an
 #      operator who holds the signing key cannot fabricate after the fact.
@@ -178,6 +179,18 @@ PY
   #     head line lets anyone verify the frozen grading protocol without
   #     touching the daemon. Copied only when present, so the LaunchAgent
   #     survives a checkout that predates the document.
+  #
+  #     LICENCE GATE (23 Oct 2026), for steps 2b, 3 and 4. The protocol
+  #     document, the registry and its README carry accuracy statistics
+  #     computed from Alpaca market data, which Alpaca licenses for personal
+  #     use only and forbids publishing, derivations included. They are
+  #     refreshed in the public repo only when the operator records Alpaca's
+  #     written permission with SIGNALDECK_PUBLISH_DERIVED=1. The hashes in
+  #     steps 1, 2 and 5 publish either way, and the copies already committed
+  #     stay put, so each new statement still binds the registry beside it.
+  publish_derived=0
+  [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ] && publish_derived=1
+  if [ "$publish_derived" = 1 ]; then
   [ -f "$SD/PREREGISTRATION.md" ] && cp "$SD/PREREGISTRATION.md" "$REPO/PREREGISTRATION.md"
 
   # 3. The honest track record, regenerated now and copied verbatim. If regen
@@ -205,6 +218,9 @@ PY
   #    Rendered to a temp file so a mid-render failure never leaves a
   #    truncated README in the public history.
   mv "$REPO/README.md.tmp" "$REPO/README.md"
+  else
+    echo "licence: PREREGISTRATION.md, accuracy_registry.json and README.md not refreshed (Alpaca-derived statistics; SIGNALDECK_PUBLISH_DERIVED=1 only with Alpaca's written permission). Hashes still publish."
+  fi
 
   # 5. The timestamped statement (2026-09-30). Everything above lands in git,
   #    and a git date is whatever the committer's clock says: an operator can
