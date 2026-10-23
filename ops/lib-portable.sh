@@ -301,8 +301,28 @@ sd_titlecase() {
 # Existence is probed with //Query rather than inferred from //Run's status,
 # because //Run returns 1 for both "no such task" and "task exists but refused"
 # (measured), and those are not the same problem.
+#
+# LINUX (ops/cloud): the daemon and web are systemd units there, and schtasks
+# does not exist, so every start/stop below read as "not registered" (2) - the
+# market-close backup would stop nothing it meant to and restart nothing.
+# sd_systemd_unit names the unit, or fails for a service with no unit (the
+# ngrok tunnel), which then falls through to the schtasks branch and gets 2.
+sd_systemd_unit() {
+  [ "$(uname -s)" = Linux ] && command -v systemctl >/dev/null 2>&1 || return 1
+  case "$1" in
+    com.signaldeck.daemon) printf 'signaldeck-daemon.service' ;;
+    com.signaldeck.web) printf 'signaldeck-web.service' ;;
+    *) return 1 ;;
+  esac
+}
+
 sd_svc_start() {
-  local task
+  local task unit
+  if unit="$(sd_systemd_unit "$1")"; then
+    systemctl cat "$unit" >/dev/null 2>&1 || return 2
+    systemctl start "$unit" >/dev/null 2>&1 || return 1
+    return 0
+  fi
   task="$(sd_task_name "$1")"
   schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
   schtasks //Run //TN "$task" >/dev/null 2>&1 || return 1
@@ -319,6 +339,16 @@ sd_svc_stop() {
   # stopfile.go), which cancels the same context SIGTERM would; /End below is
   # only the fallback for a drain that has not finished in SD_STOP_GRACE seconds
   # (150: ShutdownGrace 75s + run-journal close 30s + the WAL checkpoint).
+  #
+  # Under systemd a stop IS a SIGTERM, and the unit's TimeoutStopSec=150 is the
+  # same grace. The stop file must not be used there: the daemon exits 0 on it
+  # and Restart=always would start it straight back up mid-backup.
+  local unit
+  if unit="$(sd_systemd_unit "$1")"; then
+    systemctl cat "$unit" >/dev/null 2>&1 || return 2
+    systemctl stop "$unit" >/dev/null 2>&1 || return 1
+    return 0
+  fi
   if [ "$1" = com.signaldeck.daemon ] && sd_is_running signaldeckd; then
     : > "$SD_LIB_DIR/../data/.stop-request"
     local waited=0

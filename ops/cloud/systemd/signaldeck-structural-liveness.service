@@ -1,0 +1,30 @@
+# Mirrors Windows task 'SignalDeck Structural-Liveness' (ops/tasks/SignalDeck Structural-Liveness.xml).
+[Unit]
+Description=SignalDeck Structural-Liveness
+Documentation=file:/srv/sd/signaldeck/ops/cloud/README.md
+After=network-online.target time-sync.target
+Wants=network-online.target
+RequiresMountsFor=/srv/sd
+OnFailure=signaldeck-alert@%n.service
+
+[Service]
+Type=oneshot
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck
+Environment=TZ=America/Los_Angeles
+Environment=PATH=/srv/sd/signaldeck/.venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+# Big temp files (the restore rehearsal decompresses a full DB copy) go to the
+# data volume, not the 50 GB boot volume.
+Environment=TMPDIR=/srv/sd/tmp
+# The redirect runs as the service user, like the Windows task's `bash -lc "... >> log 2>&1"`.
+# (StandardOutput=append: would have PID 1 create a missing log as root.)
+ExecStart=/bin/bash -c 'exec /bin/bash /srv/sd/signaldeck/ops/structural-liveness.sh >> /srv/sd/signaldeck/logs/structural-liveness.out.log 2>&1'
+# ExecutionTimeLimit PT6H on Windows.
+TimeoutStartSec=6h
+Nice=10
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd /home/signaldeck

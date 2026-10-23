@@ -1,0 +1,13 @@
+# Mirrors the trigger of Windows task 'SignalDeck Daily-Refresh' in America/Los_Angeles wall time.
+# Persistent=true is StartWhenAvailable: a run missed while the VM was down
+# fires once at boot.
+[Unit]
+Description=SignalDeck Daily-Refresh schedule
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:15:00 America/Los_Angeles
+Persistent=true
+Unit=signaldeck-daily-refresh.service
+
+[Install]
+WantedBy=timers.target

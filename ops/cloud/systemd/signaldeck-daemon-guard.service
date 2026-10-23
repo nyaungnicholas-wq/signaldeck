@@ -1,0 +1,22 @@
+# Replaces the checks of Windows task 'SignalDeck Daemon Keepalive' that are not plain liveness
+# (systemd's Restart=always covers that). See ops/cloud/daemon-guard.sh.
+[Unit]
+Description=SignalDeck Daemon Keepalive checks
+Documentation=file:/srv/sd/signaldeck/ops/cloud/README.md
+RequiresMountsFor=/srv/sd
+
+[Service]
+Type=oneshot
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck
+Environment=TZ=America/Los_Angeles
+Environment=PATH=/srv/sd/signaldeck/.venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+# The redirect runs as the service user, like the Windows task's `bash -lc "... >> log 2>&1"`.
+# (StandardOutput=append: would have PID 1 create a missing log as root.)
+ExecStart=/bin/bash -c 'exec /bin/bash /srv/sd/signaldeck/ops/cloud/daemon-guard.sh >> /srv/sd/signaldeck/logs/daemon-guard.log 2>&1'
+TimeoutStartSec=10min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd /home/signaldeck

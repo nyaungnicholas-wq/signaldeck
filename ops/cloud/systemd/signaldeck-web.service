@@ -1,0 +1,33 @@
+# Replaces Windows task 'SignalDeck Web' (start-local-workspace.ps1 -Port 8323)
+# and the liveness half of 'SignalDeck Web Keepalive'. The keyed local proxy:
+# ops/cloud/start-web.sh loads ONLY SIGNALDECK_LOCAL_PROXY_KEY from daemon/.env,
+# never the whole file. Releases go through ops/cloud/web-release-linux.sh.
+[Unit]
+Description=SignalDeck web (next start, 127.0.0.1:8323)
+Documentation=file:/srv/sd/signaldeck/ops/cloud/README.md
+After=network-online.target signaldeck-daemon.service
+Wants=network-online.target
+RequiresMountsFor=/srv/sd
+OnFailure=signaldeck-alert@%n.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck/web
+Environment=TZ=America/Los_Angeles
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/bash /srv/sd/signaldeck/ops/cloud/start-web.sh 8323
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd /home/signaldeck
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+# Replaces Windows tasks 'SignalDeck Daemon' (the process) and the liveness half
+# of 'SignalDeck Daemon Keepalive' (Restart=always). The guard's other checks
+# (hang strikes, maintenance lock, universe fail-safe, posture) are
+# signaldeck-daemon-guard.timer. ONE writer: enable this on exactly one host.
+[Unit]
+Description=SignalDeck daemon (signaldeckd, 127.0.0.1:8322)
+Documentation=file:/srv/sd/signaldeck/ops/cloud/README.md
+After=network-online.target time-sync.target
+Wants=network-online.target
+RequiresMountsFor=/srv/sd
+OnFailure=signaldeck-alert@%n.service
+# Five crashes in ten minutes stops the loop and fires the alert; the guard
+# timer starts it again five minutes later, as the Windows keepalive did.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck/daemon
+Environment=TZ=America/Los_Angeles
+ExecStart=/srv/sd/signaldeck/bin/signaldeckd
+Restart=always
+RestartSec=10
+# SIGTERM drains workers and checkpoints the WAL: ShutdownGrace 75s + run
+# journal close 30s + checkpoint, the same 150s as SD_STOP_GRACE in lib-portable.sh.
+KillSignal=SIGTERM
+TimeoutStopSec=150
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd /home/signaldeck
+
+[Install]
+WantedBy=multi-user.target

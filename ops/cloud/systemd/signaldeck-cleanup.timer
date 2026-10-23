@@ -1,0 +1,13 @@
+# Mirrors the trigger of Windows task 'SignalDeck Cleanup' in America/Los_Angeles wall time.
+# Persistent=true is StartWhenAvailable: a run missed while the VM was down
+# fires once at boot.
+[Unit]
+Description=SignalDeck Cleanup schedule
+
+[Timer]
+OnCalendar=*-*-* 14:05:00 America/Los_Angeles
+Persistent=true
+Unit=signaldeck-cleanup.service
+
+[Install]
+WantedBy=timers.target

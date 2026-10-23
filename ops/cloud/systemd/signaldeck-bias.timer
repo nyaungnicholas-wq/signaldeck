@@ -1,0 +1,13 @@
+# Mirrors the trigger of Windows task 'SignalDeck Bias' in America/Los_Angeles wall time.
+# Persistent=true is StartWhenAvailable: a run missed while the VM was down
+# fires once at boot.
+[Unit]
+Description=SignalDeck Bias schedule
+
+[Timer]
+OnCalendar=*-*-* 02:40:00 America/Los_Angeles
+Persistent=true
+Unit=signaldeck-bias.service
+
+[Install]
+WantedBy=timers.target

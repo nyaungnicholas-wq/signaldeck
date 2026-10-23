@@ -1,0 +1,17 @@
+# OnFailure= target of every SignalDeck unit: ops/cloud/alert.sh records the
+# failure in logs/health-alerts.log and the journal, and posts it to the
+# webhook transports named in daemon/.env (the Windows balloon has no headless
+# equivalent). %i is the failed unit.
+[Unit]
+Description=SignalDeck alert for %i
+
+[Service]
+Type=oneshot
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck
+ExecStart=/bin/bash /srv/sd/signaldeck/ops/cloud/alert.sh "SignalDeck unit failed: %i" "journalctl -u %i -n 50 on the VM"
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd

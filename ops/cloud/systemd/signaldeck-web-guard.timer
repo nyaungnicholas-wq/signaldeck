@@ -1,0 +1,12 @@
+# Windows: 'SignalDeck Web Keepalive' every 5min (and at logon). Here: every 5min from boot.
+[Unit]
+Description=SignalDeck Web Keepalive schedule
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=signaldeck-web-guard.service
+
+[Install]
+WantedBy=timers.target

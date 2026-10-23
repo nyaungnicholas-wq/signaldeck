@@ -1,0 +1,12 @@
+# Windows: 'SignalDeck Daemon Keepalive' every 5min (and at logon). Here: every 5min from boot.
+[Unit]
+Description=SignalDeck Daemon Keepalive schedule
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=signaldeck-daemon-guard.service
+
+[Install]
+WantedBy=timers.target

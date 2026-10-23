@@ -43,7 +43,16 @@ if [ -x "$(command -v powershell)" ] || command -v powershell >/dev/null 2>&1; t
     || echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: provenance preflight reported a problem (non-fatal; see logs/daemon-provenance.log)" >> "$SD/logs/backup-offline.log"
 fi
 
-schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1
+# Linux (ops/cloud): there is no schtasks, and a bare //Run there exited 127
+# and left the daemon down - systemd does not restart a unit that was stopped
+# on purpose. The unit mapping lives in one place, lib-portable.sh.
+if [ "$(uname -s)" = Linux ]; then
+  # shellcheck source=lib-portable.sh
+  . "$SD/ops/lib-portable.sh"
+  sd_svc_start com.signaldeck.daemon
+else
+  schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1
+fi
 daemon_rc=$?
 
 if [ "$daemon_rc" -ne 0 ]; then

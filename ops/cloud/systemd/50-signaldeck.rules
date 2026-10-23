@@ -1,0 +1,16 @@
+// /etc/polkit-1/rules.d/50-signaldeck.rules
+// The service user may start, stop and restart its own two long-running units
+// and nothing else. The market-close backup, the refresh sweep, deploy and
+// the guards drive them through ops/lib-portable.sh (sd_svc_*); no sudo, so
+// NoNewPrivileges=yes stays on every unit.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "signaldeck") {
+        var unit = action.lookup("unit");
+        var verb = action.lookup("verb");
+        if ((unit == "signaldeck-daemon.service" || unit == "signaldeck-web.service") &&
+            (verb == "start" || verb == "stop" || verb == "restart" || verb == "reset-failed")) {
+            return polkit.Result.YES;
+        }
+    }
+});

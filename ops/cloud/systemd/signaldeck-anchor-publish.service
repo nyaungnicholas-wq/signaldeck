@@ -1,0 +1,29 @@
+# Mirrors Windows task 'SignalDeck Anchor-Publish' (ops/tasks/SignalDeck Anchor-Publish.xml).
+# No log redirect on Windows either; output goes to the journal.
+[Unit]
+Description=SignalDeck Anchor-Publish
+Documentation=file:/srv/sd/signaldeck/ops/cloud/README.md
+After=network-online.target time-sync.target
+Wants=network-online.target
+RequiresMountsFor=/srv/sd
+OnFailure=signaldeck-alert@%n.service
+
+[Service]
+Type=oneshot
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/srv/sd/signaldeck
+Environment=TZ=America/Los_Angeles
+Environment=PATH=/srv/sd/signaldeck/.venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+# Big temp files (the restore rehearsal decompresses a full DB copy) go to the
+# data volume, not the 50 GB boot volume.
+Environment=TMPDIR=/srv/sd/tmp
+ExecStart=/bin/bash /srv/sd/signaldeck/ops/anchor-publish.sh
+# ExecutionTimeLimit PT6H on Windows.
+TimeoutStartSec=6h
+Nice=10
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/sd /home/signaldeck
