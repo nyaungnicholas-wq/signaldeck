@@ -9,6 +9,7 @@
 // renders an honest note.
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
@@ -16,10 +17,29 @@ import useDashboardProof from "@/hooks/useDashboardProof";
 import RefusalNotice from "@/components/RefusalNotice";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { ledgerHeadline } from "@/lib/ledgerHeadline";
+import { withheldFromMessage, type Withheld as WithheldInfo } from "@/lib/withheld";
+import Withheld from "@/components/Withheld";
 
-export default function ProofStrip() {
+export default function ProofStrip({
+  onWithheld,
+}: {
+  /** The page shows one licence notice for all its cards; without it, this card shows its own. */
+  onWithheld?: (w: WithheldInfo) => void;
+} = {}) {
   const { tr, err } = useDashboardProof();
+  const withheld = tr ? null : withheldFromMessage(err);
+  const wNotice = withheld?.notice;
+  const wSource = withheld?.source ?? "unknown";
+  useEffect(() => {
+    if (wNotice && onWithheld) onWithheld({ notice: wNotice, source: wSource });
+  }, [wNotice, wSource, onWithheld]);
 
+  if (withheld) {
+    // Not "proof data unavailable … once the daemon is reachable": it answered.
+    return onWithheld ? null : (
+      <Withheld compact title="Track record" notice={withheld.notice} source={withheld.source} />
+    );
+  }
   if (err && !tr) {
     return (
       <section className="panel px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>

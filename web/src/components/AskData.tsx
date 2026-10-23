@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, withheldFromMessage } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import {
   ASK_FOOTER,
   splitCitations,
@@ -105,7 +106,9 @@ export default function AskData() {
         Ask a question about SignalDeck&rsquo;s own forecasts and record. Every answer cites the rows it came from.
       </p>
 
-      {statusError ? (
+      {withheldFromMessage(statusError) ? (
+        <Withheld compact notice={statusError as string} source={withheldFromMessage(statusError)?.source} title="Ask the data" />
+      ) : statusError ? (
         <p role="alert" className="m-0 text-[0.85rem]" style={{ color: "var(--ask)" }}>
           Error loading status: {statusError}
         </p>

@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import {
   HORIZONS,
   JOURNAL_FOOTER,
   JOURNAL_IMMUTABLE,
+  journalWithheld,
   horizonLabel,
   statsHeadline,
   beatsDrift,
@@ -153,6 +155,21 @@ export default function MemberJournal() {
     }
   };
 
+  // Every journal route is withheld from members (the grades are measured
+  // against licensed market data), the search and the call included: one
+  // panel, no form that can only fail.
+  const withheld = journalWithheld(loadErr, searchErr, confirmingErr);
+  if (withheld) {
+    return (
+      <section className="panel flex flex-col gap-4 px-4 py-4" aria-labelledby="member-journal-h">
+        <h1 id="member-journal-h" className="m-0 text-lg font-bold">
+          My calls
+        </h1>
+        <Withheld notice={withheld.notice} source={withheld.source} title="Your calls" />
+      </section>
+    );
+  }
+
   return (
     <section className="panel flex flex-col gap-4 px-4 py-4" aria-labelledby="member-journal-h">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -190,146 +207,150 @@ export default function MemberJournal() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <div>
-          <label htmlFor="journal-symbol-search" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
-            US stock or ETF
-          </label>
-          <input
-            id="journal-symbol-search"
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ticker or company name"
-            autoComplete="off"
-            className="chip min-h-[40px] w-full max-w-[28rem] px-3"
-            style={{ color: "var(--text)" }}
-          />
-          {searchErr && (
-            <p role="alert" className="m-0 text-[0.8rem]" style={{ color: "var(--ask)" }}>
-              {searchErr}
-            </p>
-          )}
-          {shown.length > 0 && (
-            <ul className="m-0 flex max-w-[40rem] list-none flex-col gap-1 p-0">
-              {shown.map((c) => (
-                <li key={c.symbol} className="flex items-center gap-3 border-b py-1" style={{ borderColor: "var(--border)" }}>
-                  <span className="mono w-20 shrink-0 font-bold">{c.symbol}</span>
-                  <span className="min-w-0 flex-1 truncate text-[0.85rem]">{c.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSymbol(c.symbol);
-                      setQuery("");
-                      setResults(null);
-                    }}
-                    className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
-                    style={{ color: "var(--accent)" }}
-                  >
-                    Pick
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {results && results.q === q && q.length > 0 && shown.length === 0 && (
-            <p className="m-0 text-[0.8rem]" style={{ color: "var(--dim)" }}>
-              No tracked US stock or ETF matches &ldquo;{q}&rdquo;.
-            </p>
-          )}
-          {symbol && (
-            <div className="flex items-center gap-2">
-              <span className="mono font-bold">{symbol}</span>
+      {/* Not before the first read answers: a member's answer is a 451, and a
+          form shown until then is one they could start filling in for nothing. */}
+      {(journal || loadErr) && (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label htmlFor="journal-symbol-search" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
+              US stock or ETF
+            </label>
+            <input
+              id="journal-symbol-search"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Ticker or company name"
+              autoComplete="off"
+              className="chip min-h-[40px] w-full max-w-[28rem] px-3"
+              style={{ color: "var(--text)" }}
+            />
+            {searchErr && (
+              <p role="alert" className="m-0 text-[0.8rem]" style={{ color: "var(--ask)" }}>
+                {searchErr}
+              </p>
+            )}
+            {shown.length > 0 && (
+              <ul className="m-0 flex max-w-[40rem] list-none flex-col gap-1 p-0">
+                {shown.map((c) => (
+                  <li key={c.symbol} className="flex items-center gap-3 border-b py-1" style={{ borderColor: "var(--border)" }}>
+                    <span className="mono w-20 shrink-0 font-bold">{c.symbol}</span>
+                    <span className="min-w-0 flex-1 truncate text-[0.85rem]">{c.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSymbol(c.symbol);
+                        setQuery("");
+                        setResults(null);
+                      }}
+                      className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
+                      style={{ color: "var(--accent)" }}
+                    >
+                      Pick
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {results && results.q === q && q.length > 0 && shown.length === 0 && (
+              <p className="m-0 text-[0.8rem]" style={{ color: "var(--dim)" }}>
+                No tracked US stock or ETF matches &ldquo;{q}&rdquo;.
+              </p>
+            )}
+            {symbol && (
+              <div className="flex items-center gap-2">
+                <span className="mono font-bold">{symbol}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSymbol(null);
+                    setQuery("");
+                    setResults(null);
+                    setConfirming(false);
+                  }}
+                  className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
+                  style={{ color: "var(--accent)" }}
+                >
+                  Change
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span id="journal-direction" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
+              Direction
+            </span>
+            <div className="flex gap-2" role="group" aria-labelledby="journal-direction">
               <button
                 type="button"
-                onClick={() => {
-                  setSymbol(null);
-                  setQuery("");
-                  setResults(null);
-                  setConfirming(false);
-                }}
-                className="chip min-h-[36px] cursor-pointer px-3 text-[0.8rem]"
-                style={{ color: "var(--accent)" }}
+                aria-pressed={direction === "up"}
+                onClick={() => setDirection("up")}
+                className={`chip min-h-[36px] px-3 text-[0.8rem] ${direction === "up" ? "bg-[var(--bid)]/20" : ""}`}
+                style={{ color: direction === "up" ? "var(--bid)" : "var(--text)" }}
               >
-                Change
+                Up
+              </button>
+              <button
+                type="button"
+                aria-pressed={direction === "down"}
+                onClick={() => setDirection("down")}
+                className={`chip min-h-[36px] px-3 text-[0.8rem] ${direction === "down" ? "bg-[var(--ask)]/20" : ""}`}
+                style={{ color: direction === "down" ? "var(--ask)" : "var(--text)" }}
+              >
+                Down
               </button>
             </div>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <span id="journal-direction" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
-            Direction
-          </span>
-          <div className="flex gap-2" role="group" aria-labelledby="journal-direction">
-            <button
-              type="button"
-              aria-pressed={direction === "up"}
-              onClick={() => setDirection("up")}
-              className={`chip min-h-[36px] px-3 text-[0.8rem] ${direction === "up" ? "bg-[var(--bid)]/20" : ""}`}
-              style={{ color: direction === "up" ? "var(--bid)" : "var(--text)" }}
-            >
-              Up
-            </button>
-            <button
-              type="button"
-              aria-pressed={direction === "down"}
-              onClick={() => setDirection("down")}
-              className={`chip min-h-[36px] px-3 text-[0.8rem] ${direction === "down" ? "bg-[var(--ask)]/20" : ""}`}
-              style={{ color: direction === "down" ? "var(--ask)" : "var(--text)" }}
-            >
-              Down
-            </button>
           </div>
-        </div>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="journal-horizon" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
-            Horizon
-          </label>
-          <select
-            id="journal-horizon"
-            value={horizon}
-            onChange={(e) => setHorizon(Number(e.target.value))}
-            className="chip min-h-[36px] w-full px-3"
-            style={{ color: "var(--text)" }}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="journal-horizon" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
+              Horizon
+            </label>
+            <select
+              id="journal-horizon"
+              value={horizon}
+              onChange={(e) => setHorizon(Number(e.target.value))}
+              className="chip min-h-[36px] w-full px-3"
+              style={{ color: "var(--text)" }}
+            >
+              {HORIZONS.map((h) => (
+                <option key={h.value} value={h.value}>
+                  {h.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="journal-note" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
+              Note (only you see this)
+            </label>
+            <textarea
+              id="journal-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={280}
+              className="chip min-h-[60px] w-full px-3 py-2"
+              style={{ color: "var(--text)" }}
+            />
+            <div className="flex justify-end">
+              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                {note.length}/280
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!symbol}
+            className="chip min-h-[36px] w-full cursor-pointer px-3"
+            style={{ color: "var(--accent)" }}
           >
-            {HORIZONS.map((h) => (
-              <option key={h.value} value={h.value}>
-                {h.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <label htmlFor="journal-note" className="text-[0.75rem] tracking-wide" style={{ color: "var(--dim)" }}>
-            Note (only you see this)
-          </label>
-          <textarea
-            id="journal-note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            maxLength={280}
-            className="chip min-h-[60px] w-full px-3 py-2"
-            style={{ color: "var(--text)" }}
-          />
-          <div className="flex justify-end">
-            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              {note.length}/280
-            </span>
-          </div>
-        </div>
-
-        <button
-          type="submit"
-          disabled={!symbol}
-          className="chip min-h-[36px] w-full cursor-pointer px-3"
-          style={{ color: "var(--accent)" }}
-        >
-          Review call
-        </button>
-      </form>
+            Review call
+          </button>
+        </form>
+      )}
 
       {confirming && symbol && (
         <div role="dialog" aria-label="Confirm call" className="flex flex-col gap-3 p-4 border" style={{ borderColor: "var(--border)" }}>

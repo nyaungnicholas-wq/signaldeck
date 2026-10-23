@@ -26,6 +26,6 @@ export const OG_IMAGE = {
   url: "/og-image",
   width: 1200,
   height: 630,
-  alt: "SignalDeck - a market instrument that grades itself in public",
+  alt: "SignalDeck - a market instrument that registers its claims in public before the outcome",
   type: "image/png",
 };

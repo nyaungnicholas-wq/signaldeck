@@ -9,15 +9,24 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, type VolForecastLatest } from "@/lib/api";
+import { api, withheldOf, type VolForecastLatest, type Withheld as WithheldInfo } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import { riskHeadline, type RiskHeadline } from "@/lib/riskHeadline";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 const LABEL: Record<number, string> = { 1: "next day", 5: "next week" };
 
-export default function RiskFirst({ watchSymbols }: { watchSymbols: string[] }) {
+export default function RiskFirst({
+  watchSymbols,
+  onWithheld,
+}: {
+  watchSymbols: string[];
+  /** The page shows one licence notice for all its cards; without it, this card shows its own. */
+  onWithheld?: (w: WithheldInfo) => void;
+}) {
   const [head, setHead] = useState<RiskHeadline | null>(null);
   const [latest, setLatest] = useState<VolForecastLatest | null>(null);
+  const [withheld, setWithheld] = useState<WithheldInfo | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -29,13 +38,26 @@ export default function RiskFirst({ watchSymbols }: { watchSymbols: string[] }) 
         // The per-symbol numbers are shown only once the forecast has passed.
         if (h.lead) api.volForecastLatest().then((l) => alive && setLatest(l), () => {});
       },
-      () => alive && setHead(riskHeadline(undefined)),
+      (e: unknown) => {
+        if (!alive) return;
+        // A licence withholding is not "not available right now".
+        const w = withheldOf(e);
+        if (w) {
+          setWithheld(w);
+          onWithheld?.(w);
+        } else setHead(riskHeadline(undefined));
+      },
     );
     return () => {
       alive = false;
     };
-  }, []);
+  }, [onWithheld]);
 
+  if (withheld) {
+    return onWithheld ? null : (
+      <Withheld compact title="Volatility forecast" notice={withheld.notice} source={withheld.source} />
+    );
+  }
   if (!head) return null;
 
   if (!head.lead) {

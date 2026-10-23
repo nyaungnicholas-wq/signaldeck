@@ -16,16 +16,25 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { volRegime, pollMs, POLL_SLOW, type VolRegime } from "@/lib/api";
+import { volRegime, pollMs, POLL_SLOW, withheldOf, type VolRegime, type Withheld as WithheldInfo } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
-export default function VolRegimeLead({ memberView = false }: { memberView?: boolean }) {
+export default function VolRegimeLead({
+  memberView = false,
+  onWithheld,
+}: {
+  memberView?: boolean;
+  /** The page shows one licence notice for all its cards; without it, this card shows its own. */
+  onWithheld?: (w: WithheldInfo) => void;
+}) {
   const [data, setData] = useState<VolRegime | null>(null);
   const [failed, setFailed] = useState(false);
+  const [withheld, setWithheld] = useState<WithheldInfo | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -35,9 +44,15 @@ export default function VolRegimeLead({ memberView = false }: { memberView?: boo
           if (!alive) return;
           setData(d);
           setFailed(false);
+          setWithheld(null);
         })
-        .catch(() => {
-          if (alive) setFailed(true);
+        .catch((e: unknown) => {
+          if (!alive) return;
+          const w = withheldOf(e);
+          if (w) {
+            setWithheld(w);
+            onWithheld?.(w);
+          } else setFailed(true);
         });
     load();
     const stop = pollMs(load, POLL_SLOW);
@@ -45,8 +60,15 @@ export default function VolRegimeLead({ memberView = false }: { memberView?: boo
       alive = false;
       stop();
     };
-  }, []);
+  }, [onWithheld]);
 
+  // A licence withholding is said, never rendered as nothing: absence here
+  // would read as "no regime today".
+  if (withheld) {
+    return onWithheld ? null : (
+      <Withheld compact title="Volatility regime" notice={withheld.notice} source={withheld.source} />
+    );
+  }
   // A failed fetch renders nothing rather than an error block: this is one card
   // on a dashboard, and the rest of the page is still worth reading.
   if (failed) return null;

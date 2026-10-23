@@ -32,8 +32,8 @@ const STEPS: { title: string; body: string; href?: string; linkLabel?: string }[
     linkLabel: "see the market mood →",
   },
   {
-    title: "We grade ourselves in public",
-    body: "Our scorecard compares every call against what actually happened. The weak numbers stay visible — hiding them would make the good ones meaningless.",
+    title: "We grade ourselves against what happened",
+    body: "Our scorecard compares every call against what actually happened, weak numbers included. While the market-data licence is unresolved it is shown only to the operator; everyone else sees why.",
     href: "/lab/track-record",
     linkLabel: "see the scorecard →",
   },

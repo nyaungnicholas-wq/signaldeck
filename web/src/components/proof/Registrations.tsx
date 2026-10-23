@@ -17,7 +17,8 @@
 // daemon, not from prose here.
 
 import { useEffect, useState } from "react";
-import { prereg, ApiError, type PreregResponse, type PreregRecord } from "@/lib/api";
+import { prereg, ApiError, withheldFromMessage, type PreregResponse, type PreregRecord } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 import Skeleton from "@/components/Skeleton";
 import { specFields, type SpecField } from "@/lib/specfields";
 import FullRecord from "@/components/proof/FullRecord";
@@ -54,6 +55,10 @@ export default function Registrations() {
     };
   }, []);
 
+  const withheld = withheldFromMessage(err);
+  if (withheld) {
+    return <Withheld compact title="Pre-registration chain" notice={withheld.notice} source={withheld.source} />;
+  }
   if (err) {
     // An unavailable chain says so. It must never render as "nothing was
     // registered", which is the same sentence a reader would write down as a
@@ -106,6 +111,12 @@ export default function Registrations() {
           <p className="m-0 max-w-[80ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
             {data.whatThisIs}
           </p>
+        ) : null}
+
+        {/* A non-operator's view: the daemon says what it left out. Without
+            this, a stripped spec read as the frozen record itself. */}
+        {data.withheld ? (
+          <Withheld compact title="Claim details" notice={data.withheld} source="alpaca" />
         ) : null}
 
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>

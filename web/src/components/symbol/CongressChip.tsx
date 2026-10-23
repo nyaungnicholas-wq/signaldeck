@@ -8,10 +8,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { congress } from "@/lib/api";
+import { congress, withheldOf, type Withheld as WithheldInfo } from "@/lib/api";
+import Withheld from "@/components/Withheld";
 
 export default function CongressChip({ symbol }: { symbol: string }) {
   const [recent, setRecent] = useState(0);
+  const [withheld, setWithheld] = useState<WithheldInfo | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -21,15 +23,21 @@ export default function CongressChip({ symbol }: { symbol: string }) {
         if (!alive) return;
         setRecent(r.recent90d ?? 0);
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         if (!alive) return;
         setRecent(0); // no chip on error — never fabricate activity
+        setWithheld(withheldOf(e));
       });
     return () => {
       alive = false;
     };
   }, [symbol]);
 
+  // Withheld (Kadoa's compilation): say so, because no chip would read as
+  // "no congressional activity", which nobody measured.
+  if (withheld) {
+    return <Withheld compact title="Congressional trades" notice={withheld.notice} source={withheld.source} />;
+  }
   if (recent <= 0) return null;
 
   return (

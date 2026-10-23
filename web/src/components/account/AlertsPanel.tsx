@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, ApiError, type AlertPrefs, type TelegramLink } from "@/lib/api";
+import Withheld from "@/components/Withheld";
+import { WITHHELD_NOTICES } from "@/lib/withheld";
 
 function errText(e: unknown): string {
   if (e instanceof ApiError) {
@@ -89,6 +91,35 @@ export default function AlertsPanel() {
     }
   };
 
+  return (
+    <AlertsBody
+      prefs={prefs}
+      loadErr={loadErr}
+      busy={busy}
+      link={link}
+      actionErr={actionErr}
+      onEmail={(on) => void toggleEmail(on)}
+      onConnect={() => void connect()}
+      onUnlink={() => void unlink()}
+      onConfirmLink={() => void confirmLink()}
+    />
+  );
+}
+
+type AlertsBodyProps = {
+  prefs: AlertPrefs | null;
+  loadErr: string | null;
+  busy: string | null;
+  link: TelegramLink | null;
+  actionErr: string | null;
+  onEmail: (on: boolean) => void;
+  onConnect: () => void;
+  onUnlink: () => void;
+  onConfirmLink: () => void;
+};
+
+/** The panel without its state, so a render test can drive every branch. */
+export function AlertsBody({ prefs, loadErr, busy, link, actionErr, onEmail, onConnect, onUnlink, onConfirmLink }: AlertsBodyProps) {
   // Both delivery prerequisites must hold before the digest can be switched on.
   const disabledReason = !prefs
     ? null
@@ -108,6 +139,31 @@ export default function AlertsPanel() {
           <p role="alert" className="text-[var(--ask)]">{loadErr}</p>
         ) : (
           <p className="text-[var(--dim)]">Loading alert settings…</p>
+        ) : prefs.digestWithheld ? (
+          // The daemon sends the digest to the operator only (memberdigest),
+          // so a switch here would confirm a delivery that never comes. Only
+          // turning things OFF stays available.
+          <>
+            <Withheld
+              compact
+              title="Daily digest"
+              notice={prefs.digestNotice ?? WITHHELD_NOTICES.alpaca}
+              source="alpaca"
+            />
+            {prefs.emailDigest && (
+              <button type="button" disabled={busy !== null} className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => onEmail(false)}>
+                Turn the email digest off
+              </button>
+            )}
+            {prefs.telegramLinked && (
+              <button type="button" disabled={busy !== null} className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50" onClick={onUnlink}>
+                Disconnect Telegram
+              </button>
+            )}
+            {actionErr && (
+              <p role="alert" className="m-0 text-xs text-[var(--ask)]">{actionErr}</p>
+            )}
+          </>
         ) : (
           <>
             <div className="flex flex-col gap-2">
@@ -123,7 +179,7 @@ export default function AlertsPanel() {
                   checked={prefs.emailDigest}
                   // Turning it OFF is always allowed, even if a prerequisite later lapsed.
                   disabled={(disabledReason !== null && !prefs.emailDigest) || busy !== null}
-                  onChange={(e) => void toggleEmail(e.target.checked)}
+                  onChange={(e) => onEmail(e.target.checked)}
                   aria-describedby={disabledReason ? "digest-why" : undefined}
                   className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
                 />
@@ -149,7 +205,7 @@ export default function AlertsPanel() {
                       type="button"
                       disabled={busy !== null}
                       className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void unlink()}
+                      onClick={onUnlink}
                     >
                       Disconnect Telegram
                     </button>
@@ -179,7 +235,7 @@ export default function AlertsPanel() {
                       type="button"
                       disabled={busy !== null}
                       className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void confirmLink()}
+                      onClick={onConfirmLink}
                     >
                       I&rsquo;ve sent it
                     </button>
@@ -196,7 +252,7 @@ export default function AlertsPanel() {
                       type="button"
                       disabled={busy !== null}
                       className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void connect()}
+                      onClick={onConnect}
                     >
                       Connect Telegram
                     </button>

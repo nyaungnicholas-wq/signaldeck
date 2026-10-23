@@ -6,7 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { JOURNAL_FOOTER, HORIZONS, statsHeadline, beatsDrift, statusLabel } from "./journal.ts";
+import { JOURNAL_FOOTER, HORIZONS, statsHeadline, beatsDrift, statusLabel, journalWithheld } from "./journal.ts";
+import { WITHHELD_NOTICES } from "./withheld.ts";
 
 const src = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
@@ -49,6 +50,17 @@ test("footer and horizons say what was specified", () => {
   assert.deepEqual(HORIZONS.map((h) => h.value), [1, 5, 21]);
   assert.equal(statusLabel({ status: "resolved", outcome: "miss" }), "Miss");
   assert.equal(statusLabel({ status: "void" }), "Void");
+});
+
+test("one withheld read withholds the whole journal page", () => {
+  // The daemon withholds every journal route from members: a 451 on the symbol
+  // search or on the call itself must replace the form, not print red text.
+  assert.equal(journalWithheld(null, undefined, "API 500: /api/journal"), null, "a real failure is not a withholding");
+  assert.equal(journalWithheld(null, WITHHELD_NOTICES.alpaca, null)?.source, "alpaca", "the symbol search's 451");
+  assert.equal(journalWithheld(null, null, WITHHELD_NOTICES.alpaca)?.notice, WITHHELD_NOTICES.alpaca, "the call's 451");
+  assert.equal(journalWithheld(WITHHELD_NOTICES.kadoa)?.source, "kadoa");
+  const page = src("../components/MemberJournal.tsx");
+  assert.match(page, /journalWithheld\(loadErr, searchErr, confirmingErr\)/);
 });
 
 test("/journal is a member page in the member nav, and renders the footer and confirm step", () => {

@@ -1,5 +1,8 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
+import WithheldNotice from "@/components/Withheld";
 import { verdictTone } from "@/lib/riskHeadline";
+import { parseWithheld, type Withheld } from "@/lib/withheld";
 
 /**
  * The live record of the HAR volatility forecast, for a reader with no
@@ -33,7 +36,7 @@ export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Volatility forecast: the live record",
   description:
-    "How one pre-registered volatility forecast has scored against two simple baselines, under the loss function registered before any of it was measured. A record of forecast error, not a per-symbol risk estimate.",
+    "One pre-registered volatility forecast, graded against two simple baselines under the loss function registered before any of it was measured. A record of forecast error, not a per-symbol risk estimate.",
 };
 
 type Horizon = {
@@ -58,12 +61,19 @@ type Record = {
   caveat: string;
 };
 
-async function loadRecord(): Promise<Record | null> {
+async function loadRecord(): Promise<Record | Withheld | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   try {
+    // The viewer's own session cookie, as /accuracy forwards it: the operator
+    // may read this record, everyone else is answered 451 by the daemon.
+    const cookie = (await cookies()).toString();
     // Bounded: a hung (not refused) daemon must not pin this server render forever.
-    const res = await fetch(`${daemon}/api/vol-forecast/record`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) return null;
+    const res = await fetch(`${daemon}/api/vol-forecast/record`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return parseWithheld(res.status, await res.json().catch(() => null));
     return (await res.json()) as Record;
   } catch {
     return null;
@@ -94,7 +104,9 @@ function Progress({ have, need }: { have: number; need: number }) {
 }
 
 export default async function RiskPage() {
-  const rec = await loadRecord();
+  const got = await loadRecord();
+  const withheld = got && "notice" in got ? got : null;
+  const rec = withheld ? null : (got as Record | null);
 
   return (
     <div className="flex flex-col gap-10 pb-16 pt-6">
@@ -122,7 +134,21 @@ export default async function RiskPage() {
         </p>
       </header>
 
-      {rec == null ? (
+      {withheld ? (
+        <>
+          <WithheldNotice notice={withheld.notice} source={withheld.source} title="The live record" />
+          <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            The method above is unchanged. The claim, the two baselines, the loss function and the
+            minimum evidence were written down and hash-chained before any of these forecasts
+            existed.{" "}
+            <Link href="/proof" style={{ color: "var(--accent)" }}>
+              The receipts page
+            </Link>{" "}
+            shows the claim&rsquo;s wording and the record&rsquo;s hashes; the rest of the
+            registration is withheld with the figures, because parts of it quote measured statistics.
+          </p>
+        </>
+      ) : rec == null ? (
         <div
           className="panel px-4 py-3 text-sm"
           style={{ borderColor: "var(--border-strong)", color: "var(--dim)" }}
