@@ -1,5 +1,10 @@
 // Signal8 wave — Stage 2 worker: congress-poller (~12h).
 //
+// NOT WIRED since 23 Oct 2026 (cmd/signaldeckd congressWorkers returns nil):
+// both mirrors below are dead, and the Kadoa fallback that wrote every stored
+// row was removed because Kadoa's terms bar automated access. The type stays
+// so a mirror that comes back can be re-wired after a licence check.
+//
 // Pulls US congressional stock-transaction disclosures from the FREE public
 // Stock Watcher mirrors (Senate + House JSON dumps; see internal/ingest/
 // congress for the verified-2026-07-04 mirror status), hashes each row to a
@@ -54,10 +59,8 @@ type CongressPoller struct {
 	Client *congress.Client // nil ⇒ no-op (shouldn't happen; congress needs no key)
 	// Now is a test hook; nil = time.Now.
 	Now func() time.Time
-	// KadoaFallback enables the Kadoa daily-JSON fallback when a mirror fetch
-	// fails (kadoa.go). Opt-in so unit tests with dead fake mirrors never reach
-	// the network; run.go sets it for the live fleet. 2026-09-07.
-	KadoaFallback bool
+	// The Kadoa daily-JSON fallback (2026-09-07) was removed on 23 Oct 2026:
+	// Kadoa's terms bar automated access. Every stored row came through it.
 
 	// deadRuns counts CONSECUTIVE runs where both mirrors were unreachable. It
 	// drives the circuit breaker in NextFire; a single success resets it. It is
@@ -156,13 +159,6 @@ func (w *CongressPoller) ingestChamber(ctx context.Context, chamber string,
 		trades, err = w.Client.FetchSenate(ctx)
 	} else {
 		trades, err = w.Client.FetchHouse(ctx)
-	}
-	if err != nil && w.KadoaFallback { // Stock Watcher mirrors are dead (403 since 2026): fall back to Kadoa's daily JSON (kadoa.go)
-		if kad, kerr := w.Client.FetchKadoa(ctx, chamber); kerr == nil {
-			trades, err = kad, nil
-		} else {
-			err = fmt.Errorf("%v; kadoa fallback: %v", err, kerr)
-		}
 	}
 	if err != nil {
 		// The free mirrors have been dead since 2026-07 (DNS gone, S3 403) and

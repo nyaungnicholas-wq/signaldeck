@@ -47,7 +47,7 @@ type Deps struct {
 	// CollapseCache memoizes the collapse verdict per data identity (collapsecache.go).
 	// nil = recompute every call, which is what tests and the gate tool get.
 	CollapseCache *CollapseVerdictCache
-	LLM          llm.Client // AI provider (may be disabled when no key is set)
+	LLM           llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
 	Subscribe func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
@@ -154,11 +154,11 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
 	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed
-	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
-	d.registerAI(mux)        // analyst, chat, filingmind, debate, status
-	d.registerCapstones(mux) // scenario simulation, portfolio optimizer
-	d.registerPredict(mux)   // predictions, calibration, regime, ranking, breakouts
-	d.registerData(mux)      // news, sectors, regime-conditioned, macro
+	d.registerQuant(mux)                           // forecast, backtest, risk, correlation, portfolio
+	d.registerAI(mux)                              // analyst, chat, filingmind, debate, status
+	d.registerCapstones(mux)                       // scenario simulation, portfolio optimizer
+	d.registerPredict(mux)                         // predictions, calibration, regime, ranking, breakouts
+	d.registerData(mux)                            // news, sectors, regime-conditioned, macro
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)
@@ -908,19 +908,12 @@ type watchRow struct {
 	TierThreshold int                     `json:"tierThreshold"`
 }
 
-// memberWatchRow is a MEMBER's watchlist row: identity and data freshness only.
-// watchRow carries the last close, the day change, up to 30 daily closes and
-// score components whose notes quote close/SMA/VWAP -- Alpaca rows its terms
-// forbid redistributing -- plus the retired directional ensemble's P(up).
-// Members read each symbol's validated regimes from /api/regimes instead.
-type memberWatchRow struct {
-	md.Symbol
-	LatestBarTs int64 `json:"latestBarTs"`
-}
-
 // watchlist returns the session user's watchlist rows (auth enforced by the
 // middleware, so userID is always non-zero here). A member's rows come from
-// member_symbols and carry no vendor fields.
+// member_symbols and are the symbols' identity alone. watchRow carries the last
+// close, the day change, up to 30 daily closes, score components and the newest
+// Alpaca bar's time, all derived from Alpaca rows that are licensed for the
+// operator's personal use only (datalicense.NonOperatorRoutes).
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 	if d.isMember(r) {
 		// A member's list lives in member_symbols, which no worker reads.
@@ -931,22 +924,13 @@ func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 		}
 		// Crypto is not covered for members (refuseMemberCrypto); a crypto
 		// row watched before that rule is kept in the table but not served.
-		syms := all[:0]
+		syms := make([]md.Symbol, 0, len(all))
 		for _, s := range all {
 			if s.Market != md.Crypto {
 				syms = append(syms, s)
 			}
 		}
-		rows, err := d.buildWatchRows(r.Context(), syms)
-		if err != nil {
-			httpInternal(w, err)
-			return
-		}
-		out := make([]memberWatchRow, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, memberWatchRow{Symbol: row.Symbol, LatestBarTs: row.LatestBarTs})
-		}
-		writeJSON(w, out)
+		writeJSON(w, syms)
 		return
 	}
 	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))

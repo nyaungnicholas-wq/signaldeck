@@ -31,7 +31,6 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
@@ -396,7 +395,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// health-audited like every other worker.
 	fleet = append(fleet, signal8Workers(cfg, st, edgarClient)...)
 	// Signal8 wave / Stage 2 (constructor appended at the END of this file) —
-	// congress-poller (12h): free public congressional stock-disclosure
+	// RETIRED 23 Oct 2026 (Kadoa's terms; the constructor returns nil).
+	// Was: congress-poller (12h): free public congressional stock-disclosure
 	// mirrors (Senate + House Stock Watcher dumps). Needs no API key; degrades
 	// gracefully (dq event + honest status) when a mirror is dead — which both
 	// currently are (verified 2026-07-04). BEFORE the watchdog spec snapshot
@@ -1143,14 +1143,12 @@ func signal8Workers(cfg config.Config, st *store.Store, ec *edgar.Client) []work
 // HONESTY: disclosures lag 30-45 days BY LAW; amounts are ranges. The API's
 // lagNote states both.
 func congressWorkers(st *store.Store) []workers.Worker {
-	c := congress.New()
-	if u := os.Getenv("SIGNALDECK_SENATE_TRADES_URL"); u != "" {
-		c.SenateURL = u
-	}
-	if u := os.Getenv("SIGNALDECK_HOUSE_TRADES_URL"); u != "" {
-		c.HouseURL = u
-	}
-	return []workers.Worker{&pipeline.CongressPoller{St: st, Client: c, KadoaFallback: true}}
+	// congress-poller removed 23 Oct 2026. Both mirrors still answer 403, so
+	// every stored row came through its Kadoa fallback, and Kadoa's terms
+	// (s.4, s.8) bar automated access, reproduction and sharing its rows
+	// without written permission. Stored congress_trades rows are kept, not
+	// deleted, and are served to the operator only (datalicense, "kadoa").
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1861,7 +1859,7 @@ func memberDigestWorkers(st *store.Store, remote *notify.Notifier, cfg config.Co
 		tg = &memberdigest.Telegram{Token: remote.TelegramToken, APIBase: remote.TelegramAPIBase}
 	}
 	out := []workers.Worker{&memberdigest.Worker{
-		St:        st,
+		St: st,
 		// The CONFIGURED public URL only, never the quick-tunnel fallback that
 		// publicBase() uses: a trycloudflare origin changes on every restart,
 		// so a link emailed with it dies with the tunnel.

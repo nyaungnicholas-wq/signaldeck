@@ -91,11 +91,12 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 		mcapMax = 0
 	}
 	trackedOnly := qp.Get("tracked") == "true" || qp.Get("tracked") == "1"
-	// A member gets the directory without vendor columns (see the end of this
+	// A non-operator (a member, or an anonymous visitor where public reads are
+	// open) gets the directory without vendor columns (see the end of this
 	// handler), and without the mcap filters too: mcap is shares x last close,
 	// so bisecting mcapMin/mcapMax against public share counts recovers a price
 	// from rows that print none.
-	member := d.isMember(r)
+	member := d.withheldFrom(r)
 	if member {
 		mcapMin, mcapMax = 0, 0
 	}

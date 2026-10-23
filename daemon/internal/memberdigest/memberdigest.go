@@ -8,6 +8,12 @@
 // DERIVED ONLY: regime labels, conviction bands and backtest accuracy, never a
 // price, close, volume, return, market cap or headline. Crypto is not part of
 // the member product and never appears.
+//
+// OPERATOR ONLY since 23 Oct 2026. Those regime labels and backtest accuracies
+// are derived from Alpaca market data, which Alpaca licenses for personal use
+// only and forbids passing on, derivations included (datalicense,
+// NonOperatorRoutes). A member account is a third party however it signed up,
+// so the read goes to the operator's own account and no one else's.
 package memberdigest
 
 import (
@@ -304,6 +310,7 @@ type Sender func(ctx context.Context, to, subject, body string, headers map[stri
 
 // Store is what the digest worker reads and writes; *store.Store satisfies it.
 type Store interface {
+	AdminUserID(ctx context.Context) (int64, error)
 	DigestRecipients(ctx context.Context) ([]store.DigestRecipient, error)
 	ListMemberSymbols(ctx context.Context, uid int64) ([]md.Symbol, error)
 	ListUserSymbols(ctx context.Context, uid int64) ([]md.Symbol, error)
@@ -345,6 +352,10 @@ type Worker struct {
 	Telegram  *Telegram // nil = no Telegram channel
 	Now       func() time.Time
 	Cap       int // 0 = defaultCap
+
+	// everyone lifts the operator-only gate for the delivery-mechanics tests,
+	// whose fixtures are ordinary accounts. Unexported: no wiring can set it.
+	everyone bool
 
 	deferred int // members the last pass left for the next one
 	retry    int // members with a channel that failed and has a try left
@@ -427,6 +438,22 @@ func (w *Worker) Run(ctx context.Context) (detail string, err error) {
 	if err != nil {
 		return "", err
 	}
+	// Operator only (see the package comment). An unreadable admin id sends
+	// to nobody: fail closed.
+	admin, err := w.St.AdminUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+	withheld := 0
+	kept := recipients[:0]
+	for _, r := range recipients {
+		if w.everyone || (admin != 0 && r.UserID == admin) {
+			kept = append(kept, r)
+		} else {
+			withheld++
+		}
+	}
+	recipients = kept
 	facts, err := LoadFacts(ctx, w.St, now)
 	if err != nil {
 		return "", err
@@ -495,7 +522,11 @@ func (w *Worker) Run(ctx context.Context) (detail string, err error) {
 		slog.Warn("member-digest: per-run send cap reached; the rest go out on the next pass",
 			"cap", capN, "deferred", deferred)
 	}
-	return fmt.Sprintf("sent=%d failed=%d skipped=%d deferred=%d", sent, failed, skipped, deferred), nil
+	detail = fmt.Sprintf("sent=%d failed=%d skipped=%d deferred=%d", sent, failed, skipped, deferred)
+	if withheld > 0 {
+		detail += fmt.Sprintf(" withheld=%d (not the operator; Alpaca-derived)", withheld)
+	}
+	return detail, nil
 }
 
 // deliver sends today's read on each pending channel and returns how many

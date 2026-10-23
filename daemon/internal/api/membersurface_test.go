@@ -194,7 +194,9 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 		t.Errorf("a member's watch counts as a feed-keeping watcher: %d", n)
 	}
 
-	// The member's watchlist: identity and freshness, no vendor numbers.
+	// The member's watchlist: identity only. latestBarTs left on 23 Oct 2026:
+	// it is the newest Alpaca bar's time, operator-only like every other field
+	// built from Alpaca rows (datalicense.NonOperatorRoutes).
 	code, body := getAs(t, member, srv.URL+"/api/watchlist")
 	if code != 200 {
 		t.Fatalf("member watchlist: %d %s", code, body)
@@ -203,13 +205,13 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &mrows); err != nil || len(mrows) != 1 {
 		t.Fatalf("member watchlist: %v, %d rows: %s", err, len(mrows), body)
 	}
-	for _, k := range []string{"lastClose", "dayChangePct", "spark", "scores", "calProb1d"} {
+	for _, k := range []string{"lastClose", "dayChangePct", "spark", "scores", "calProb1d", "latestBarTs"} {
 		if _, has := mrows[0][k]; has {
 			t.Errorf("member watchlist row carries %q: %s", k, body)
 		}
 	}
-	if mrows[0]["symbol"] != "ACME" || mrows[0]["latestBarTs"] != float64(day) {
-		t.Errorf("member watchlist row lost identity or freshness: %s", body)
+	if mrows[0]["symbol"] != "ACME" {
+		t.Errorf("member watchlist row lost its identity: %s", body)
 	}
 
 	// Unwatching as the ONLY watcher leaves the feed on.

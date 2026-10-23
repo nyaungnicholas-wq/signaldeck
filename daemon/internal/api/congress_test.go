@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,21 +112,29 @@ func TestCongressEndpoint(t *testing.T) {
 		t.Fatalf("bogus chamber status = %d, want 400", code)
 	}
 
-	// Mirror status meta (when present) is surfaced as `source`.
+	// The poller was retired on 23 Oct 2026 (Kadoa's terms). Its last stored
+	// status said ok, because the Kadoa fallback worked; serving that would
+	// read as a live source forever. `source` says retired, both chambers.
 	if err := st.SetJSON(ctx, "congress_mirror_status", map[string]any{
 		"checkedTs": now,
-		"senate":    map[string]any{"ok": false, "detail": "status 403"},
-		"house":     map[string]any{"ok": false, "detail": "status 403"},
+		"senate":    map[string]any{"ok": true, "fetched": 5000},
+		"house":     map[string]any{"ok": true, "fetched": 5000},
 	}); err != nil {
 		t.Fatalf("seed status: %v", err)
 	}
 	if code := congressGet(t, srv.URL+"/api/congress", &body); code != 200 {
 		t.Fatalf("status = %d", code)
 	}
-	if body.Source == nil {
-		t.Fatal("source status missing")
+	if body.Source == nil || body.Source["retired"] != true || body.Source["retiredOn"] != "2026-10-23" {
+		t.Fatalf("source = %+v, want the retired status", body.Source)
 	}
-	if sen, _ := body.Source["senate"].(map[string]any); sen == nil || sen["ok"] != false {
-		t.Errorf("source.senate = %+v (must honestly report the outage)", body.Source["senate"])
+	for _, ch := range []string{"senate", "house"} {
+		if m, _ := body.Source[ch].(map[string]any); m == nil || m["ok"] != false ||
+			!strings.Contains(m["detail"].(string), "retired 23 Oct 2026") {
+			t.Errorf("source.%s = %+v: the retired poller's frozen ok is served", ch, body.Source[ch])
+		}
+	}
+	if strings.Contains(body.Note, "Stock Watcher community mirrors") || !strings.Contains(body.Note, "Kadoa") {
+		t.Errorf("note must credit Kadoa, not the mirrors that never supplied a row: %q", body.Note)
 	}
 }

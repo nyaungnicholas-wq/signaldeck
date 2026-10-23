@@ -32,10 +32,10 @@ var clockFields = map[string]*regexp.Regexp{
 }
 
 var perUserRoutes = map[string]string{
-	"/api/watchlist":   "the member's own bookmark list; carries no forecast a non-watcher cannot read on /api/regimes",
-	"/api/auth/me":     "the session's own identity",
-	"/api/alert-prefs": "the member's own on/off delivery switches",
-	"/api/journal":     "the member's own calls and their grade; never a SignalDeck forecast, and no price or return",
+	"/api/watchlist":      "the member's own bookmark list; carries no forecast a non-watcher cannot read on /api/regimes",
+	"/api/auth/me":        "the session's own identity",
+	"/api/alert-prefs":    "the member's own on/off delivery switches",
+	"/api/journal":        "the member's own calls and their grade; never a SignalDeck forecast, and no price or return",
 	"/api/account/export": "the member's own account data for download (AUD-05): their settings, list and calls, never a forecast",
 }
 
@@ -47,7 +47,11 @@ var perUserRoutes = map[string]string{
 func TestMemberForecastsAreImpersonal(t *testing.T) {
 	ctx := context.Background()
 	// FINRA routes open, so the comparison covers the widest member surface.
-	srv, st, mb, _ := newProductionServer(t, func(c *config.Config) { c.MemberFINRA = true },
+	// Behind memberLogicOnly: through the real chain the operator-only guard
+	// (23 Oct 2026) answers most of these routes with one identical 451, which
+	// would make the comparison trivially pass. The member-facing payloads are
+	// what this test judges.
+	srv, st, mb, _ := newMemberLogicServer(t, func(c *config.Config) { c.MemberFINRA = true },
 		writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
 	sharedDashCache.mu.Lock()

@@ -1,13 +1,17 @@
-// Signal8 wave — Stage 2 API: congressional stock trades (public STOCK Act
-// disclosures via the free Stock Watcher mirrors). Read-only, gated like
-// every other read endpoint. The payload carries an EXPLICIT lagNote —
-// disclosures lag 30-45 days by law, so this is never real-time — plus the
-// last mirror-health status so the UI can say honestly when the free source
-// itself is down (which it is, as of 2026-07-04).
+// Signal8 wave — Stage 2 API: congressional stock trades (STOCK Act
+// disclosures). Read-only. The payload carries an EXPLICIT lagNote —
+// disclosures lag 30-45 days by law, so this is never real-time.
+//
+// RETIRED 23 Oct 2026. Every stored row came from Kadoa's daily JSON: the free
+// Stock Watcher mirrors had answered 403 since 2026-07, so the poller's Kadoa
+// fallback was the only path that ever wrote a row. Kadoa's terms (s.4, s.8)
+// bar automated access, reproduction and sharing the compiled rows without
+// written permission, so the poller is unwired (cmd/signaldeckd congressWorkers),
+// the stored rows are kept, and on a published deployment only the operator is
+// served them (the 451 guard, datalicense.NonOperatorSource).
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -15,8 +19,22 @@ import (
 
 const (
 	congressLagNote = "Congressional stock disclosures lag 30-45 days by law (STOCK Act filing windows) — these are never real-time trades."
-	congressNote    = "Public-domain congressional financial disclosures (Senate eFD / House Clerk), ingested via the free Stock Watcher community mirrors. Amounts are the RANGES reported on the disclosure, not exact values. Tickers we don't track keep symbolId null. See `source` for current mirror health — history already stored keeps being served even when the mirrors are down."
+	congressNote    = "Congressional financial disclosures (Senate eFD / House Clerk) as compiled by Kadoa's congress trades dataset; the Stock Watcher mirrors never supplied a stored row (403 since 2026-07). Collection stopped 23 Oct 2026 because Kadoa's terms do not permit sharing the compiled rows; the rows stored before then are shown to the operator only. Amounts are the RANGES reported on the disclosure, not exact values. Tickers we don't track keep symbolId null."
 )
+
+// congressRetiredStatus is the source status /api/congress reports since the
+// poller was retired: both chambers not ok, with the reason, in the shape of
+// pipeline.CongressMirrorStatus so existing readers keep parsing it.
+var congressRetiredStatus = map[string]any{
+	"retired":   true,
+	"retiredOn": "2026-10-23",
+	"detail":    congressRetiredDetail,
+	"senate":    map[string]any{"ok": false, "fetched": 0, "new": 0, "detail": congressRetiredDetail},
+	"house":     map[string]any{"ok": false, "fetched": 0, "new": 0, "detail": congressRetiredDetail},
+}
+
+const congressRetiredDetail = "retired 23 Oct 2026: Kadoa's terms do not permit automated collection " +
+	"or sharing of its rows; the Stock Watcher mirrors answer 403. No collection runs."
 
 // congressActivityDays is the symbol-page chip window (last 90 days of
 // transaction dates).
@@ -59,14 +77,9 @@ func (d Deps) congressTrades(w http.ResponseWriter, r *http.Request) {
 			out["lastTxTs"] = lastTx
 		}
 	}
-	// Mirror health from the poller's last run (absent before the first run —
-	// the UI treats missing status as "not checked yet", not as healthy).
-	if raw, gerr := d.St.GetJSONRaw(ctx, "congress_mirror_status"); gerr == nil && raw != "" {
-		var status any
-		if json.Unmarshal([]byte(raw), &status) == nil {
-			out["source"] = status
-		}
-	}
+	// The poller is retired, so its last stored status (the Kadoa fallback's
+	// "ok") would read as a live source forever. Say retired instead.
+	out["source"] = congressRetiredStatus
 	writeJSON(w, out)
 }
 

@@ -46,7 +46,8 @@ CALENDAR workers below.
 Retired 2026-10-21/22 (no longer wired): `crypto-live`, `crypto-bars`,
 `crypto-perp` (crypto paused 2026-10-22); `tv-quotes`, `tv-rating` (TradingView
 scanner) and `stocktwits-fetcher`. Retired 2026-10-22 (licence review):
-`fred-poller`, `cboe-pc`, `finra-shorts`, `finra-shortint`.
+`fred-poller`, `cboe-pc`, `finra-shorts`, `finra-shortint`. Retired 2026-10-23
+(Kadoa's terms; every stored row came from its fallback): `congress-poller`.
 
 **Feature build** — `signal-runner` (1m); `sentiment-tagger` (10m);
 `sentiment-lex-scorer`, `breakout-runner` (15m); `sentiment-aggregator`,
@@ -89,7 +90,7 @@ retained only to size the per-run timeout.
 | `finra-shortint` (retired 2026-10-22: licence review) | trading days 18:45 ET | semi-monthly, ~8 business days after settlement |
 | `cot-poller` | Saturday 09:00 ET | CFTC COT, Friday 15:30 ET, Tuesday's positions |
 | `13f-poller` | daily 20:00 ET | quarterly filings, manager list rotated by cursor |
-| `congress-poller` | daily 09:00 ET, backing off to 7d while mirrors are dead | STOCK Act allows 45 days to file |
+| `congress-poller` (retired 2026-10-23: Kadoa's terms) | daily 09:00 ET, backing off to 7d while mirrors are dead | STOCK Act allows 45 days to file |
 | `weekly-report` | Sunday 17:00 ET | its own week |
 | `signalbt-weekly` | Sunday 18:00 ET | its own week, one hour after the report |
 

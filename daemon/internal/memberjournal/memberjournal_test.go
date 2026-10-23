@@ -331,6 +331,7 @@ func TestJournalFeedsNoForecast(t *testing.T) {
 		"internal/memberjournal/memberjournal.go": true,
 		"internal/api/journal.go":                 true, // the member's own routes
 		"internal/api/accounts.go":                true, // memberRoutes entry
+		"internal/api/accountdata.go":             true, // strips the journal grade from a non-operator's export (23 Oct 2026)
 		"cmd/signaldeckd/run.go":                  true, // registers the resolver
 		"internal/copilot/catalog.go":             true, // ask the data: the asking member's OWN counts, served only to them
 	}

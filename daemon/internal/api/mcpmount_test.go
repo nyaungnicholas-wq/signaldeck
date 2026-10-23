@@ -28,6 +28,7 @@ func TestMCPIsNotMountedUnlessEnabled(t *testing.T) {
 		AllowedHosts: []string{"127.0.0.1:8322"},
 		PublicReads:  true,
 		MCPEnabled:   false,
+		HTTPAddr:     "127.0.0.1:8322", // unpublished: a published box answers 451 first
 	}}
 	mux := http.NewServeMux()
 	limiter := newRateLimiter(0, 0)
@@ -54,8 +55,12 @@ func TestMCPPassesSecureWithoutTheCSRFHeader(t *testing.T) {
 	// is FALSE here and an anonymous MCP caller is refused — which is the whole
 	// point of deriving the posture from the tunnel rather than the bind. Assert
 	// that first, then clear the signal to exercise the private-bind path.
+	//
+	// Since 23 Oct 2026 a tunnelled (published) box withholds /mcp from every
+	// non-operator before the MCP server sees the request: its tools serve
+	// Alpaca-derived verdicts and records (datalicense.NonOperatorRoutes).
 	t.Setenv("SIGNALDECK_ASSUME_TUNNEL", "true")
-	assertAnonymousMCP(t, http.StatusForbidden, "TLS is required")
+	assertAnonymousMCP(t, http.StatusUnavailableForLegalReasons, `"error":"withheld"`)
 	t.Setenv("SIGNALDECK_ASSUME_TUNNEL", "false")
 	assertAnonymousMCP(t, http.StatusOK, "explain_methodology")
 }

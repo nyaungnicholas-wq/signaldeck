@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -278,6 +279,7 @@ func newFixture(t *testing.T) *fixture {
 		Mail:      f.mail.send,
 		Telegram:  &Telegram{Token: "123:SECRET", APIBase: srv.URL},
 		Now:       func() time.Time { return now },
+		everyone:  true, // ann and bob are ordinary accounts; TestWorkerSendsOnlyToTheOperator drops this
 	}
 	return f
 }
@@ -343,6 +345,43 @@ func TestWorkerSendsOncePerDayAndHonoursUnsubscribe(t *testing.T) {
 	}
 	if last := f.mail.msgs[len(f.mail.msgs)-1]; last.to != "bob@gmail.com" {
 		t.Errorf("mailed %s after ann unsubscribed", last.to)
+	}
+}
+
+// TestWorkerSendsOnlyToTheOperator: the read is derived from Alpaca market
+// data, licensed for personal use only, so the production worker (no test
+// seam) sends it to the operator's own account and to no member, on any
+// channel, even though both members opted in with verified addresses.
+func TestWorkerSendsOnlyToTheOperator(t *testing.T) {
+	f := newFixture(t)
+	f.w.everyone = false
+	ctx := context.Background()
+	owner, err := f.st.CreateUser(ctx, "owner", "x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AddUserSymbol(ctx, owner, f.aaa.ID); err != nil {
+		t.Fatal(err)
+	}
+	for uid, chat := range map[int64]string{owner: "100", f.bob: "200"} {
+		code := fmt.Sprintf("CODE%04d", uid)
+		if err := f.st.SetTelegramLinkCode(ctx, uid, code, f.tradingDay.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := f.st.LinkTelegramByCode(ctx, code, chat, f.tradingDay); err != nil || !ok {
+			t.Fatalf("link %d: %v %v", uid, ok, err)
+		}
+	}
+	detail, err := f.w.Run(ctx)
+	if err != nil || detail != "sent=1 failed=0 skipped=0 deferred=0 withheld=2 (not the operator; Alpaca-derived)" {
+		t.Fatalf("run: %q %v", detail, err)
+	}
+	if f.mail.count() != 0 {
+		t.Errorf("a member was mailed the Alpaca-derived read: %+v", f.mail.msgs)
+	}
+	if len(f.tg.sends) != 1 || f.tg.sends[0]["chat_id"] != "100" ||
+		!strings.Contains(f.tg.sends[0]["text"].(string), "trend21: uptrend") {
+		t.Errorf("telegram sends %+v, want exactly the operator's chat 100 with the forecast", f.tg.sends)
 	}
 }
 

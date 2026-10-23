@@ -110,6 +110,28 @@ func TestLicenceRetiredSourcesArePaused(t *testing.T) {
 	}
 }
 
+// TestKadoaCongressSourceIsPaused: the congress-poller was retired on 23 Oct
+// 2026 (Kadoa's terms). congress_trades stops growing by design, so it must be
+// reported, with its last row, as paused for that reason and never as stale.
+func TestKadoaCongressSourceIsPaused(t *testing.T) {
+	st := fixtureStore(t)
+	ctx := context.Background()
+	old := openNow.UTC().AddDate(0, -3, 0).Unix() // far past the 7d budget
+	if _, err := st.InsertCongressTrade(ctx, store.CongressTradeRow{ID: "k1", Chamber: "house",
+		Member: "Rep. Example", Symbol: "AAPL", TxTs: old - 86400, DisclosedTs: old}); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := srchealth.Evaluate(ctx, st, openNow, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bySource(t, reports, "congress_trades")
+	if got.Stale || got.LastTs != old || !strings.HasPrefix(got.Note, "paused: retired 23 Oct 2026") ||
+		!strings.Contains(got.Note, "Kadoa") {
+		t.Errorf("congress_trades must be reported (with its last row) as paused for Kadoa's terms, never stale: %+v", got)
+	}
+}
+
 func TestEvaluateMarketOpenClassifies(t *testing.T) {
 	st := fixtureStore(t)
 	reports, err := srchealth.Evaluate(context.Background(), st, openNow, false)

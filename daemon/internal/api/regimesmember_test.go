@@ -20,7 +20,9 @@ import (
 
 func TestRegimesMemberViewIsBounded(t *testing.T) {
 	ctx := t.Context()
-	srv, st, mb, _ := newProductionServer(t, nil, writeRegistry(t, thinWindowRegistry))
+	// The regimes member view is withheld from members by the operator-only
+	// guard (23 Oct 2026); its member logic is tested behind memberLogicOnly.
+	srv, st, mb, _ := newMemberLogicServer(t, nil, writeRegistry(t, thinWindowRegistry))
 	const n = 300
 	now := time.Now().Unix()
 	for i := 0; i < n; i++ {
