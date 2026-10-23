@@ -339,7 +339,7 @@ test.describe("release smoke", () => {
     // "frozen empty", and no row promises a recomputation it cannot support.
     await expect(page.getByRole("status", { name: "Claim details: withheld" })).toBeVisible();
     const body = page.locator("body");
-    await expect(body).toContainText("Wording withheld under the data licence");
+    await expect(body).toContainText("Spec withheld under the data licence");
     await expect(body).not.toContainText("frozen empty");
     await expect(body).not.toContainText("served as JSON at");
     await expect(body).not.toContainText("signaldeck-anchors");

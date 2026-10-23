@@ -63,17 +63,17 @@ export default function FullRecord({ record }: { record: PreregRecord }) {
               </div>
             ))}
           </dl>
-        ) : (
+        ) : withheld ? null : (
           <p className="m-0" style={{ color: "var(--faint)" }}>
-            {withheld
-              ? "Wording withheld under the data licence; the hashes are kept."
-              : "This record froze no spec fields."}
+            This record froze no spec fields.
           </p>
         )}
         {withheld ? (
           <p className="m-0" style={{ color: "var(--faint)" }}>
-            The spec is withheld under the data licence. The digest is the frozen record&rsquo;s and
-            cannot be recomputed from this view.
+            {fields.length > 0
+              ? "The rest of the spec is withheld under the data licence."
+              : "Spec withheld under the data licence; the hashes are kept."}{" "}
+            The digest is the frozen record&rsquo;s and cannot be recomputed from this view.
           </p>
         ) : null}
 

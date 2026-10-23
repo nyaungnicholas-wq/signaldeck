@@ -348,8 +348,8 @@ function LiveRecord({ live }: { live: Live }) {
           <li>
             Each structural claim&rsquo;s wording (its question, horizon and resolution rule) stays
             readable as registered, and every record keeps its hash, so the rules cannot move while
-            the results are out of view. Baselines, accuracy bands and loss functions quote measured
-            statistics, so they are withheld with the figures.
+            the results are out of view. Baselines, accuracy bands and loss functions are withheld with
+            the figures, because parts of them quote measured statistics.
           </li>
           <li>
             Grading continues privately under those same rules. Nothing is regraded or deleted while

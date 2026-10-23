@@ -64,12 +64,12 @@ export default function TermsPage() {
         >
           SignalDeck makes statistical market forecasts and grades them against
           rules registered before the results were known. The method, the
-          wording of each pre-registered claim and the hashes of both chains
-          (the claims and the forecast ledger) stay public. Since 23 October
-          2026 the forecasts, grades and other figures themselves, and the
-          parts of each registration that quote measured statistics
-          (baselines, accuracy bands, the grading protocol and the retirement
-          rule), are withheld from everyone except the operator, for the
+          wording of each pre-registered claim, the hashes on the claims chain
+          and the forecast ledger&rsquo;s verification and head hash stay
+          public. Since 23 October 2026 the forecasts, grades and other
+          figures themselves, and the rest of each registration (baselines,
+          accuracy bands, the grading protocol and the retirement rule, parts
+          of which quote measured statistics), are withheld from everyone except the operator, for the
           reason given under Data sources below.
         </p>
         <p
@@ -218,9 +218,9 @@ export default function TermsPage() {
           they are withheld from everyone except the operator until Alpaca
           gives written permission. Signing in does not change this: member
           accounts see the same notice as visitors. The method, the wording of
-          each pre-registered claim and the chain hashes stay public; the parts
-          of a registration that quote measured statistics are withheld with
-          the figures. Public-domain data, such as SEC EDGAR filings, is not covered
+          each pre-registered claim and the hashes that prove the record was
+          not edited stay public; the rest of each registration is withheld
+          with the figures, because parts of it quote measured statistics. Public-domain data, such as SEC EDGAR filings, is not covered
           by Alpaca&rsquo;s licence.
         </p>
         <p

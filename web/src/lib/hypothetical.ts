@@ -13,9 +13,9 @@ export const HYPOTHETICAL_SHORT =
   "Backtest accuracy is hypothetical: measured on past data, not trades in a real account, and it does not predict future results.";
 
 export const WHAT_SIGNALDECK_IS =
-  "SignalDeck's statistical forecasts are the same for everyone, and are shown only to the operator " +
-  "while the market-data licence is unresolved. It does not know your portfolio and does not tell " +
-  "you what to buy or sell.";
+  "SignalDeck does not tailor its statistical forecasts to anyone, and while the market-data licence " +
+  "is unresolved they are shown only to the operator. It does not know your portfolio and does not " +
+  "tell you what to buy or sell.";
 
 /** How the per-symbol classifier is named to members: what it is, not a persona. */
 export const SYMBOL_MODEL_LABEL = "This symbol's model";

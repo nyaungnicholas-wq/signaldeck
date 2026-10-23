@@ -20,7 +20,7 @@ test("hypothetical note says it in the required words", () => {
   assert.match(HYPOTHETICAL_SHORT, /does not predict future results/);
   assert.equal(
     WHAT_SIGNALDECK_IS,
-    "SignalDeck's statistical forecasts are the same for everyone, and are shown only to the operator while the market-data licence is unresolved. It does not know your portfolio and does not tell you what to buy or sell.",
+    "SignalDeck does not tailor its statistical forecasts to anyone, and while the market-data licence is unresolved they are shown only to the operator. It does not know your portfolio and does not tell you what to buy or sell.",
   );
 });
 

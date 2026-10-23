@@ -459,8 +459,8 @@ export default async function AccuracyPage() {
             receipts page
           </Link>{" "}
           shows each structural claim&rsquo;s wording and every record&rsquo;s hashes. The baselines,
-          accuracy bands, grading protocol and retirement-rule text quote measured statistics, so
-          they are withheld with the figures. Every term is in the{" "}
+          accuracy bands, grading protocol and retirement-rule text are withheld with the figures,
+          because parts of them quote measured statistics. Every term is in the{" "}
           <Link href="/glossary" style={{ color: "var(--accent)" }}>
             glossary
           </Link>

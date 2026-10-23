@@ -145,7 +145,7 @@ export default async function RiskPage() {
               The receipts page
             </Link>{" "}
             shows the claim&rsquo;s wording and the record&rsquo;s hashes; the rest of the
-            registration quotes measured statistics, so it is withheld with the figures.
+            registration is withheld with the figures, because parts of it quote measured statistics.
           </p>
         </>
       ) : rec == null ? (

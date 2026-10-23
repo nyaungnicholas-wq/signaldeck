@@ -49,7 +49,7 @@ test("a withheld record never reads as frozen empty", () => {
   const h = html(createElement(FullRecord, { record }));
   assert.doesNotMatch(h, /frozen empty/);
   assert.doesNotMatch(h, /This record froze no spec fields/);
-  assert.ok(h.includes(esc("Wording withheld under the data licence")));
+  assert.ok(h.includes(esc("Spec withheld under the data licence")));
   assert.ok(h.includes(esc("cannot be recomputed from this view")));
   assert.ok(h.includes(esc("shown only to the operator")));
   assert.doesNotMatch(h, /served as JSON at/);
@@ -80,6 +80,6 @@ test("the operator's record keeps the frozen-empty marker and the recompute path
   const h = html(createElement(FullRecord, { record }));
   assert.ok(h.includes(esc("null (frozen empty)")));
   assert.ok(h.includes(esc("served as JSON at")));
-  assert.doesNotMatch(h, /Wording withheld/);
+  assert.doesNotMatch(h, /withheld under the data licence/);
   assert.doesNotMatch(h, /cannot be recomputed/);
 });
