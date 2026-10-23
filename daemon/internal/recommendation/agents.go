@@ -136,10 +136,16 @@ func technicalView(in Inputs) AgentView {
 }
 
 // newsView reads the sentiment tile; absent fresh rated headlines it stays
-// neutral and says so.
+// neutral and says so. A gated tile carries its own reason (since 2026-10-23
+// the tile is retired: its LLM ratings ran on NVIDIA's trial API), and that
+// reason is what the view states, not a guess that headlines were thin.
 func newsView(in Inputs) AgentView {
-	if f, ok := factorByKey(in.Factors, composite.FactorSentiment); ok && !f.Gated && f.Evidence != "" {
+	f, ok := factorByKey(in.Factors, composite.FactorSentiment)
+	if ok && !f.Gated && f.Evidence != "" {
 		return AgentView{Role: RoleNews, Stance: stanceFromVerdict(f.Verdict), View: f.Evidence + "."}
+	}
+	if ok && f.Gated && f.GateReason != "" {
+		return AgentView{Role: RoleNews, Stance: stanceNeutral, View: f.GateReason + " — no news tilt."}
 	}
 	return AgentView{Role: RoleNews, Stance: stanceNeutral, View: "no fresh rated headlines within the sentiment window — no news tilt."}
 }

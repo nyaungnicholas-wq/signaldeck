@@ -102,6 +102,14 @@ var Sources = map[string]Source{
 		Note: "RETIRED 22 Oct 2026: Cboe's website terms bar storing its market statistics " +
 			"in a retrieval system, displaying them and deriving from them",
 		Redistrib: false},
+	// Not a data feed but a processor: the sentiment tagger and the AI layer sent
+	// Alpaca/Benzinga headlines and SignalDeck data to it. llm.ProviderRetired
+	// refuses its hosts; sentiment_score/sentiment_n are retired model inputs.
+	"nvidia": {Name: "nvidia", Class: Restricted, Provider: "NVIDIA",
+		Note: "RETIRED 2026-10-23: the hosted API (integrate.api.nvidia.com) was used under " +
+			"NVIDIA's trial terms, which do not permit production use; nothing is sent to it " +
+			"any more, and its stored sentiment ratings are not a model input",
+		Redistrib: false},
 	// Every stored congress_trades row came from Kadoa (the Stock Watcher mirrors
 	// have answered 403 since 2026-07). Its terms (s.4, s.8) bar automated access,
 	// reproduction and making the data available to third parties without written

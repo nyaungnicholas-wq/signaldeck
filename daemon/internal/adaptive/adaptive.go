@@ -491,9 +491,10 @@ func FromVector(vec map[string]float64) (legs map[string]float64, regime string)
 	if v, ok := vec["forecast_lift"]; ok {
 		c.ForecastLift = &v
 	}
-	if v, ok := vec["sentiment_score"]; ok {
-		c.SentimentScore = &v
-	}
+	// sentiment_score is NOT read back (retired 2026-10-23, gbm.RetiredSourceKey):
+	// it was an LLM headline rating from the NVIDIA-hosted tagger, whose trial
+	// terms do not permit production use, so older rows that carry it no longer
+	// credit or debit a sentiment leg in the learned weights.
 	// STAGE 6 gated model legs. Their stored prob is present in the vector only
 	// when the leg passed its OOS gate at prediction time (buildFeatureVector
 	// writes them gated), so a positive lift sentinel here reconstructs exactly

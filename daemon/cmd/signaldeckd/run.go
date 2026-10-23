@@ -114,11 +114,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// the spend cap.
 	llmClient := llm.New(cfg.LLMKeys, cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMModelDeep, cfg.LLMModelFast, cfg.LLMDailyCap)
 	llm.SetSpendStore(llmClient, st)
-	if llmClient.Enabled() {
-		slog.Info("AI layer enabled", "model", cfg.LLMModel, "deep", cfg.LLMModelDeep, "keys", len(cfg.LLMKeys), "dailyCap", cfg.LLMDailyCap)
-	} else {
-		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY or SIGNALDECK_NVIDIA_KEYS in daemon/.env)")
-	}
+	logAILayer(llmClient, cfg)
 
 	// Stage 3 — alert delivery beyond the Mac: ONE daemon-wide outbound
 	// notifier (Discord/Telegram/generic webhook, all env-configured, all
@@ -279,7 +275,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.HMMRegimeRunner{St: st},
 		&pipeline.RankingRunner{St: st},
 		&pipeline.BreakoutRunner{St: st},
-		&pipeline.SentimentTagger{St: st, LLM: llmClient},
+		// SentimentTagger removed 2026-10-23: it sent Alpaca/Benzinga headlines
+		// to NVIDIA's hosted API, whose trial terms do not permit production
+		// use. Its ratings (sentiment_score / sentiment_n) are retired model
+		// inputs (gbm.RetiredSourceKey). Reversal: re-add this line.
 		&pipeline.SectorRotator{St: st},
 		// HAR realized-variance forecasts and their resolver. They freeze a
 		// call with BOTH nulls beside it and grade it once the window closes;
@@ -2180,5 +2179,19 @@ func retireTVCandidates(ctx context.Context, st *store.Store) {
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	if err := st.SetMeta(ctx, store.CandidatesFreshSinceKey, now); err != nil {
 		slog.Error("retire TradingView candidates", "err", err)
+	}
+}
+
+// logAILayer states the AI layer's posture at startup. The default base URL is
+// NVIDIA's hosted API, retired 2026-10-23 (llm.ProviderRetired): the client then
+// holds no keys, every agent no-ops, and the log says why rather than asking
+// for a key that can no longer help.
+func logAILayer(c llm.Client, cfg config.Config) {
+	if c.Enabled() {
+		slog.Info("AI layer enabled", "model", cfg.LLMModel, "deep", cfg.LLMModelDeep, "keys", len(cfg.LLMKeys), "dailyCap", cfg.LLMDailyCap)
+	} else if why := llm.RetiredReason(c); why != "" {
+		slog.Warn("AI layer retired: " + why)
+	} else {
+		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY or SIGNALDECK_NVIDIA_KEYS in daemon/.env)")
 	}
 }

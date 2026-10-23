@@ -21,6 +21,7 @@ func (d Deps) aiStatus(w http.ResponseWriter, r *http.Request) {
 	s := d.LLM.Stats()
 	out := map[string]any{
 		"enabled": d.LLM.Enabled(),
+		"retired": llm.RetiredReason(d.LLM), // "" unless the provider is retired
 		"model":   d.LLM.Model(),
 		"stats":   s,
 		"charters": map[string]string{
@@ -117,6 +118,10 @@ func (d Deps) aiDebate(w http.ResponseWriter, r *http.Request) {
 // aiReady 503s when the AI layer has no key configured.
 func (d Deps) aiReady(w http.ResponseWriter) bool {
 	if d.LLM == nil || !d.LLM.Enabled() {
+		if why := llm.RetiredReason(d.LLM); why != "" {
+			httpErr(w, 503, "AI is retired: "+why)
+			return false
+		}
 		httpErr(w, 503, "AI is disabled — set SIGNALDECK_NVIDIA_KEY in daemon/.env and restart")
 		return false
 	}

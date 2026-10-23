@@ -121,14 +121,10 @@ func (w *PostmortemWorker) buildCase(ctx context.Context, m store.MissRow, h md.
 		c.RegimeNote = changes[0].From + "→" + changes[0].To
 	}
 
-	// In-window news tone: did fresh sentiment point AGAINST the call?
-	if mean, n, err := w.St.NewsSentimentAgg(ctx, m.SymbolID, m.Ts); err == nil && n > 0 {
-		against := (m.Prob > 0.5 && mean < 0) || (m.Prob < 0.5 && mean > 0)
-		if against {
-			c.NewsAgainst = true
-			c.NewsMag = math.Abs(mean)
-		}
-	}
+	// In-window news tone: not read since 23 Oct 2026. The stored ratings came
+	// from NVIDIA's hosted API on trial terms that forbid production use, so a
+	// rated headline must not attribute a miss as news_shock. NewsAgainst stays
+	// false, so that reason never fires.
 
 	// Macro vol regime: not read since 22 Oct 2026. It came from FRED's VIXCLS
 	// (licence terms do not permit this use), and the last stored value would

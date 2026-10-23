@@ -14,7 +14,8 @@ import (
 )
 
 // The retired sources (crypto 2026-10-21: no licensed data source; StockTwits
-// and TradingView: their terms) still compile as worker types, so one line in
+// and TradingView: their terms; the LLM sentiment tagger 2026-10-23: NVIDIA's
+// trial API terms) still compile as worker types, so one line in
 // run.go would put a worker back with no build error. The fleet is assembled
 // inline in run(), which needs live clients, so this reads the package source:
 // no file of package main may reference a type whose Name() is a retired
@@ -28,11 +29,12 @@ func TestFleetRegistersNoRetiredSourceWorker(t *testing.T) {
 		"pipeline.StocktwitsFetcher": &pipeline.StocktwitsFetcher{},
 		"pipeline.TVRatingPoller":    &pipeline.TVRatingPoller{},
 		"pipeline.TVQuotesPoller":    &pipeline.TVQuotesPoller{},
+		"pipeline.SentimentTagger":   &pipeline.SentimentTagger{},
 	}
 	// Retired-source CLIENTS: not workers, but e.g. a Kraken client handed to
 	// NewBackfiller would silently re-enable crypto backfills.
 	retiredClients := map[string]bool{"cryptohist.New": true, "hyperliquid.New": true, "cryptolive.New": true}
-	banned := map[string]bool{"crypto-live": true, "crypto-bars": true, "crypto-perp": true, "tv-rating": true, "tv-quotes": true}
+	banned := map[string]bool{"crypto-live": true, "crypto-bars": true, "crypto-perp": true, "tv-rating": true, "tv-quotes": true, "sentiment-tagger": true}
 	for ref, w := range retired { // pins the table to the names it stands for
 		if n := w.Name(); !banned[n] && !strings.HasPrefix(n, "stocktwits") {
 			t.Fatalf("%s builds worker %q, not a retired name: update this table", ref, n)

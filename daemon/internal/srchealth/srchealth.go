@@ -56,6 +56,7 @@ const (
 	pausedTradingView = "TradingView's terms bar non-display use of scanner data (2026-10-21)"
 	pausedCrypto      = "crypto is paused: no licensed crypto data source (2026-10-22)"
 	pausedLicence     = "retired 22 Oct 2026: licence terms do not permit this use"
+	pausedNVIDIA      = "retired 2026-10-23: the LLM headline tagger ran on NVIDIA's hosted API, whose trial terms do not permit production use"
 )
 
 var registry = []spec{
@@ -109,6 +110,9 @@ var registry = []spec{
 	{source: "news", query: `SELECT MAX(ts) FROM news`,
 		budget: 12 * time.Hour, gated: true,
 		note: "Alpaca news headlines (market hours)"},
+	{source: "news_sentiment_llm", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM sentiment_daily`,
+		budget: 2 * 24 * time.Hour, gated: false, paused: pausedNVIDIA,
+		note: "LLM headline sentiment (sentiment-tagger -> sentiment_daily, NVIDIA hosted API)"},
 	{source: "bars_1m_hot", query: `SELECT MAX(ts) FROM bars WHERE tf='1m' AND symbol_id IN (SELECT id FROM symbols WHERE stream=1)`,
 		budget: 30 * time.Minute, gated: true,
 		note: "streamed hot-set 1m bars (live ws, market hours)"},
