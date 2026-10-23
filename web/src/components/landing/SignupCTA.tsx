@@ -11,10 +11,10 @@ export default function SignupCTA() {
           Free account
         </div>
         <h2 className="cta-title m-0 max-w-[18ch] text-[1.9rem] font-extrabold leading-[1.05] sm:text-[2.6rem]">
-          Watch the record get written.
+          Keep your own record.
         </h2>
         <p className="max-w-[56ch] text-[0.98rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          Make an account to follow the live grades as the evidence lands — including the ones that fail. We confirm your email and never sell it. Besides account emails (confirmation, password reset, or a notice that an address already has an account), we send only a daily watchlist read, and only if you turn it on.
+          Make an account to keep your own watchlist and a journal of your own calls. While the market-data licence is unresolved, members see the same withheld notice as visitors in place of the live grades. We confirm your email and never sell it. Besides account emails (confirmation, password reset, or a notice that an address already has an account), we send only a daily watchlist read, and only if you turn it on.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <Link href="/signup" className="cta-primary">Create free account</Link>

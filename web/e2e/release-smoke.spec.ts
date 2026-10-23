@@ -273,7 +273,7 @@ test.describe("release smoke", () => {
     // The deletion record's own wording: "creation time" alone also matches the
     // collected-data table, so it would pass with the record misdescribed.
     await expect(body).toContainText("email address, username and creation time");
-    await expect(body).toContainText("withheld from everyone except the operator until Alpaca gives written permission");
+    await expect(body).toContainText("withheld from everyone except the operator, signed-in members included");
     await expect(body).toContainText("headlines are no longer sent to NVIDIA");
   });
 

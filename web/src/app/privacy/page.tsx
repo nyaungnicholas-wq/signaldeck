@@ -358,7 +358,7 @@ export default function PrivacyPage() {
       <section className="panel px-5 py-4" aria-label="Data sources">
         <h2 className="mb-2 text-[0.8rem] font-extrabold tracking-[0.14em]">Data sources</h2>
         <p className="text-[0.85rem] leading-relaxed max-w-prose" style={{ color: "var(--dim)" }}>
-          As of 23 October 2026: SignalDeck&rsquo;s prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only, so they are withheld from everyone except the operator until Alpaca gives written permission. Collection of the congressional trading rows compiled by Kadoa has stopped, and the stored rows are shown only to the operator. The NVIDIA-hosted AI features and the AI news-sentiment tagger are switched off as of this release, so headlines are no longer sent to NVIDIA. None of this changes what we hold about you. The{" "}
+          As of 23 October 2026: SignalDeck&rsquo;s prices, forecasts and statistics are derived from Alpaca market data, which is licensed for personal use only, so they are withheld from everyone except the operator, signed-in members included, until Alpaca gives written permission. Collection of the congressional trading rows compiled by Kadoa has stopped, and the stored rows are shown only to the operator. The NVIDIA-hosted AI features and the AI news-sentiment tagger are switched off as of this release, so headlines are no longer sent to NVIDIA. None of this changes what we hold about you. The{" "}
           <Link href="/terms#data-sources" style={{ color: "var(--dim)", textDecoration: "underline" }}>
             Terms of Use
           </Link>{" "}

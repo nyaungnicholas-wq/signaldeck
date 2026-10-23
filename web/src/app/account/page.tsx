@@ -65,7 +65,7 @@ export default function AccountPage() {
             Signed in as <strong className="text-[var(--text)]">{user.username}</strong>
           </p>
           <p className="text-sm leading-relaxed text-[var(--dim)] mb-6">
-            Your account is active. Member accounts see the public record — the live grades, the volatility record and the hash-chained receipts — and can turn on a daily digest of their watchlist below. Descriptive market analysis, not financial advice.
+            Your account is active. Member accounts see the hash-chained receipts and the registered rules, keep their own watchlist and calls, and can turn on a daily digest of their watchlist below. The live grades and the volatility record are withheld from members as well as visitors while the market-data licence is unresolved (see the Terms, Data sources). Descriptive market analysis, not financial advice.
           </p>
           <div className="space-y-2">
             <Link href="/" className="text-sm text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]">
