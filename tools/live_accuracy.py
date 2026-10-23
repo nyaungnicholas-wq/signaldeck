@@ -321,6 +321,15 @@ def render(snapshot, banner, registry_path):
                    if r.get("survivorship_clean") is False and r.get("survivorship_reason")), None)
     if reason:
         surv.append(reason)
+        if "with no delisted_at" in reason:
+            # The pinned registry's rule reads symbols.active as listing status, and
+            # active is the lean WATCH flag the daily sweep widens and prunes. Its
+            # undated-inactive count must not reach a reader as a count of delistings.
+            surv.append(REGISTRY_RULE_NOTE)
+    status = survivorship_status_line(
+        os.path.join(os.path.dirname(os.path.abspath(registry_path)), "survivorship_status.json"))
+    if status:
+        surv.append(status)
     effect = survivorship_effect()
     if effect is not None:
         # The DIRECTION of this bias was already stated in prose ("the published
@@ -331,7 +340,9 @@ def render(snapshot, banner, registry_path):
         surv.append(
             "measured effect %+.2fpp (active-only %.2f%% minus survivorship-clean "
             "%.2f%%, n=%s clean vs %s active, revalidation of %s) — POSITIVE means "
-            "the active-only figure is INFLATED by excluding dead names"
+            "the active-only figure is higher than the all-names figure; `active` is "
+            "the lean watch flag, so the gap mixes watch-set selection with "
+            "survivorship and is not a delisting effect alone"
             % (100.0 * (effect["active"] - effect["clean"]),
                100.0 * effect["active"], 100.0 * effect["clean"],
                "{:,}".format(effect["n_clean"]), "{:,}".format(effect["n_active"]),
@@ -345,6 +356,44 @@ def render(snapshot, banner, registry_path):
 
 
 REVALIDATION_STATUS = os.path.join(REPO, "ops", "revalidation-status.json")
+
+REGISTRY_RULE_NOTE = (
+    "that count is the pinned registry's rule (`active=0` with no `delisted_at` "
+    "counts as unresolved) and `active` is the lean watch flag, so it is mostly "
+    "still-trading names outside the watch set, NOT delistings")
+STATUS_CLASSES = (("WATCHED", "watched"), ("UNWATCHED_TRADING", "unwatched but trading"),
+                  ("TRADING", "trading"), ("EXITED_DATED", "dated exit"),
+                  ("UNKNOWN", "unknown"), ("RETIRED_SOURCE", "retired source"))
+STATUS_SCOPES = (("graded:prediction_outcomes", "directional"),
+                 ("graded:regime_outcomes", "structural"))
+
+
+def survivorship_status_line(path):
+    """One sentence from data/survivorship_status.json, or None when absent.
+
+    tools/survivorship_status.py (survivorship-status v1, 2026-10-23) is a
+    separate measure run after the pinned grade; it splits the graded symbols
+    by watch status, bar evidence and dated exit. Absent or unreadable reads as
+    absent, never as a clean result.
+    """
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        scopes = st["scopes"]
+        parts = []
+        for key, label in STATUS_SCOPES:
+            counts = scopes.get(key, {}).get("counts")
+            if counts is None:
+                continue
+            parts.append("%s %s symbols: %s" % (
+                label, "{:,}".format(scopes[key]["symbols"]),
+                ", ".join("%s %s" % ("{:,}".format(counts[c]), name)
+                          for c, name in STATUS_CLASSES if counts.get(c))))
+        if not parts:
+            return None
+        return "%s as of %s — %s" % (st["measure_id"], st["as_of"], "; ".join(parts))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def survivorship_effect(path=REVALIDATION_STATUS):
