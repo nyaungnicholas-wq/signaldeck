@@ -1,10 +1,10 @@
 {
-  "generated": "2026-10-22T00:34:57.039207Z",
+  "generated": "2026-10-24T21:22:05.878269Z",
   "source_db": "data/signaldeck.db",
   "withheld": "licence: database counts withheld (Alpaca-derived; SIGNALDECK_PUBLISH_DERIVED is not 1). Only the pass/fail facts this gate reads are recorded.",
   "grader": {
     "status": "OK",
-    "graded_at": "2026-10-21T17:33:35",
+    "graded_at": "2026-10-24T14:19:15",
     "refused_since": null,
     "refusal_reason": null,
     "rows": 18
