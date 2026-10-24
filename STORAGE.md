@@ -133,6 +133,11 @@ from it; `TestBudgetDBDefaultMatchesRefreshScript` fails if either drifts.
 > | `freeze/` snapshots | — | **8.6 GB** |
 > | **total** | — | **~34 GB** |
 >
+> *2026-10-23:* hot DB **11.2 GB** (11,248,533,504 bytes at 18:26 PT), still
+> growing, over the 10,240 MB daemon budget; gap-fill paused (daemon log, 18:22 PT:
+> "gap-fill paused: db 10726 MB of 10240 MB budget"). The other rows were not
+> re-measured, so the total above is still the 2026-08-13 figure.
+>
 > Retention is NOT broken — this is the size *with* tiered retention, cold
 > archiving, and a VACUUM (2026-08-12 11:25 UTC) all working, and
 > `dq_events` records zero `vacuum_skip` rows. The governor does its job; the
