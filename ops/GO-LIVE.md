@@ -74,6 +74,7 @@ from the CSV does not restore those rows; the backup from (a) does.
 # (f) Verify, from the repo root:
 bin/sdmaint.exe ledger-verify      # must print "chain: intact" and "anchors: N/N verify", exit 0
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8322/api/accuracy   # must print 451 (published deployment, licence)
+SIGNALDECK_API_TOKEN=$(grep -m1 '^SIGNALDECK_API_TOKEN=' daemon/.env | cut -d= -f2-)   # operator only; never echo it
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $SIGNALDECK_API_TOKEN" http://127.0.0.1:8322/api/accuracy   # must print 200 (operator)
 powershell -NoProfile -File ops/check-grader-health.ps1   # last line must be "RESULT: ok"
 ```
