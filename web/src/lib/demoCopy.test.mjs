@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { siteCopy } from "./demoCopy.ts";
+import { liveResolvedNote } from "./regimeCaveat.ts";
 
 const RELEASED = {
 	skillLine: "Beating it is the only thing that counts as skill, and on this record nothing has.",
@@ -54,6 +55,9 @@ const RELEASED = {
 // The member pages' demo wording must say its figures are synthetic, not measured (review R1).
 const MEMBER_KEYS = ["hypoShort", "hypoNote", "liveGradedNote", "watchFooter", "symbolFooter", "signalsTitle", "signalsSub", "signalsTip", "journalFooter", "todayLead", "whatSignalDeckIs", "riskLead", "todaysAcc", "volLeadTested"];
 
+// regimeCaveat.ts liveResolvedNote as released (its own test pins the same strings)
+const RELEASED_RESOLVED = [[undefined, ""], [null, ""], [0, " · none resolved live yet"], [1, " · 1 call resolved live"], [412, " · 412 calls resolved live"], [42333, " · 42,333 calls resolved live"]];
+
 const REG = {
 	generated: "2026-01-02T06:00:00Z",
 	min_independent_n: 30,
@@ -74,6 +78,9 @@ test("a normal build keeps the released wording, word for word", () => {
 		}
 		assert.equal(c.accuracyFooter(REG), LIVE_FOOTER);
 		assert.equal(c.accuracyFooter({ ...REG, grading_epoch: undefined }), LIVE_FOOTER_NO_GRADING);
+		// /proof's resolved note (v3 review B3-1): the released function itself, and its released output
+		assert.equal(c.resolvedNote, liveResolvedNote);
+		for (const [n, s] of RELEASED_RESOLVED) assert.equal(c.resolvedNote(n), s, `resolvedNote(${n})`);
 	}
 });
 
@@ -99,6 +106,14 @@ test("a demo build swaps every live-only line", () => {
 	for (const key of MEMBER_KEYS) assert.ok(/synthetic|demo/i.test(d[key]), `${key} says demo or synthetic`);
 	for (const key of MEMBER_KEYS) assert.ok(!/measured walk-forward|validated regime forecasts with|measured-skill/.test(d[key]), `${key} claims a measurement`);
 	assert.equal(d.recordEyebrow, "The demo record");
+	// /proof never calls a synthetic count "live" (v3 review B3-1)
+	assert.equal(d.resolvedNote(412), " · 412 synthetic calls resolved");
+	assert.equal(d.resolvedNote(null), "");
+	assert.equal(d.resolvedNote(undefined), "");
+	for (const [n, s] of RELEASED_RESOLVED.filter(([n]) => n != null)) {
+		assert.notEqual(d.resolvedNote(n), s, `resolvedNote(${n})`);
+		assert.ok(d.resolvedNote(n).includes("synthetic") && !/live/.test(d.resolvedNote(n)), `resolvedNote(${n}) says synthetic, never live`);
+	}
 	assert.ok(d.accuracyLead.includes("synthetic record"));
 });
 
@@ -155,6 +170,8 @@ test("every page that showed a live-only line reads it from demoCopy", () => {
 		"components/home/TodaysRead.tsx",
 		"components/home/VolRegimeLead.tsx",
 		"lib/riskHeadline.ts",
+		// /proof's pre-registration chain (v3 review B3-1)
+		"components/proof/Registrations.tsx",
 	];
 	for (const rel of files) {
 		const content = readFileSync(join(srcDir, rel), "utf8");
@@ -174,4 +191,6 @@ test("every page that showed a live-only line reads it from demoCopy", () => {
 	}
 	const accuracyContent = readFileSync(join(srcDir, "app/accuracy/page.tsx"), "utf8");
 	assert.ok(accuracyContent.includes("COPY.flagshipRetirement &&"), "app/accuracy/page.tsx");
+	const regContent = readFileSync(join(srcDir, "components/proof/Registrations.tsx"), "utf8");
+	assert.ok(regContent.includes("{COPY.demo ? COPY.resolvedNote(data.liveResolved) : liveResolvedNote(data.liveResolved)}"), "components/proof/Registrations.tsx");
 });

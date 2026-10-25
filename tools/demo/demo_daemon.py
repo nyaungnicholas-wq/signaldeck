@@ -126,12 +126,20 @@ def bars(symbol, tf="1d", limit=250):
 # read, accuracy and date under them is seeded, and none carries a verdict.
 REGIMES = {"vol21": ("calm", "elevated"), "trend21": ("uptrend", "downtrend"), "liquidity21": ("liquid", "thin")}
 REGIME_WORD = {"vol21": "volatility", "trend21": "trend", "liquidity21": "liquidity"}
+# Draw version of the regime reads (v3 review B3-3, 2026-10-25): the first draw showed DEMOA's
+# conviction 91.0% and its quarterly banded accuracy 78.4%, both figures in the real public
+# record. LEAD_CONVICTION is DEMOA's (it leads every kind so the demo's first stock has a read).
+# Under "r721" (and 0.88) none of the scene-7 regime figures (the watchlist's DEMOA, DEMOB and
+# DEMOC chips, DEMOA's conviction, banded accuracy and n) occurs in the public record outside
+# .sql, .json and .csv files; the selfcheck refuses the two known real ones (PUBLIC_FIGURES).
+RDRAW = "r721"
+LEAD_CONVICTION = 0.88
 
 
 def regime_rows(kind):
     rows = []
     for i, t in enumerate(TICKERS):
-        r = rng("regime", kind, t)
+        r = rng("regime", kind, t, RDRAW)
         conv = round(r.uniform(0.45, 0.95), 2)
         tier = "high" if conv >= 0.8 else "medium" if conv >= 0.6 else "low"
         rows.append({
@@ -142,7 +150,7 @@ def regime_rows(kind):
             "rank": i + 1, "n": r.randint(400, 3000),
         })
     # DEMOA leads every kind so the demo's first stock has a read to show.
-    rows[0]["conviction"], rows[0]["tier"] = 0.91, "high"
+    rows[0]["conviction"], rows[0]["tier"] = LEAD_CONVICTION, "high"
     if kind == "vol21":
         rows[0]["regime"] = "calm"
     return rows
@@ -172,7 +180,7 @@ def regimes(q):
 def vol_regime(_q):
     rows = []
     for i, t in enumerate(TICKERS):
-        r = rng("vol63", t)
+        r = rng("vol63", t, RDRAW)
         conv = round(r.uniform(0.5, 0.95), 2)
         rows.append({"symbol": t, "market": "stocks", "ts": epoch(last_session()), "regime": r.choice(("calm", "elevated")),
                      "conviction": conv, "historicalAccuracy": round(r.uniform(0.6, 0.78), 3), "evidence": "backtest",
@@ -659,8 +667,9 @@ REAL_DATES = ("2026-07-18", "2026-07-24", "2026-07-27", "2026-08-04", "2026-08-0
 VERDICT_KEYS = {"publication_status", "verdict", "retired", "retirement_sticky", "reasons"}
 # Accuracy, skill and sample figures of the real public record (git grep origin/public-launch,
 # 2026-10-25): the 1w directional accuracy 46.1% and always-up 54.5% over n 9,118, the retired
-# model's 2,479 graded rows at -13.0pp, and a 1d leg's -3.6pp.
-PUBLIC_FIGURES = {"46.1%", "54.5%", "9,118", "2,479", "13.0pp", "3.6pp"}
+# model's 2,479 graded rows at -13.0pp, and a 1d leg's -3.6pp; and (v3 review B3-3) trend21's
+# moderate-band accuracy 91.0% and the gap-fill rate 78.4%.
+PUBLIC_FIGURES = {"46.1%", "54.5%", "9,118", "2,479", "13.0pp", "3.6pp", "91.0%", "78.4%"}
 
 
 def walk(o):
@@ -714,6 +723,9 @@ def selfcheck():
         if x.get("live_acc") is not None:
             shown |= {f"{x['live_acc'] * 100:.1f}%", f"{x['null_acc'] * 100:.1f}%", f"{abs(x['skill']) * 100:.1f}pp"}
         shown.add(f"{x.get('live_n', x.get('n')):,}")
+    for x in [x for k in REGIMES for x in regime_rows(k)] + vol_regime({})["forecasts"]:  # regime reads (B3-3)
+        shown |= {f"{x['conviction'] * 100:.1f}%", f"{x['historicalAccuracy'] * 100:.1f}%", f"{x['n']:,}"}
+    shown |= {f"{LEDGER_N:,}", f"{LEDGER_N - 137:,}"}
     clash = sorted(shown & PUBLIC_FIGURES)
     assert not clash, f"a record figure equals one in the real public record: {clash}"
     print(f"DEMO STUB SELFCHECK OK ({len(out)} routes, tickers {sorted(tickers)}, record names {sorted(names)})")

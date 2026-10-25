@@ -37,6 +37,8 @@ const MEMBER = [
 	["/today", "todayLead"], ["/today", "whatSignalDeckIs"], ["/today", "riskLead"], ["/today", "todaysAcc"],
 	["/today", "volLeadTested"], ["/today", "hypoNote"],
 ];
+// /proof's pre-registration chain renders client-side too; its count is read off the page (v3 review B3-1)
+const PROOF = "/proof";
 
 const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", nbsp: " " };
 function text(html) {
@@ -71,7 +73,7 @@ for (const [p, live, demo] of CHECKS) {
 }
 const browser = await chromium.launch();
 const member = {};
-for (const p of new Set(MEMBER.map(([p]) => p))) {
+for (const p of new Set([...MEMBER.map(([p]) => p), PROOF])) {
 	const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
 	try {
 		await page.goto(base + p, { waitUntil: "networkidle", timeout: 60_000 });
@@ -92,6 +94,14 @@ for (const [p, key] of MEMBER) {
 	const [want, not] = mode === "demo" ? [DEMO[key], LIVE[key]] : [LIVE[key], DEMO[key]];
 	check(member[p].includes(low(want)), `${p} present: ${key}: ${want.trim().slice(0, 60)}`);
 	check(!member[p].includes(low(not)), `${p} absent:  ${key}: ${not.trim().slice(0, 60)}`);
+}
+{
+	const m = member[PROOF].match(/first gradable \d{4}-\d{2}-\d{2} · ([\d,]+) /);
+	const cnt = m ? Number(m[1].replace(/,/g, "")) : null;
+	check(cnt != null, `${PROOF} pre-registration chain shows a resolved count (${m ? m[1] : "none"})`);
+	const [want, not] = mode === "demo" ? [DEMO.resolvedNote(cnt), LIVE.resolvedNote(cnt)] : [LIVE.resolvedNote(cnt), DEMO.resolvedNote(cnt)];
+	check(cnt != null && member[PROOF].includes(low(want)), `${PROOF} present: resolvedNote: ${want.trim()}`);
+	check(cnt != null && !member[PROOF].includes(low(not)), `${PROOF} absent:  resolvedNote: ${not.trim()}`);
 }
 if (mode === "demo") check((pages["/"] ?? "").includes("DEMO DATA"), "/ carries the DEMO DATA banner");
 else check(!Object.values(pages).some((t) => t?.includes("synthetic values for illustration")), "no page carries the demo banner phrase");

@@ -71,5 +71,6 @@ test("the /proof first-gradable chip states the live count", () => {
   assert.equal(liveResolvedNote(1), " · 1 call resolved live");
   assert.equal(liveResolvedNote(42333), " · 42,333 calls resolved live");
   const c = src("../components/proof/Registrations.tsx");
-  assert.match(c, /first gradable \{data\.firstGradableOn\}[\s\S]{0,300}\{liveResolvedNote\(data\.liveResolved\)\}/);
+  // a demo build swaps in demoCopy's synthetic count (v3 review B3-1); every other build calls this one
+  assert.match(c, /first gradable \{data\.firstGradableOn\}[\s\S]{0,300}\{(?:COPY\.demo \? COPY\.resolvedNote\(data\.liveResolved\) : )?liveResolvedNote\(data\.liveResolved\)\}/);
 });

@@ -23,6 +23,7 @@ import Skeleton from "@/components/Skeleton";
 import { specFields, type SpecField } from "@/lib/specfields";
 import FullRecord from "@/components/proof/FullRecord";
 import { liveResolvedNote } from "@/lib/regimeCaveat";
+import { COPY } from "@/lib/demoCopy"; // a demo build's count is synthetic, never "live"
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 
 function when(r: PreregRecord): string {
@@ -137,7 +138,7 @@ export default function Registrations() {
               first gradable {data.firstGradableOn}
               {/* The live status beside the date (E-CAVEAT-DATE): the date alone
                   read as "not graded yet" long after it passed. */}
-              {liveResolvedNote(data.liveResolved)}
+              {COPY.demo ? COPY.resolvedNote(data.liveResolved) : liveResolvedNote(data.liveResolved)}
             </span>
           ) : null}
         </div>

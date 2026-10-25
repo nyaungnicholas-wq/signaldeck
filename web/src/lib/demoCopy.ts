@@ -10,6 +10,7 @@
 // Relative with the extension so node --test can load this module.
 import { HYPOTHETICAL_NOTE, HYPOTHETICAL_SHORT, LIVE_GRADED_NOTE, WHAT_SIGNALDECK_IS } from "./hypothetical.ts";
 import { JOURNAL_FOOTER } from "./journal.ts";
+import { liveResolvedNote } from "./regimeCaveat.ts";
 
 type Footer = { generated: string; min_independent_n: number; grading_epoch?: string; survivorship_epoch: string };
 
@@ -79,6 +80,8 @@ const LIVE = {
   todaysSkill: "measured-skill forecast",
   volLeadChip: "the backtest-validated forecast",
   volLeadTested: "It is our most-tested call — checked against history, then checked again by a second build.",
+  // /proof, beside the pre-registration chain's "first gradable" date (v3 review B3-1)
+  resolvedNote: liveResolvedNote,
 };
 
 const DEMO: typeof LIVE = {
@@ -139,6 +142,14 @@ const DEMO: typeof LIVE = {
   todaysSkill: "synthetic demo read",
   volLeadChip: "synthetic demo rows",
   volLeadTested: "In this demo every row is synthetic, for fictional tickers, and nothing was tested.",
+  resolvedNote: (n: number | null | undefined) =>
+    n == null
+      ? ""
+      : n <= 0
+        ? " · no synthetic calls resolved yet"
+        : n === 1
+          ? " · 1 synthetic call resolved"
+          : ` · ${n.toLocaleString("en-US")} synthetic calls resolved`,
 };
 
 /** The wording for this build: DEMO in a demo build, LIVE (unchanged) in every other. */
