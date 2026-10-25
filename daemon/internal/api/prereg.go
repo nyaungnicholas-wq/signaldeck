@@ -158,17 +158,34 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// claimText is what a non-operator sees of one frozen spec: a structural
-// claim's kind, question, horizon and resolution rule, which are methodology
-// text. Everything else a spec holds (bands, baseline, known weakness, or any
-// non-structural record's evidence) is nil.
+// claimText is what a non-operator sees of one frozen spec: its kind,
+// question, horizon and resolution rule, which are methodology text, and only
+// the ones the frozen JSON actually holds. Decoding into prereg.Spec filled
+// absent fields with zero values, so the HAR volatility and forward-test
+// registrations (no horizonDays, no resolution) showed "horizon days 0" and an
+// empty rule that was never frozen. Everything else a spec holds (bands,
+// baseline, known weakness, any record's evidence) is dropped; a spec with no
+// question is nil.
 func claimText(raw string) any {
-	var s prereg.Spec
-	if json.Unmarshal([]byte(raw), &s) != nil || s.Question == "" {
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &m) != nil {
 		return nil
 	}
-	return map[string]any{"kind": s.Kind, "question": s.Question,
-		"horizonDays": s.HorizonDays, "resolution": s.Resolution}
+	out := map[string]any{}
+	for _, k := range []string{"kind", "question", "resolution"} {
+		var s string
+		if v, ok := m[k]; ok && json.Unmarshal(v, &s) == nil {
+			out[k] = s
+		}
+	}
+	if q, _ := out["question"].(string); q == "" {
+		return nil
+	}
+	var h int
+	if v, ok := m["horizonDays"]; ok && json.Unmarshal(v, &h) == nil {
+		out["horizonDays"] = h
+	}
+	return out
 }
 
 // preregLiveStatus is the sentence /api/prereg says about the live record:

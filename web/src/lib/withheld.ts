@@ -30,6 +30,16 @@ export const WITHHELD_NOTICES: Readonly<Record<string, string>> = {
 const FALLBACK_NOTICE =
   "Withheld: this content comes from a data source whose terms do not permit SignalDeck to share it. It is shown only to the operator until written permission is given.";
 
+/**
+ * The raw-row guard's 451 (daemon security step 7): `{"error":"raw bar export
+ * is disabled ..."}`, no "withheld" contract. It refuses raw vendor rows (bars,
+ * news, CSV exports) on a published deployment to EVERYONE, the operator
+ * included, so "shown only to the operator" would be false for it. Its own body
+ * names an env var and is not shown.
+ */
+export const RAW_ROWS_NOTICE =
+  "Withheld: raw vendor rows (price bars, quotes and news) are not served on a published deployment to anyone, the operator included, unless the operator records an agreement that permits it.";
+
 const PREFIX = "Withheld:";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -47,8 +57,10 @@ export function parseWithheld(status: number, body: unknown): Withheld | null {
   if (status !== WITHHELD_STATUS) return null;
   const b = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
   const source = str(b.source)?.toLowerCase() ?? "unknown";
-  const given = b.error === "withheld" ? str(b.notice) : undefined;
-  const notice = given ?? WITHHELD_NOTICES[source] ?? FALLBACK_NOTICE;
+  const contract = b.error === "withheld";
+  const given = contract ? str(b.notice) : undefined;
+  const rawRows = !contract && str(b.error) !== undefined;
+  const notice = given ?? (rawRows ? RAW_ROWS_NOTICE : WITHHELD_NOTICES[source] ?? FALLBACK_NOTICE);
   return { source, notice: notice.startsWith(PREFIX) ? notice : `${PREFIX} ${notice}` };
 }
 

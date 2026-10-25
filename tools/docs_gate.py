@@ -702,6 +702,72 @@ def check_single_source_of_truth(repo: Path, registry: dict, snapshot: dict) -> 
 
     return violations
 
+# LICENCE WITHHOLDING (23 Oct 2026). ops/data-integrity.json is committed to a
+# public repository, and its database counts (universe_membership rows built
+# from Alpaca daily bars, symbol and delisting counts, the refusal detail with
+# its collapsed-day counts) are Alpaca-derived. Unless the operator records
+# Alpaca's written permission with SIGNALDECK_PUBLISH_DERIVED=1 (exactly "1",
+# the switch ops/accuracy-registry.sh and tools/live_accuracy.py read),
+# write-integrity keeps only what the gate decides on: the grader's status and
+# timestamps, the refusal's class, and whether each data-integrity rule passed.
+PUBLISH_ENV = "SIGNALDECK_PUBLISH_DERIVED"
+INTEGRITY_WITHHELD = ("licence: database counts withheld (Alpaca-derived; "
+                      "SIGNALDECK_PUBLISH_DERIVED is not 1). Only the pass/fail "
+                      "facts this gate reads are recorded.")
+
+
+def withhold_integrity(out: dict, floor: float) -> dict:
+    """The snapshot with its Alpaca-derived counts reduced to pass/fail facts."""
+    grader = dict(out.get("grader") or {})
+    reason = grader.get("refusal_reason")
+    if reason:
+        # Keep the class ("publication gate", "CHECK UNAVAILABLE", ...) that the
+        # release contract reads; drop the detail, which can carry day counts.
+        grader["refusal_reason"] = (str(reason).split(":", 1)[0].strip()
+                                    + ": detail withheld (licence)")
+    delisting = out.get("delisting") or {}
+    withheld = {
+        "generated": out.get("generated"),
+        "source_db": out.get("source_db"),
+        "withheld": INTEGRITY_WITHHELD,
+        "grader": grader,
+        "universe_membership_populated": (out.get("universe_membership_rows") or 0) > 0,
+        "delisting": {
+            "rate_at_or_above_floor": (delisting.get("rate_per_year") or 0.0) >= floor,
+            "floor_per_year": floor,
+        },
+        "survivorship_fix_date": out.get("survivorship_fix_date"),
+    }
+    if out.get("warnings"):
+        withheld["warnings"] = out["warnings"]
+    return withheld
+
+
+def check_withheld_integrity(snapshot: dict, min_delist_rate: float) -> list[dict]:
+    """The data-integrity rules, read from a licence-withheld snapshot."""
+    violations = []
+    rel = "ops/data-integrity.json"
+    redo = ("Run `python tools/docs_gate.py write-integrity` on the machine holding "
+            "the database and commit ops/data-integrity.json.")
+    if snapshot.get("universe_membership_populated") is not True:
+        violations.append(make_violation("data-integrity", rel, 0,
+            "universe_membership holds no rows (or the withheld snapshot does not "
+            "say), so every cross-sectional rank may be computed against a universe "
+            "that includes names not yet listed — look-ahead. " + redo))
+    delisting = snapshot.get("delisting") or {}
+    floor = delisting.get("floor_per_year")
+    if delisting.get("rate_at_or_above_floor") is not True:
+        violations.append(make_violation("data-integrity", rel, 0,
+            "The withheld snapshot does not record a delisting rate at or above the "
+            "floor. A universe that loses names too slowly is survivor-seeded. " + redo))
+    elif not isinstance(floor, (int, float)) or isinstance(floor, bool) or floor < min_delist_rate:
+        violations.append(make_violation("data-integrity", rel, 0,
+            f"The withheld snapshot judged the delisting rate against a floor of {floor!r}, "
+            f"below the registry's {min_delist_rate:.4f}, so its pass does not answer "
+            "the current rule. " + redo))
+    return violations
+
+
 def check_data_integrity(repo: Path, registry: dict, snapshot: dict) -> list[dict]:
     """Facts only the database can answer, read from the committed snapshot.
 
@@ -715,8 +781,14 @@ def check_data_integrity(repo: Path, registry: dict, snapshot: dict) -> list[dic
     thresholds = registry.get("thresholds", {})
     min_delist_rate = thresholds.get("min_delist_rate_per_year", DEFAULT_MIN_DELIST_RATE)
 
+    if snapshot.get("withheld"):
+        violations.extend(check_withheld_integrity(snapshot, min_delist_rate))
+        universe_rows, delisting = 1, {"rate_per_year": min_delist_rate}
+    else:
+        universe_rows = snapshot.get("universe_membership_rows", 0)
+        delisting = snapshot.get("delisting") or {}
+
     # universe_membership_rows > 0
-    universe_rows = snapshot.get("universe_membership_rows", 0)
     if not isinstance(universe_rows, (int, float)) or universe_rows <= 0:
         violations.append(make_violation(
             "data-integrity", "ops/data-integrity.json", 0,
@@ -727,7 +799,6 @@ def check_data_integrity(repo: Path, registry: dict, snapshot: dict) -> list[dic
 
     # Delisting rate. A universe that never loses a name is a survivor-seeded
     # universe, and every backtest over it is biased upward.
-    delisting = snapshot.get("delisting") or {}
     rate = delisting.get("rate_per_year")
     if not isinstance(rate, (int, float)):
         violations.append(make_violation(
@@ -1025,6 +1096,13 @@ def mode_write_integrity(repo: Path) -> int:
     }
     if warnings:
         out["warnings"] = warnings
+    if os.environ.get(PUBLISH_ENV) != "1":
+        try:
+            thresholds = load_registry(repo).get("thresholds") or {}
+        except (GateError, OSError, ValueError):
+            thresholds = {}
+        out = withhold_integrity(out, float(thresholds.get(
+            "min_delist_rate_per_year", DEFAULT_MIN_DELIST_RATE)))
     write_json(out_path, out)
     print(f"docs_gate: wrote {out_path}")
     for w in warnings:

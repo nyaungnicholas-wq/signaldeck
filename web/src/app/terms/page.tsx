@@ -80,8 +80,9 @@ export default function TermsPage() {
         </p>
         <ul className="list-disc pl-5 text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           <li>
-            The forecasts are the same for every reader, published on a regular
-            schedule, and not tailored to anyone&rsquo;s finances or objectives.
+            The forecasts are not tailored to anyone&rsquo;s finances or
+            objectives, and while the market-data licence is unresolved they
+            are shown only to the operator.
           </li>
           <li>
             Using SignalDeck does not make us your adviser.
@@ -215,13 +216,18 @@ export default function TermsPage() {
           information derived from them, to be displayed publicly or passed on
           without its written permission. SignalDeck&rsquo;s prices, forecasts,
           accuracy figures and other statistics are derived from that data, so
-          they are withheld from everyone except the operator until Alpaca
-          gives written permission. Signing in does not change this: member
-          accounts see the same notice as visitors. The method, the wording of
-          each pre-registered claim and the hashes that prove the record was
-          not edited stay public; the rest of each registration is withheld
-          with the figures, because parts of it quote measured statistics. Public-domain data, such as SEC EDGAR filings, is not covered
-          by Alpaca&rsquo;s licence.
+          they are withheld on this website and its API from everyone except
+          the operator until Alpaca gives written permission. Signing in does
+          not change this: member accounts see the same notice as visitors.
+          The method, the wording of each pre-registered claim and the hashes
+          that make an edit to the record detectable stay public; the rest of
+          each registration is withheld with the figures, because parts of it
+          quote measured statistics. SignalDeck&rsquo;s public source
+          repository still carries figures committed before 23 October 2026,
+          including the frozen pre-registered backtest claims and the
+          reproduction tallies; whether to withdraw them is an open decision
+          for the operator. Public-domain data, such as SEC EDGAR filings, is
+          not covered by Alpaca&rsquo;s licence.
         </p>
         <p
           className="text-[0.85rem] leading-relaxed max-w-prose"

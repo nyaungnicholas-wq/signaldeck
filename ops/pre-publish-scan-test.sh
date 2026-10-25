@@ -192,6 +192,65 @@ else
 fi
 rm -rf "$d6"
 
+# ── Case 7: a tracked JSON record carrying a raw closing price. The scan
+#    used to look at .db/.sqlite/.csv/.parquet paths only and printed SAFE TO
+#    PUBLISH over research/dirfix/paper_ledger.jsonl's 40 entry_close values.
+d7=$(mktemp -d)
+init_repo "$d7"
+mkdir -p "$d7/research"
+printf '%s\n' '{"entry_day": "2026-08-14", "symbol": "LQD", "entry_close": 106.12}' > "$d7/research/ledger.jsonl"
+printf '%s\n' '{"name": "fixture", "price_note": "no number here", "count": 3}' > "$d7/config.json"
+git -C "$d7" add -A && git -C "$d7" commit -q -m "add a ledger"
+out7=$(run_scan "$d7"); rc7=$?
+if [ "$rc7" -ne 0 ] && printf '%s' "$out7" | grep -q "research/ledger.jsonl" \
+   && ! printf '%s' "$out7" | grep -q "^      config.json"; then
+  check_pass "tracked JSON with a price-shaped value: scan FAILS and names only that file"
+else
+  check_fail "tracked JSON with a price-shaped value: expected nonzero exit naming research/ledger.jsonl, got exit=$rc7"
+  printf '%s\n' "$out7" | sed 's/^/      /'
+fi
+rm -rf "$d7"
+
+# ── Case 8: Alpaca's own short keys. A bar is {"o","h","l","c","vw"} and a
+#    quote {"ap","bp"}; the long-name rule above saw none of them. "h" and "p"
+#    stay out of the rule (a horizon and a p-value in this tree), so 8b pins
+#    that they still pass.
+d8=$(mktemp -d)
+init_repo "$d8"
+mkdir -p "$d8/research/x"
+printf '%s\n' '{"t":"2026-10-01T04:00:00Z","o":101.2,"h":102.0,"l":99.5,"c":100.1,"vw":100.4}' > "$d8/research/x/bars.jsonl"
+printf '%s\n' '{"t":"2026-10-01T13:30:00Z","ap":100.2,"bp":100.0,"as":3,"bs":5}' > "$d8/research/x/quotes.jsonl"
+printf '%s\n' '{"h":21,"p":0.25}' > "$d8/research/x/config.json"
+git -C "$d8" add -A && git -C "$d8" commit -q -m "add alpaca-shaped bars"
+out8=$(run_scan "$d8"); rc8=$?
+# Read the names from the price rule's own list: the data-files review flag
+# above it lists every tracked .jsonl too, so a whole-output grep would pass
+# for quotes.jsonl even with ap/bp missing from the rule.
+hits8=$(printf '%s\n' "$out8" | sed -n '/carry price-shaped values/,/── 4\./p')
+if [ "$rc8" -ne 0 ] && printf '%s' "$hits8" | grep -q "research/x/bars.jsonl" \
+   && printf '%s' "$hits8" | grep -q "research/x/quotes.jsonl" \
+   && ! printf '%s' "$hits8" | grep -q "research/x/config.json"; then
+  check_pass "8 Alpaca short keys (c/o/l/vw, ap/bp): scan FAILS and names only the bar and quote files"
+else
+  check_fail "8 Alpaca short keys: expected nonzero exit naming bars.jsonl and quotes.jsonl but not config.json, got exit=$rc8"
+  printf '%s\n' "$out8" | sed 's/^/      /'
+fi
+rm -rf "$d8"
+
+d8b=$(mktemp -d)
+init_repo "$d8b"
+mkdir -p "$d8b/research/x"
+printf '%s\n' '{"h":21,"p":0.25}' > "$d8b/research/x/config.json"
+git -C "$d8b" add -A && git -C "$d8b" commit -q -m "add a horizon and a p-value"
+out8b=$(run_scan "$d8b"); rc8b=$?
+if [ "$rc8b" -eq 0 ] && printf '%s' "$out8b" | grep -q "SAFE TO PUBLISH"; then
+  check_pass "8b \"h\" and \"p\" are not price keys: a horizon and a p-value still pass"
+else
+  check_fail "8b \"h\"/\"p\" only: expected exit 0 + SAFE TO PUBLISH, got exit=$rc8b"
+  printf '%s\n' "$out8b" | sed 's/^/      /'
+fi
+rm -rf "$d8b"
+
 note ""
 note "pre-publish-scan self-test: $pass passed, $fail failed"
 exit "$([ "$fail" -eq 0 ] && echo 0 || echo 1)"

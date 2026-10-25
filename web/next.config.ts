@@ -3,10 +3,11 @@ import type { NextConfig } from "next";
 // Single-URL setup: the browser only ever talks to the web app (:8323).
 // Every /api/* request is proxied server-side to the data daemon (:8322) by
 // the route handler at src/app/api/[...path]/route.ts (reads
-// SIGNALDECK_DAEMON, forwards an allowlist of headers, attaches the
-// server-only SIGNALDECK_API_TOKEN when set), so the daemon port is never
-// exposed and there is one localhost to open. trader-hud (:8787) stays a
-// background companion the daemon reads — not user-facing.
+// SIGNALDECK_DAEMON, forwards an allowlist of headers, and deliberately
+// never attaches SIGNALDECK_API_TOKEN (it maps to the admin; see route.ts)),
+// so the daemon port is never exposed and there is one localhost to open.
+// trader-hud (:8787) stays a background companion the daemon reads — not
+// user-facing.
 
 // Stage 2 nav consolidation: 24 flat routes became 6 hubs with nested
 // sub-tab routes. Every old URL redirects (307, query string preserved —

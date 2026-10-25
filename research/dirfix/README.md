@@ -10,7 +10,7 @@ The universe changed mid-investigation. `extract.py` now excludes funds, and
 | `results_F/G/H/I.csv` | contaminated — includes ETFs and leveraged inverse products | accuracy conclusions hold; any P&L reading does not |
 | `sharpe_sweep.csv` | contaminated | superseded |
 | `ablation.csv`, `best_config.json`, `HOLDOUT.json` | fund-free | current |
-| `paper_ledger.jsonl` | fund-free (first tranche VOIDED, see below) | current |
+| `paper_ledger.jsonl` | fund-free (first tranche VOIDED, see below) | current; moved 2026-10-23 to `data/dirfix_paper_ledger.jsonl` (gitignored) because its rows carry Alpaca closing prices; restore with `git show 2970a6a8:research/dirfix/paper_ledger.jsonl > data/dirfix_paper_ledger.jsonl` |
 
 `market='stocks'` does NOT exclude ETFs in this database. LQD, TLT, SPY and
 leveraged inverse products (TSLZ −2x TSLA, MSTZ −2x MSTR, SOXS −3x semis) are

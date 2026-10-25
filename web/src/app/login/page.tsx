@@ -99,7 +99,7 @@ export default function LoginPage() {
         <PagePurpose
           id="login"
           text={
-            "Sign in to your SignalDeck account: your watchlist, regime reads and call journal. The public record needs no account." +
+            "Sign in to your SignalDeck account: your watchlist and account settings. SignalDeck's reads and the call journal are withheld while the market-data licence is unresolved. The public record needs no account." +
             (openSignup ? " No account? Create one to get started." : "") +
             " Everything inside is descriptive market analysis, not financial advice."
           }

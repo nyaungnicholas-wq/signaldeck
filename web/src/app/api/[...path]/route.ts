@@ -1,7 +1,7 @@
 // Server-side proxy for every /api/* request → the data daemon (:8322).
 // Replaces the old next.config rewrite so the daemon port is never exposed
-// and the server can attach a bearer token (SIGNALDECK_API_TOKEN — server
-// env only, never NEXT_PUBLIC). The daemon enforces CSRF via the
+// and the server never attaches SIGNALDECK_API_TOKEN, which would make every
+// anonymous visitor the admin (see below). The daemon enforces CSRF via the
 // X-Signaldeck header + Origin allowlist on non-GET and auth via an
 // HttpOnly session cookie, so cookie/origin/x-signaldeck MUST be forwarded
 // or login and all POSTs break. Daemon rate limits (429 + Retry-After)

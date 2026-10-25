@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseWithheld, withheldFromMessage, WITHHELD_NOTICES, WITHHELD_HREF } from "./withheld.ts";
+import { parseWithheld, withheldFromMessage, RAW_ROWS_NOTICE, WITHHELD_NOTICES, WITHHELD_HREF } from "./withheld.ts";
 import { classifyPublicationFetch } from "./publicationfetch.ts";
 import { ApiError, api, congress, isAuthError, isLicenceRefusal, ledgerVerify, trackRecord, withheldOf } from "./api.ts";
 
@@ -61,6 +61,11 @@ test("a 451 without the contract body still withholds, in reader words", () => {
   assert.equal(old.source, "unknown");
   assert.match(old.notice, /^Withheld: /);
   assert.doesNotMatch(old.notice, /SIGNALDECK_ALLOW_RAW_EXPORT/);
+  // That guard refuses raw rows to the operator too, so it must not be told
+  // the data is "shown only to the operator".
+  assert.equal(old.notice, RAW_ROWS_NOTICE);
+  assert.doesNotMatch(old.notice, /shown only to the operator/);
+  assert.match(old.notice, /operator included/);
   // No body at all, and a known source with no notice.
   assert.match(parseWithheld(451, null).notice, /^Withheld: /);
   assert.equal(parseWithheld(451, { error: "withheld", source: "kadoa" }).notice, WITHHELD_NOTICES.kadoa);
