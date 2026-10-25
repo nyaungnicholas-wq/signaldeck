@@ -25,10 +25,8 @@ const (
 	Public Class = "public"
 
 	// Licensed — supplied under an agreement that permits USE but prohibits
-	// REDISTRIBUTION. Raw or substantially-raw records may never be served
-	// onward. Derived analytics are NOT automatically fine: Alpaca's terms bar
-	// showing derivations to third parties too, so since 23 Oct 2026 they reach
-	// only the operator on a published deployment (NonOperatorRoutes, below).
+	// REDISTRIBUTION. Derived analytics are generally fine; raw or
+	// substantially-raw records are not.
 	Licensed Class = "licensed"
 
 	// Restricted — accessed through an undocumented or unauthenticated public
@@ -54,11 +52,10 @@ var Sources = map[string]Source{
 		Note:      "market data under the Alpaca agreement; redistribution prohibited",
 		Redistrib: false,
 	},
-	// Crypto paused 22 Oct 2026. Since 23 Oct 2026 the stored crypto history and
-	// the forecasts built from it reach only the operator on a published
-	// deployment: no crypto route is on NonOperatorRoutes, so NonOperatorSource
-	// withholds it. Kraken's "derived works included" question is therefore
-	// moot for anything served today.
+	// Crypto forecasts built from these bars still appear in the public proof
+	// record (api.publicRoutes); members get no crypto rows on memberRoutes
+	// (api.refuseMemberCrypto). Whether Kraken's "derived works included"
+	// reaches those public forecasts is an open question for the owner.
 	"cryptohist": {
 		Name: "cryptohist", Class: Licensed, Provider: "Kraken",
 		Note:      "exchange OHLC; terms restrict redistribution, derived works included",
@@ -85,10 +82,6 @@ var Sources = map[string]Source{
 			"commercial supply chain",
 		Redistrib: false,
 	},
-	// The Note's "store and display" is stale: since 23 Oct 2026 headlines are
-	// displayed only to the operator on a published deployment (Alpaca's
-	// personal-use terms cover its news too). The string is left as it is
-	// during the launch freeze; correct it in the next daemon release.
 	"news": {
 		Name: "news", Class: Licensed, Provider: "Alpaca news",
 		Note: "headlines are publisher IP; store and display, never republish", Redistrib: false,
@@ -132,12 +125,6 @@ var Sources = map[string]Source{
 		Note: "free to access and reuse (SEC); fair-access rate limits apply", Redistrib: true},
 	"cftc": {Name: "cftc", Class: Public, Provider: "CFTC",
 		Note: "public regulatory disclosure", Redistrib: true},
-	// KNOWN CONTRADICTION, latent: this row says Public/Redistrib, but the 23 Oct
-	// 2026 rights review rated the official House/Senate route UNCLEAR (inventory
-	// SD23-054/055). Nothing consults this key today: no RestrictedRoutes entry
-	// names it, and /api/congress is withheld under "kadoa" (withheldBy). Left
-	// unchanged during the launch freeze; reclassify it in the next daemon
-	// release, before any route or poller uses it.
 	"congress": {Name: "congress", Class: Public, Provider: "STOCK Act disclosures",
 		Note: "public filings", Redistrib: true},
 	"wikimedia": {Name: "wikimedia", Class: Public, Provider: "Wikimedia",
@@ -163,11 +150,6 @@ func BarsRedistributable() bool {
 }
 
 // RawDataNotice explains a refusal in terms an operator can act on.
-//
-// Its "derived analytics ... remain available" sentence is true only for the
-// operator. On a published deployment every other caller is stopped earlier by
-// the operator-only check (api security step 6c, NonOperatorSource) and gets
-// WithheldNotice instead, so only the operator ever reads this text there.
 func RawDataNotice() string {
 	var restricted []string
 	for _, s := range PriceBarSources {
@@ -230,9 +212,7 @@ func RawDataNotice() string {
 //
 // Members and anonymous callers get DERIVED and public-domain data only.
 // api.TestMemberResponsesCarryNoVendorSentinels holds every member-reachable
-// route to this line with seeded sentinel values. Since 23 Oct 2026 a
-// published deployment narrows that further: a non-operator reaches only
-// NonOperatorRoutes, so Alpaca-derived values reach the operator alone.
+// route to this line with seeded sentinel values.
 var RestrictedRoutes = map[string]string{
 	"/api/bars":       "alpaca",
 	"/api/snaps":      "cryptolive",
