@@ -42,7 +42,7 @@ The RFC 3161 checks are only as good as the certificates they are checked agains
 | `anchors.log` | Every signed ledger anchor, oldest first. Append-only. |
 | `prereg.log` | The pre-registration chain head over time. Append-only. |
 | `PREREGISTRATION.md` | The grading protocol, byte for byte. Its SHA-256 is frozen in the pre-registration chain. |
-| `accuracy_registry.json`, `README.md` | The graded track record, failed verdicts included, regenerated on every publish. |
+| `accuracy_registry.json`, `README.md` | The graded track record, failed verdicts included, as of the last publish before 23 October 2026. Since then they are not regenerated: the figures are derived from Alpaca market data, which is licensed for personal use only (see above). |
 | `tsa/` | The certificates needed to check the RFC 3161 timestamps without trusting your system's certificate store. |
 | `verify.py` | The checker. Standard library only; read it before you run it. |
 

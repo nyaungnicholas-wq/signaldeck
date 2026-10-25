@@ -218,9 +218,11 @@ fi
 # price-shaped key holding a number is a raw vendor price whatever the file is
 # called. research/dirfix/paper_ledger.jsonl carried 40 Alpaca closing prices
 # (entry_close) while this scan printed SAFE TO PUBLISH, because it looked only
-# at .db/.sqlite/.csv/.parquet paths.
+# at .db/.sqlite/.csv/.parquet paths. c/o/l/vw (bars) and ap/bp (quotes) are
+# Alpaca's own short keys. "h" and "p" are left out on purpose: in this tree
+# they are a horizon (research/dirfix/best_config.json) and p-values.
 price_hits=$(printf '%s\n' "$tracked" | grep -iE '\.(json|jsonl|ndjson)$' | while IFS= read -r f; do
-  [ -f "$f" ] && grep -lE '"(entry_close|exit_close|close|open|high|low|vwap|bid|ask|last_price|price)"[[:space:]]*:[[:space:]]*-?[0-9]' "$f" 2>/dev/null
+  [ -f "$f" ] && grep -lE '"(entry_close|exit_close|close|open|high|low|vwap|bid|ask|last_price|price|c|o|l|vw|ap|bp)"[[:space:]]*:[[:space:]]*-?[0-9]' "$f" 2>/dev/null
 done | head -10)
 if [ -n "$price_hits" ]; then
   bad "tracked JSON records carry price-shaped values (raw provider data; never publishable):"

@@ -17,7 +17,10 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 2
 OUT="$REPO/ops/revalidation-status.json"
-TMP="$OUT.tmp"
+# The temp file holds the FULL figures (see LICENCE GATE below), so it is staged
+# under gitignored data/, never beside $OUT in the public ops/ tree, where a
+# killed run would leave it for a broad `git add` to commit.
+TMP="$REPO/data/revalidation-status.json.tmp"
 
 # THIS SCRIPT OWNS ITS OWN SCHEDULE AND ITS OWN LOG, because its task carries
 # neither.
@@ -62,6 +65,7 @@ echo "=== structural revalidation $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 # must leave the PREVIOUS answer intact rather than a truncated one: a
 # half-written snapshot would pass a file-exists check while carrying nothing,
 # which is the failure mode the gate is there to prevent.
+mkdir -p "$REPO/data"
 if ! "$PY" tools/revalidate_structural.py --json "$TMP"; then
     echo "REVALIDATION FAILED — leaving the previous snapshot in place" >&2
     rm -f "$TMP"
@@ -85,7 +89,6 @@ fi
 # are withheld. tools/check_revalidation.py gates the stamp's age in CI, so the
 # monthly cadence stays enforced without a figure being committed.
 FULL="$REPO/data/revalidation-status.json"
-mkdir -p "$REPO/data"
 mv -f "$TMP" "$FULL"
 echo "wrote $FULL"
 if [ "${SIGNALDECK_PUBLISH_DERIVED:-0}" = 1 ]; then

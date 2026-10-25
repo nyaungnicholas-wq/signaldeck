@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { OPERATOR_NAME, CONTACT_EMAIL, LEGAL_UPDATED } from "@/lib/legal";
+import { OPERATOR_NAME, CONTACT_EMAIL, TERMS_UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = { title: "Terms of Use" };
 
@@ -16,7 +16,7 @@ export default function TermsPage() {
         className="panel px-4 py-3 text-[0.8rem]"
         style={{ color: "var(--dim)" }}
       >
-        Draft, pending legal review. Last updated {LEGAL_UPDATED}. Sections on
+        Draft, pending legal review. Last updated {TERMS_UPDATED}. Sections on
         liability, governing law and disputes will be added after review.
         Questions:{' '}
         <a
@@ -234,12 +234,11 @@ export default function TermsPage() {
           style={{ color: "var(--dim)" }}
         >
           Congressional trades are disclosures made public under the STOCK
-          Act. SignalDeck obtained them through third-party datasets:
-          Kadoa&rsquo;s congress-trades file (the fallback from 7 September
-          2026) and, before it, the House and Senate Stock Watcher datasets,
-          which have since stopped answering. The stored rows do not record
-          which dataset each came from, so all of them are treated as
-          Kadoa&rsquo;s. Kadoa&rsquo;s terms do not permit automated
+          Act. Every congressional row SignalDeck stored came from one
+          third-party compilation, Kadoa&rsquo;s congress-trades file,
+          collected from 7 September 2026. SignalDeck was also set up to read
+          the House and Senate Stock Watcher datasets, but they refused access
+          and no row arrived from them. Kadoa&rsquo;s terms do not permit automated
           collection, or making its compilation available to others, without
           written permission. As of 23 October 2026 collection from Kadoa has
           stopped, and the rows already stored are shown only to the

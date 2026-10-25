@@ -3,6 +3,8 @@
 ## Summary
 The codebase, container image, backup discipline, and anonymous public surface are implemented and tested locally. A public deployment requires the owner to approve paid hosting, a public hostname, a separate public source repository, and whether the anchors repository becomes public.
 
+**Since 2026-10-23 the licence gate overrides the surface table and the "Public demo data" list below.** Everything derived from Alpaca market data (accuracy, track record, calibration, volatility forecasts and the other statistics) or from Kadoa's congress rows is answered HTTP 451 "Withheld" to every caller but the operator on a published deployment. A non-operator reaches only `datalicense.NonOperatorRoutes` (account flows, the caller's own settings and watchlist identities, the pre-registration wording and chain hashes, ledger verification and anchors, and SEC EDGAR data); see `DATA_SOURCES.md`.
+
 ## Architecture of a public deployment
 Two processes in one container image (daemon `signaldeckd` on port 8322, Next.js web on port 8323), a persistent volume for SQLite (`data/signaldeck.db`), and a reverse proxy terminating TLS. The daemon binds loopback only; the proxy exposes 443. `SIGNALDECK_PUBLIC_SURFACE=1` and `NEXT_PUBLIC_SIGNALDECK_PUBLIC=1` activate the anonymous read allowlist and redirect anonymous visitors to `/` instead of `/login`.
 
@@ -51,7 +53,7 @@ Steps:
    - `NEXT_PUBLIC_SIGNALDECK_PUBLIC` and `NEXT_PUBLIC_SITE_URL` are **build-time**, not runtime: `NEXT_PUBLIC_*` is inlined into the bundle by `next build`, so setting them as host secrets does nothing. Pass them to `ops/docker-build.sh` instead, which now refuses to build without a site URL, and refuses again if that site URL arrives without an audience.
 4. Seed the volume with a reviewed database backup (from `data/backups/` with matching sha256) or start empty (daemon will ingest once Alpaca keys are present).
 5. Deploy the container; verify `/api/health` (200) and `/api/ready` (200 once workers healthy).
-6. From a fresh anonymous browser: confirm `/` loads, `/accuracy` returns data, `/api/bars` returns 451, `/api/symbol` requires auth, `/api/health` shows `degraded` only under worker load, `/api/ready` is 200.
+6. From a fresh anonymous browser: confirm `/` loads, `/accuracy` shows the licence "Withheld" notice (since 2026-10-23), `/api/accuracy` and `/api/bars` return 451, `/api/symbol` requires auth, `/api/health` shows `degraded` only under worker load, `/api/ready` is 200.
 - Estimated monthly cost: $5–15 (2 GB RAM, 10 GB volume).
 - **Not decided — needs approval** and a payment method attached to a hosting account.
 

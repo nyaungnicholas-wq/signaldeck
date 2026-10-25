@@ -294,12 +294,13 @@ test.describe("release smoke", () => {
     await page.goto("/terms");
     const body = page.locator("body");
     await expect(body).toContainText("Draft, pending legal review");
-    await expect(body).toContainText("Last updated 23 October 2026");
+    await expect(body).toContainText("Last updated 25 October 2026");
     const sources = page.locator("#data-sources");
     await expect(sources).toHaveAttribute("aria-label", "data sources and third-party services");
     await expect(sources).toContainText("withheld on this website and its API from everyone except the operator until Alpaca gives written permission");
     await expect(sources).toContainText("member accounts see the same notice as visitors");
     await expect(sources).toContainText("collection from Kadoa has stopped");
+    await expect(sources).toContainText("Every congressional row SignalDeck stored came from one third-party compilation, Kadoa’s congress-trades file");
     await expect(sources).toContainText("headlines are no longer sent to NVIDIA");
   });
 

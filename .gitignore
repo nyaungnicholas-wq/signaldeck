@@ -71,6 +71,10 @@ web/scratch_*.mjs
 # any backup window.
 ops/.maintenance
 
+# Temp files from ops/ scripts (ops/revalidate-structural.sh used to stage its
+# full-figure snapshot as ops/revalidation-status.json.tmp; it now uses data/).
+ops/*.tmp
+
 # Kill switch (daemon/internal/killswitch). A file here HALTS new entries.
 # Runtime state, never committed: a halt is local and must not travel in git.
 ops/HALT
