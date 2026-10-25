@@ -1,17 +1,20 @@
 # SignalDeck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-10-22
+> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-10-25
 > **Status:** ACTIVE — repository front page and orientation
 > **Scope:** What SignalDeck is, what it publishes, how to run it, what it does not claim.
 > **Authority:** `DOCS_INDEX.md` (which documents are current), `proofs/P10_FREEZE_LIFT.md` (the 2026-08-04 P0 freeze and its lift), `docs/PRODUCT_SPEC.md` (journeys and evidence contract)
 > **Publication:** PUBLISHABLE — the live-accuracy block below is generated; every figure in it comes from the grader, and when the grader refuses there is no figure.
 
-SignalDeck is a **market-research instrument that grades itself in public**. A Go daemon
-records US stock market data into SQLite (crypto paused 2026-10-22), computes signals, freezes
-pre-registered forecasts into a hash-chained prediction ledger *before* the outcome exists,
-and later grades every forecast against realized prices. Verdicts are published either way,
-including the failures. A Next.js web app is the lens on that record.
+SignalDeck is a **self-grading market-research instrument**. A Go daemon records US stock
+market data into SQLite (crypto paused 2026-10-22), computes signals, freezes pre-registered
+forecasts into a hash-chained prediction ledger *before* the outcome exists, and later grades
+every forecast against realized prices, failures included. Since 2026-10-23 those grades are
+shown only to the operator: they are computed from Alpaca market data, which is licensed for
+personal use only, so every other visitor gets a "Withheld" notice (HTTP 451) in their place
+until Alpaca gives written permission. What anyone can still check is the ledger's integrity
+and the frozen claim wording. A Next.js web app is the lens on that record.
 
 Not an auto-trader. Not financial advice. A measuring instrument.
 
@@ -20,12 +23,12 @@ Not an auto-trader. Not financial advice. A measuring instrument.
 | What | State | Where to check |
 |---|---|---|
 | Directional (up/down) forecasting | **Retired 2026-07-24** by a pre-registered auto-retire rule; retirement does not lapse | `/accuracy`, `proofs/P2_LIVE_RECORD_RECONCILIATION.md` |
-| Accuracy publication | Every figure **withheld from the public on the website and its API** since 2026-10-23 (licence: grades are computed from Alpaca market data, personal use only; shown only to the operator). This repository still carries figures committed before then (the frozen backtest claims in `PREREGISTRATION.md` and `daemon/internal/prereg`, the `repro/` day tallies, measured tables in older documents and `STRATEGY_DECK.md` §8); withdrawing them is an open owner decision (`DATA_SOURCES.md`). Underneath that, directional figures are also withheld (SD-30: the old label was partly realised at issue; a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors). Structural claims are backtested numbers still accruing live blocks; no live verdict yet | `/`, `/accuracy`, `GET /api/accuracy` |
+| Accuracy publication | Every figure **withheld from the public on the website and its API** since 2026-10-23 (licence: grades are computed from Alpaca market data, personal use only; shown only to the operator). This repository still carries figures committed before then (the frozen backtest claims in `PREREGISTRATION.md` and `daemon/internal/prereg`, the `repro/` day tallies, measured tables in older documents and `STRATEGY_DECK.md` §8); on 2026-10-24 the owner decided to leave them in place (`DATA_SOURCES.md`). Underneath that, directional figures are also withheld (SD-30: the old label was partly realised at issue; a corrected label grades from 2026-10-04 and figures return only after that window clears its evidence floors). Structural claims are backtested numbers still accruing live blocks; no live verdict yet | `/`, `/accuracy`, `GET /api/accuracy` |
 | Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing toward the 60 distinct trading days each horizon requires; progress and figures withheld (licence); no verdict | `/volatility` |
 | Prediction ledger | Hash-chained, ~765k entries (2026-10-22; grows ~4k/day), recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
 | Forecast coverage | ~6–10% of symbols receive a forecast, by design: every measured leg that ranks backwards is dropped, never down-weighted | `/lab/forecasts` |
 | Paper trading | Simulation only, operator-only (not shown to visitors or members): a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` (operator) |
-| Data sources | Crypto paused 2026-10-22 (no licensed source; history kept and labelled); TradingView scanner, StockTwits, FINRA short data, Cboe put/call and FRED retired 2026-10-21/22 after a data-licence review | `DATA_SOURCES.md`, `/api/source-health` |
+| Data sources | Crypto paused 2026-10-22 (no licensed source; history kept and labelled, shown only to the operator since 2026-10-23); TradingView scanner, StockTwits, FINRA short data, Cboe put/call and FRED retired 2026-10-21/22 after a data-licence review; the Kadoa congress feed and NVIDIA's hosted model API (headline sentiment) retired 2026-10-23 | `DATA_SOURCES.md`, `/api/source-health` |
 | Legal pages | Privacy Notice and Terms of Use published, marked "Draft, pending legal review" (updated 2026-10-22) | `/privacy`, `/terms` |
 | Freeze history | A P0 documentation freeze was declared and lifted on 2026-08-04; four documents stay marked NOT AUTHORITATIVE and are historical | `proofs/P0_FREEZE.md`, `proofs/P10_FREEZE_LIFT.md`, `DOCS_INDEX.md` |
 
@@ -51,10 +54,13 @@ Grading methodology: `tools/accuracy_registry.py`; the operator's in-app view is
 
 ## What it does
 
-- **Public record (no account):** `/` (status and what remains true), `/accuracy` (publication
-  verdict per predictor), `/proof` (hash-chain verification and the gated live track record),
-  `/volatility` (risk estimates and their live record), `/glossary`, `/health`.
-- **Private workspace (sign in):** `/dashboard` (today's read, gauges, watchlist, alerts),
+- **Public record (no account):** `/` (status and what remains true), `/accuracy` (how the
+  grading works; the per-predictor verdicts are withheld under the licence and shown only to
+  the operator), `/proof` (hash-chain verification and each claim's frozen wording; the live
+  track record is withheld), `/volatility` (the method under test; its live record is withheld),
+  `/glossary`, `/health`.
+- **Private workspace (sign in; since 2026-10-23 its Alpaca- and Kadoa-derived views render
+  only for the operator, and a member account sees the "Withheld" notice there):** `/dashboard` (today's read, gauges, watchlist, alerts),
   `/market/*` (screener, movers, breadth, regimes, macro), `/watchlist`, `/s/<market>/<symbol>`
   (price and indicators, validated structural signals with their measured accuracy per conviction
   band, evidence for why it is moving, news, unusual activity), `/intel/*` (filings, insiders,
@@ -70,13 +76,14 @@ insufficient-evidence states, are in [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.
 Alpaca IEX ws/REST ───┐                       ┌── web app (Next.js, 127.0.0.1:8323)
 SEC EDGAR · CFTC ─────┤   signaldeckd (:8322) │   public record · private workspace
 Wikimedia ────────────┼─▶ ~100 in-app workers ┤   /api/* proxied server-side to :8322
-congress (Kadoa) ─────┤   SQLite (data/*.db)  │
+Kadoa (retired) ──────┤   SQLite (data/*.db)  │
 TradingView webhook ──┘                       └── tools/ (Python): daily grading, docs gates
 ```
 
 Retired 2026-10-22 (licence review): FRED, FINRA and Cboe. Crypto (TickStream, Kraken,
 Coinbase, Hyperliquid) paused 2026-10-22. TradingView scanner and StockTwits retired
-2026-10-21/22.
+2026-10-21/22. The Kadoa congress feed and NVIDIA's hosted model API (headline sentiment,
+used under its trial terms) retired 2026-10-23.
 
 - **Daemon** (`daemon/`, Go 1.26+, toolchain go1.26.10): ingestion, signal and forecast workers, outcome resolution,
   the prediction ledger, the HTTP JSON API (host allowlist, session cookies, bearer token for
@@ -168,8 +175,8 @@ calling web work done.
 - **External timestamps start on 2026-09-30.** The anchors repository
   (`nyaungnicholas-wq/signaldeck-anchors`) is public since 2026-10-04. Since 2026-10-23
   `ops/anchor-publish.sh` no longer refreshes its `README.md` and `accuracy_registry.json`,
-  but the copies committed before then, which carry live accuracies, are still there;
-  replacing them is the owner's decision, and until then neither this README nor `/proof`
+  but the copies committed before then, which carry live accuracies, are still there: on
+  2026-10-24 the owner decided to leave them in place, and neither this README nor `/proof`
   links it. Since 2026-09-30 each publish commits a statement of the
   current ledger head, timestamped by two RFC 3161 authorities (FreeTSA, DigiCert) and
   OpenTimestamps, and `tools/verify_public_record.py` (published there as `verify.py`)
@@ -236,12 +243,14 @@ AI-assistance disclosure for competition submissions is kept in
 
 Libraries and services: Go and its SQLite driver (see `daemon/go.mod`), Next.js, React,
 Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, SEC EDGAR, the CFTC,
-Wikimedia, congressional STOCK Act disclosures (Kadoa; older rows House/Senate Stock
-Watcher) and TradingView (chart widget; the operator's own alerts by webhook). Retired,
+Wikimedia and TradingView (chart widget; the operator's own alerts by webhook). Retired,
 used before these dates: the TradingView scanner and StockTwits (2026-10-21/22); Kraken,
-Coinbase and Hyperliquid crypto data (crypto paused 2026-10-22, history kept on the
-public record); FINRA, Cboe and FRED (2026-10-22, licence review). External timestamps
-from OpenTimestamps calendars.
+Coinbase and Hyperliquid crypto data (crypto paused 2026-10-22; the stored history is
+shown only to the operator since 2026-10-23); FINRA, Cboe and FRED (2026-10-22, licence
+review); congressional STOCK Act trade rows compiled by Kadoa (2026-10-23; no stored row
+came from the House/Senate Stock Watcher mirrors, and the stored rows are shown only to
+the operator); NVIDIA's hosted model API, which tagged headline sentiment under its trial
+terms (2026-10-23). External timestamps from OpenTimestamps calendars.
 
 ## License
 

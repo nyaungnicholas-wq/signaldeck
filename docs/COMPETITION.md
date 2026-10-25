@@ -2,7 +2,7 @@
 
 ## Project description
 
-SignalDeck is a self-grading market-research instrument. A Go daemon records market data for about 320 US stocks (crypto paused since 22 October 2026, history kept), computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes are known, and later grades every forecast against realized prices. Verdicts are published including failures.
+SignalDeck is a self-grading market-research instrument. A Go daemon records market data for about 320 US stocks (crypto paused since 22 October 2026, history kept), computes signals, freezes pre-registered forecasts into a hash-chained prediction ledger before outcomes are known, and later grades every forecast against realized prices, failures included. Since 23 October 2026 the grades are shown only to the operator: they are computed from Alpaca market data, which is licensed for personal use only, so every other visitor sees a "Withheld" notice in their place.
 
 ## Audience and problem
 
@@ -15,9 +15,9 @@ Forecast accuracy claims can be difficult for a learner to evaluate when the ori
 
 ## Claims you may make
 
-- Provides public evaluation and hash-chain verification pages at https://signaldeck.nicholasnyaung.com (hosted on one home PC behind a Cloudflare tunnel); confirm the live ledger count immediately before recording rather than quoting an old count.
+- Provides public hash-chain verification and claim-wording pages at https://signaldeck.nicholasnyaung.com (hosted on one home PC behind a Cloudflare tunnel); since 23 October 2026 the evaluation pages show a "Withheld" licence notice to everyone but the operator, so do not describe the grades as publicly visible; confirm the live ledger count immediately before recording rather than quoting an old count.
 - Retired its own flagship directional model by a pre-registered auto-retire rule because its live record was worse than the majority-class baseline; retirement is permanent by design
-- Withholds accuracy figures when the evidence is unusable (collapsed cross-sections in 2026-07/08; since 2026-10-04 the SD-30 corrected-label window); the public pages say so plainly and show no figures until the window clears
+- Withholds accuracy figures when the evidence is unusable (collapsed cross-sections in 2026-07/08; since 2026-10-04 the SD-30 corrected-label window); the public pages say so plainly and show no figures until the window clears (since 23 October 2026 every figure is also withheld from the public under the Alpaca licence)
 - Volatility forecast (HAR realized-variance model versus random walk and RiskMetrics EWMA) pre-registered on 2026-09-04 (chain sequence 105) and accruing a live record; needs 60 distinct trading days before any verdict; no skill is claimed
 - Paper trading is a clearly labelled, operator-only simulation: a manual market-order book with a cost model, plus the platform's own model-driven books; no real money, no brokerage connection
 

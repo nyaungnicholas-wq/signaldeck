@@ -57,7 +57,7 @@ Unverified sign-ups older than 24 hours are deleted the next time anyone signs u
 3. ~~Whether to encrypt off-site backups, and the backup retention to state~~ **DECIDED 2026-10-22** (see Backups).
 4. ~~Waitlist retention and a removal path~~ **DECIDED 2026-10-22**: 12 months, removal on request.
 5. Consent for third-party scripts for EU and UK visitors: Turnstile (live since 2026-10-11) and Google Sign-In (if it is ever configured).
-6. The terms of use, including "descriptive market analysis, not financial advice", data-source attributions, and the Kraken derived-works question (crypto-derived grades are public). *2026-10-22:* the Kraken question is moot (crypto paused); the source list below is on /terms; the remaining licence questions are in counsel packet version 3.
+6. The terms of use, including "descriptive market analysis, not financial advice", data-source attributions, and the Kraken derived-works question (crypto-derived grades were public until 2026-10-23). *2026-10-22:* the Kraken question is moot (crypto paused); the source list below is on /terms; the remaining licence questions are in counsel packet version 3.
 
 ## Data sources (2026-10-23)
 

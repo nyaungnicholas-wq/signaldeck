@@ -8,6 +8,12 @@ changing its test in the same commit, with the reason.
 Not legal advice; counsel review pending. This file records engineering
 controls, not a legal conclusion.
 
+Since 2026-10-23 a member receives no forecasts at all on a published
+deployment: everything derived from Alpaca market data is shown only to the
+operator, and a member gets an HTTP 451 "Withheld" answer instead
+(`DATA_SOURCES.md`). The rules below govern what a member would receive once
+Alpaca gives written permission; their tests still run.
+
 | # | Rule | Enforced by |
 |---|------|-------------|
 | 1 | **Impersonal.** Every member reads the same forecasts. Nothing a member reads about a symbol depends on who they are, what else they watch, or their settings. | `TestMemberForecastsAreImpersonal` (daemon/internal/api/guardrails_test.go): two members with different watchlists and alert settings get byte-identical bodies from every member-reachable GET, except the listed per-user routes (own watchlist, own identity, own alert switches). `TestComposeIsImpersonal` (daemon/internal/memberdigest) does the same for the daily email. |
