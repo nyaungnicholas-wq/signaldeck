@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { COPY } from "@/lib/demoCopy";
 
 export default function SignupCTA() {
   return (
@@ -14,7 +15,7 @@ export default function SignupCTA() {
           Keep your own watchlist.
         </h2>
         <p className="max-w-[56ch] text-[0.98rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          Make an account to keep your own watchlist. While the market-data licence is unresolved, members see the same withheld notice as visitors in place of the live grades, and the call journal and the daily digest are paused. We confirm your email and never sell it, and we send only account emails (confirmation, password reset, or a notice that an address already has an account).
+          {COPY.signupBody}
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <Link href="/signup" className="cta-primary">Create free account</Link>

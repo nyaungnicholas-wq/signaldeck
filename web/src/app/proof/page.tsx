@@ -31,6 +31,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import RefusalNotice from "@/components/RefusalNotice";
 import Registrations from "@/components/proof/Registrations";
+import { COPY } from "@/lib/demoCopy";
 
 // Two retries, not more. Each failed attempt costs the daemon's FULL 30s
 // deadline before it answers, so three attempts is already ~70s of waiting —
@@ -372,8 +373,8 @@ export default function ProofPage() {
           Most signal products claim a win rate you can&rsquo;t check. SignalDeck commits each
           prediction to a tamper-evident hash chain as it is made, counts the rare write that
           does not land instead of rounding it away, and grades itself against what actually
-          happened — withholding any skill claim until the sample is real. This page is that
-          record, recomputed every few minutes from the live ledger. It is descriptive, not advice.
+          happened — withholding any skill claim until the sample is real.{" "}
+          {COPY.proofSource} It is descriptive, not advice.
         </p>
       </header>
 

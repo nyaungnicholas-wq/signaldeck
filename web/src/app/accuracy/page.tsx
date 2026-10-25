@@ -25,6 +25,7 @@ import type { Withheld as WithheldInfo } from "@/lib/withheld";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import { daemonFetch, isUsableRegistry } from "@/lib/demoUpstream";
+import { COPY } from "@/lib/demoCopy";
 
 export const dynamic = "force-dynamic";
 
@@ -635,7 +636,9 @@ export default async function AccuracyPage() {
         </section>
       ) : null}
 
-      {/* ── FLAGSHIP RETIREMENT: the disclosure that must not be buried ── */}
+      {/* ── FLAGSHIP RETIREMENT: the disclosure that must not be buried. A demo
+          build leaves it out: its date and verdict are the real record's. ── */}
+      {COPY.flagshipRetirement && (
       <section className="panel" style={{ borderColor: "var(--bad)" }} aria-label="flagship retirement">
         <div className="panel-h">
           <span style={{ color: "var(--bad)" }}>HISTORICAL RECORD · FLAGSHIP RETIRED {FLAGSHIP_RETIREMENT.date}</span>
@@ -660,6 +663,7 @@ export default async function AccuracyPage() {
           </p>
         </div>
       </section>
+      )}
 
       {/* data-empty: nothing is here, and it is ours to fix, not the reader's
           — so this states the cause and offers no button that cannot help. */}
@@ -748,12 +752,7 @@ export default async function AccuracyPage() {
 
       {reg && (
         <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          Regenerated {reg.generated} · minimum {reg.min_independent_n} independent observations
-          for any verdict · directional window starts {reg.grading_epoch ?? reg.survivorship_epoch}{" "}
-          (re-registered on the publication chain, past the 2026-07-27..08-06 collapsed
-          cross-sections and the SD-30 label leak) ·
-          survivorship epoch {reg.survivorship_epoch} (earlier rows were graded against a
-          survivor-seeded universe and are excluded) · intervals resample days, not rows.
+          {COPY.accuracyFooter(reg)}
         </p>
       )}
 

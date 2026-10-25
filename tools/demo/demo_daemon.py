@@ -11,6 +11,12 @@ Tickers are DEMOA..DEMOF. Checked 2026-10-23 against the live companies table
 (11,162 SEC registrant tickers) and symbols table (2,950), read-only: no match,
 and no ticker there starts with DEMO.
 
+The public record is fictional too: predictors and claims are named demo-*, and
+their verdicts, dates and thresholds are chosen here, not copied from the real
+registry or chain (the selfcheck refuses real names paired with a verdict and the
+real record's dates). Only the regime kinds vol21/trend21/liquidity21 keep their
+names, because the web keys its panels on them; they carry no verdict.
+
 Run with ops/demo-run.ps1, which also builds the web with NEXT_PUBLIC_DEMO_DATA=1
 so every page carries the DEMO DATA banner. Standalone:
     python tools/demo/demo_daemon.py --port 8352 --registry <dir>/data/accuracy_registry.json
@@ -44,6 +50,10 @@ TICKERS = list(COMPANIES)
 SIC = {"DEMOA": "3560", "DEMOB": "4210", "DEMOC": "8000", "DEMOD": "7372", "DEMOE": "1311", "DEMOF": "5331"}
 GRADED_AT = "2026-10-23T06:00:00Z"
 GRADER_SHA = hashlib.sha256(b"signaldeck-demo-grader").hexdigest()
+# The synthetic record's own dates. Each was checked absent from the repository
+# (git grep, 2026-10-25), so none is a date of the real record.
+DEMO_FIRST_GRADABLE = "2026-04-13"
+DEMO_RETIRED_ON = "2026-06-11"
 CAVEAT = ("DEMO DATA: this accuracy is a synthetic stand-in for a backtest figure. "
           "It describes nothing real and is not a live measurement.")
 
@@ -112,7 +122,10 @@ def bars(symbol, tf="1d", limit=250):
     return out
 
 
+# The web keys its regime panels on these three kind names, so they stay; every
+# read, accuracy and date under them is seeded, and none carries a verdict.
 REGIMES = {"vol21": ("calm", "elevated"), "trend21": ("uptrend", "downtrend"), "liquidity21": ("liquid", "thin")}
+REGIME_WORD = {"vol21": "volatility", "trend21": "trend", "liquidity21": "liquidity"}
 
 
 def regime_rows(kind):
@@ -125,7 +138,7 @@ def regime_rows(kind):
             "symbol": t, "market": "stocks", "ts": epoch(last_session()), "kind": kind, "horizonDays": 21,
             "regime": r.choice(REGIMES[kind]), "conviction": conv,
             "historicalAccuracy": round(r.uniform(0.58, 0.79), 3), "evidence": "backtest",
-            "firstGradableOn": "2026-08-07", "evidenceCaveat": CAVEAT, "tier": tier,
+            "firstGradableOn": DEMO_FIRST_GRADABLE, "evidenceCaveat": CAVEAT, "tier": tier,
             "rank": i + 1, "n": r.randint(400, 3000),
         })
     # DEMOA leads every kind so the demo's first stock has a read to show.
@@ -143,7 +156,7 @@ def regimes(q):
         out[kind] = [x for x in rows if not want or x["symbol"] in want]
     body = {
         "forecasts": out,
-        "kinds": {k: {"what": f"Demo {k} regime: which of two states a demo ticker is in over 21 sessions.",
+        "kinds": {k: {"what": f"Demo {REGIME_WORD[k]} regime: which of two states a demo ticker is in over 21 sessions.",
                       "accuracyTiers": {"high": "synthetic 0.7-0.8", "medium": "synthetic 0.6-0.7", "low": "synthetic below 0.6"},
                       "caveat": CAVEAT, "tradeability": "Demo: no tradeability is claimed."} for k in REGIMES},
         "methodology": "Demo: each read is a seeded random draw standing in for a backtested regime classifier.",
@@ -174,20 +187,21 @@ def vol_regime(_q):
 
 # ------------------------------------------------------------ public record
 
+# Fictional predictors, decoupled from the real registry: no real name, verdict
+# pattern or date. One row per state the pages can show, in an order that puts a
+# RETIRED and an INSUFFICIENT box first on /accuracy. Figures come from the seed.
 PREDICTORS = [
     # predictor, horizon, variant, family, status, retired
-    ("flagship", "1d", "all", "direction", "RETIRED", True),
-    ("flagship", "1w", "all", "direction", "RETIRED", True),
-    ("gapfill5", "", "", "structure", "REFUSED", False),
-    ("vol21", "", "", "structure", "INSUFFICIENT", False),
-    ("trend21", "", "", "structure", "INSUFFICIENT", False),
-    ("liquidity21", "", "", "structure", "INSUFFICIENT", False),
-    ("liquidity21-crypto", "", "", "structure", "INSUFFICIENT", False),
-    ("trend21-crypto", "", "", "structure", "INSUFFICIENT", False),
-    ("market-benchmark", "1d", "", "benchmark", "NO_BASELINE", False),
+    ("demo-model-a", "1d", "", "direction", "RETIRED", True),
+    ("demo-regime-c", "", "", "structure", "INSUFFICIENT", False),
+    ("demo-model-b", "1d", "", "direction", "OK", False),
+    ("demo-model-b", "1w", "", "direction", "REFUSED", False),
+    ("demo-regime-d", "", "", "structure", "INSUFFICIENT", False),
+    ("demo-benchmark", "1d", "", "benchmark", "NO_BASELINE", False),
 ]
 REASONS = {
-    "RETIRED": "demo: retired by the pre-registered rule (synthetic record)",
+    "RETIRED": f"demo: retired by the pre-registered rule on {DEMO_RETIRED_ON} (synthetic record)",
+    "OK": "demo: the interval lies above the baseline (synthetic record)",
     "REFUSED": "demo: grading window refused (synthetic record)",
     "INSUFFICIENT": "demo: too few independent days for an interval (synthetic record)",
     "NO_BASELINE": "demo: no registered baseline to grade against (synthetic record)",
@@ -198,19 +212,24 @@ def label(p, h, v):
     return p + (f" ({h}{', ' + v if v else ''})" if h else "")
 
 
-def predictor_figures(p, h):
+def predictor_figures(p, h, st):
+    """n, accuracy, baseline, skill, days and interval: only RETIRED (below) and OK (above) rows are graded."""
     r = rng("acc", p, h)
-    n = r.randint(1500, 6000) if p == "flagship" else r.randint(60, 400)
+    graded = st in ("RETIRED", "OK")
+    n = r.randint(1500, 6000) if graded else r.randint(60, 400)
     null = round(r.uniform(0.51, 0.55), 3)
-    acc = round(null - r.uniform(0.02, 0.07), 3) if p == "flagship" else None
-    days = r.randint(40, 70) if p == "flagship" else r.randint(8, 30)
-    return n, acc, null, (round(acc - null, 3) if acc is not None else None), days
+    days = r.randint(40, 70) if graded else r.randint(8, 30)
+    if not graded:
+        return n, None, null, None, days, None
+    acc = round(null + r.uniform(0.02, 0.035) if st == "OK" else null - r.uniform(0.03, 0.06), 3)
+    ci = [round(acc - 0.012, 3), round(acc + 0.012, 3)] if st == "OK" else [round(acc - 0.02, 3), round(acc + 0.015, 3)]
+    return n, acc, null, round(acc - null, 3), days, ci
 
 
 def accuracy(_q):
     rows = []
     for p, h, v, fam, st, ret in PREDICTORS:
-        n, acc, null, skill, days = predictor_figures(p, h)
+        n, acc, null, skill, days, _ci = predictor_figures(p, h, st)
         rows.append({"predictor": p, "horizon": h, "variant": v, "family": fam, "publication_status": st,
                      "retired": ret, "retirement_sticky": ret, "reasons": [REASONS[st]], "evidence_refs": [],
                      "live_n": n, "live_acc": acc, "null_acc": null if acc is not None else None, "skill": skill,
@@ -226,43 +245,43 @@ def registry():
     for p, h, v, fam, st, _ret in PREDICTORS:
         if fam not in ("direction", "structure"):
             continue
-        n, acc, null, skill, days = predictor_figures(p, h)
+        n, acc, null, skill, days, ci = predictor_figures(p, h, st)
         r = rng("reg", p, h)
         row = {"predictor": label(p, h, v), "family": fam, "band": "all",
-               "claimed": round(r.uniform(0.6, 0.75), 3), "live_n": n, "live_acc": acc,
-               "ci": [round(acc - 0.03, 3), round(acc + 0.02, 3)] if acc is not None else None,
+               "claimed": round(r.uniform(0.6, 0.75), 3), "live_n": n, "live_acc": acc, "ci": ci,
                "ci_method": "day-clustered bootstrap", "distinct_days": days,
                "effective_n": round(n / 7) if acc is not None else None,
                "null_hindsight": null if acc is not None else None, "null_prequential": null if acc is not None else None,
                "null_acc": null if acc is not None else None, "skill": skill, "note": NOTE}
-        row["verdict"] = ("FAILED - the interval lies below the baseline (synthetic)" if fam == "direction"
-                          else "PENDING - backtested claim, first graded live on 2026-08-07 (synthetic)")
+        row["verdict"] = {
+            "RETIRED": "FAILED - the interval lies below the baseline (synthetic)",
+            "OK": "VALIDATED - the interval lies above the baseline (synthetic)",
+            "REFUSED": "REFUSED - the grading window is degenerate, so nothing is graded (synthetic)",
+        }.get(st) if fam == "direction" else f"PENDING - backtested claim, first graded live on {DEMO_FIRST_GRADABLE} (synthetic)"
         rows.append(row)
     return {"generated": GRADED_AT, "graded_at": GRADED_AT, "grader_sha256": GRADER_SHA, "min_independent_n": 30,
-            "survivorship_epoch": "2026-08-07", "null_policy": "max(hindsight, prequential)", "calibration": None,
+            "survivorship_epoch": DEMO_FIRST_GRADABLE, "null_policy": "max(hindsight, prequential)", "calibration": None,
             "rows": rows, "demo": True}
 
 
+# Fictional claims with synthetic dates and thresholds (none from the real chain).
 PREREG = [
-    ("grading-protocol", "2026-07-15", None, {"grader": "tools/accuracy_registry.py (demo record)", "maxAlpha": 0.05,
+    ("demo-grading-protocol", "2026-03-04", None, {"grader": "demo grader (synthetic record)", "maxAlpha": 0.05,
         "refusal": "Withhold rather than publish when the grading window is degenerate."}),
-    ("trend21", "2026-07-20", True, {"kind": "trend21", "question": "Will a demo ticker still be on its current side of its 200-day moving average in 21 trading sessions?",
-        "horizonDays": 21, "resolution": "Compare the close 21 sessions later against the 200-day average at that bar.",
-        "bands": [{"minConviction": 0.0, "claimedAccuracy": 0.64}, {"minConviction": 0.8, "claimedAccuracy": 0.71}],
-        "baseline": "Demo: naive persistence, synthetic figure.", "knownWeakness": "Demo record: no real history behind it."}),
-    ("liquidity21", "2026-07-20", True, {"kind": "liquidity21", "question": "Will a demo ticker's trading volume stay in its current band for 21 sessions?",
-        "horizonDays": 21, "resolution": "Compare median volume over the next 21 sessions with the band at the call.",
-        "bands": [{"minConviction": 0.0, "claimedAccuracy": 0.62}]}),
-    ("vol21", "2026-07-22", True, {"kind": "vol21", "question": "Will a demo ticker stay in its current volatility regime (calm or elevated) for 21 sessions?",
-        "horizonDays": 21, "resolution": "Classify realised volatility over the next 21 sessions.",
-        "bands": [{"minConviction": 0.0, "claimedAccuracy": 0.66}]}),
-    ("liquidity21-crypto", "2026-07-25", True, {"kind": "liquidity21-crypto", "question": "Demo crypto variant of the liquidity claim.", "horizonDays": 21,
-        "resolution": "As liquidity21."}),
-    ("trend21-crypto", "2026-07-25", True, {"kind": "trend21-crypto", "question": "Demo crypto variant of the trend claim.", "horizonDays": 21,
-        "resolution": "As trend21."}),
-    ("vol-forecast-har", "2026-08-01", True, {"model": "HAR volatility forecast (demo record)", "loss": "QLIKE",
-        "baselines": ["random walk", "RiskMetrics EWMA"], "minDistinctDays": 60}),
-    ("auto-retire-rule", "2026-08-05", None, {"model": "flagship", "minIndependentN": 200, "minDistinctDays": 30,
+    ("demo-model-a", "2026-03-05", True, {"model": "demo-model-a", "question": "Will a demo ticker close higher one session ahead?",
+        "horizons": ["1d"], "baseline": "always call the majority direction (synthetic)"}),
+    ("demo-model-b", "2026-03-11", True, {"model": "demo-model-b", "question": "Will a demo ticker close higher one session and one week ahead?",
+        "horizons": ["1d", "1w"], "baseline": "always call the majority direction (synthetic)"}),
+    ("demo-regime-c", "2026-03-23", True, {"kind": "demo-regime-c", "question": "Will a demo ticker stay on its side of its 50-day average for 15 sessions?",
+        "horizonDays": 15, "resolution": "Compare the close 15 sessions later with the 50-day average at that bar.",
+        "bands": [{"minConviction": 0.0, "claimedAccuracy": 0.63}, {"minConviction": 0.75, "claimedAccuracy": 0.69}],
+        "knownWeakness": "Demo record: no real history behind it."}),
+    ("demo-regime-d", "2026-03-23", True, {"kind": "demo-regime-d", "question": "Will a demo ticker's trading volume stay in its band for 15 sessions?",
+        "horizonDays": 15, "resolution": "Compare median volume over the next 15 sessions with the band at the call.",
+        "bands": [{"minConviction": 0.0, "claimedAccuracy": 0.61}]}),
+    ("demo-vol-forecast", "2026-03-30", True, {"model": "demo volatility forecast (synthetic record)", "loss": "QLIKE",
+        "baselines": ["random walk", "EWMA"], "minDistinctDays": 60}),
+    ("demo-retire-rule", "2026-03-30", None, {"model": "demo-model-a", "minIndependentN": 150, "minDistinctDays": 20,
         "criterion": "the day-clustered interval lies wholly below the baseline", "action": "stop publishing and record the retirement"}),
 ]
 
@@ -281,7 +300,7 @@ def prereg_chain():
 
 def prereg(_q):
     return demo({"records": prereg_chain(), "chainVerified": True, "registeredBefore": True,
-                 "firstGradableOn": "2026-08-07", "liveResolved": 412,
+                 "firstGradableOn": DEMO_FIRST_GRADABLE, "liveResolved": 412,
                  "whatThisIs": "Demo: the claim each predictor made, frozen and hash-chained before its forecasts resolved. Every record here is synthetic.",
                  "howToUseIt": "Recompute each specHash from its spec and each entryHash from the previous one.",
                  "whyChained": "Changing any old record changes every hash after it.",
@@ -621,6 +640,28 @@ def all_gets():
     return {p: answer("GET", p) for p in paths}
 
 
+# The real record this stub must never echo: predictor and claim names, and the
+# dates of real verdicts and windows (retirement and survivorship epoch 2026-07-24,
+# first structural call 2026-07-18, collapsed cross-sections 2026-07-27..08-06,
+# registered first-gradable date and grading epoch 2026-08-07, and later dates).
+REAL_NAMES = {"flagship", "directional-ensemble", "gapfill5", "vol21", "vol63", "trend21", "trend63", "liquidity21",
+              "liquidity21-crypto", "trend21-crypto", "filingsdrift21", "market-benchmark", "prequential-majority",
+              "vol-forecast-har", "auto-retire-rule", "grading-protocol"}
+REAL_DATES = ("2026-07-18", "2026-07-24", "2026-07-27", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+              "2026-08-17", "2026-09-25")
+VERDICT_KEYS = {"publication_status", "verdict", "retired", "retirement_sticky", "reasons"}
+
+
+def walk(o):
+    if isinstance(o, dict):
+        yield o
+        for v in o.values():
+            yield from walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from walk(v)
+
+
 def selfcheck():
     out = all_gets()
     for p, (status, body) in out.items():
@@ -644,7 +685,20 @@ def selfcheck():
     labels = {label(x["predictor"], x["horizon"], x["variant"]) for x in acc["rows"]}
     assert all(r["predictor"] in labels for r in reg["rows"]), "registry row without a published verdict"
     assert post("/api/watch", {"symbol": "AAPL"})[0] == 400, "a real ticker must be refused"
-    print(f"DEMO STUB SELFCHECK OK ({len(out)} routes, tickers {sorted(tickers)})")
+    # Decoupled from the real record (review G4, 2026-10-25): no real predictor or
+    # claim name carries a verdict, the record's names are all fictional, and no
+    # date of a real verdict or grading window appears in any route's JSON.
+    everything = {p: b for p, (_s, b) in out.items()} | {"registry": reg}
+    for d in walk(everything):
+        name = str(d.get("predictor", d.get("kind", ""))).split(" (")[0]
+        paired = VERDICT_KEYS & d.keys() if name in REAL_NAMES else set()
+        assert not paired, f"real predictor {name} paired with {sorted(paired)}"
+    names = {str(x.get("predictor", x.get("kind"))).split(" (")[0] for x in acc["rows"] + reg["rows"] + recs}
+    assert all(n.startswith("demo-") for n in names), f"non-fictional name in the record: {sorted(names)}"
+    text = json.dumps(everything)
+    found = [d for d in REAL_DATES if d in text] + [w for w in ("RiskMetrics",) if w in text]
+    assert not found, f"real record date or name in the output: {found}"
+    print(f"DEMO STUB SELFCHECK OK ({len(out)} routes, tickers {sorted(tickers)}, record names {sorted(names)})")
 
 
 def main():

@@ -14,6 +14,7 @@ import Withheld from "@/components/Withheld";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import { parseWithheld } from "@/lib/withheld";
 import { daemonFetch } from "@/lib/demoUpstream";
+import { COPY } from "@/lib/demoCopy";
 import "@/components/landing/landing.css";
 
 /**
@@ -246,7 +247,7 @@ const CHECKS = [
   {
     href: "/accuracy",
     title: "The grades",
-    body: "Every predictor with its sample size, its baseline, its interval and its verdict, failures first. The figures are withheld from the public for now, and the page says why.",
+    body: COPY.gradesCard, // the live wording, or the demo build's (lib/demoCopy)
   },
   {
     href: "/proof",
@@ -265,7 +266,7 @@ const CHECKS = [
     // tool, and both horizons currently read INSUFFICIENT. Advertising a
     // feature the page does not have is how a reader arrives expecting a number
     // for their ticker and leaves thinking the site is broken.
-    body: "How the volatility forecast scores against two simple baselines, day by day. Not a per-symbol risk lookup: it is the scoreboard for one pre-registered estimate. Its figures are withheld from the public for now.",
+    body: COPY.volatilityCard,
   },
   {
     href: "/glossary",
@@ -540,8 +541,8 @@ function LiveRecord({ live }: { live: Live }) {
       )}
 
       <p className="m-0 max-w-[70ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        &ldquo;Baseline&rdquo; is what you would score by always calling the majority direction.
-        Beating it is the only thing that counts as skill, and on this record nothing has. Status
+        &ldquo;Baseline&rdquo; is what you would score by always calling the majority direction.{" "}
+        {COPY.skillLine} Status
         is the daemon&rsquo;s publication verdict for the grade of{" "}
         <span className="tnum">{live.gradedAt || "unknown"}</span>: what the record supports, not
         a stored sentence. Full methodology and every row:{" "}
@@ -638,7 +639,7 @@ export default async function Landing() {
           <Section eyebrow="The receipts" title="The newest links in the chain, as the daemon recomputed them">
             <HashChain blocks={chain.blocks} chainOk={chain.verified} brokenAt={chain.brokenAt} />
             <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
-              These are the real, current records. Each one&rsquo;s hash covers the one before it, so
+              {COPY.receiptsLead} Each one&rsquo;s hash covers the one before it, so
               changing any past claim breaks every link after it. <Link href="/proof" style={{ color: "var(--accent)" }}>See what the daemon re-checked, and how to verify the anchors yourself →</Link>
             </p>
           </Section>

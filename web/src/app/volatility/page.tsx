@@ -4,6 +4,7 @@ import WithheldNotice from "@/components/Withheld";
 import { verdictTone } from "@/lib/riskHeadline";
 import { parseWithheld, type Withheld } from "@/lib/withheld";
 import { daemonFetch } from "@/lib/demoUpstream";
+import { COPY } from "@/lib/demoCopy";
 
 /**
  * The live record of the HAR volatility forecast, for a reader with no
@@ -129,8 +130,7 @@ export default async function RiskPage() {
           rules that anyone could run instead.
         </p>
         <p className="m-0 max-w-[65ch] text-[0.95rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          The two rules are &ldquo;tomorrow will be like today&rdquo; and RiskMetrics, an
-          industry-standard weighted average. Beating them is the only thing that would count
+          {COPY.volRules} Beating them is the only thing that would count
           as skill. <strong>Lower loss is better.</strong>
         </p>
       </header>
@@ -239,7 +239,7 @@ export default async function RiskPage() {
                           <tbody>
                             {[
                               ["Our forecast", h.meanQlike.har],
-                              ["RiskMetrics EWMA", h.meanQlike.ewma],
+                              [COPY.ewmaRow, h.meanQlike.ewma],
                               ["Tomorrow is like today", h.meanQlike.rw],
                             ].map(([label, v]) => (
                               <tr key={String(label)} style={{ borderTop: "1px solid var(--border)" }}>
@@ -253,7 +253,7 @@ export default async function RiskPage() {
                         </table>
                       </div>
                       <p className="m-0 text-[0.78rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-                        Difference against RiskMetrics:{" "}
+                        {COPY.ewmaDiff}{" "}
                         <span className="tnum" style={{ color: "var(--text)" }}>
                           {h.vsEwma != null ? h.vsEwma.toFixed(4) : "—"}
                         </span>
