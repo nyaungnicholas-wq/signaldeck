@@ -18,6 +18,7 @@ import {
   type JournalPick,
   type CallDirection,
 } from "@/lib/journal";
+import { COPY } from "@/lib/demoCopy"; // the journal footer, or a demo build's
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -458,7 +459,7 @@ export default function MemberJournal() {
       )}
 
       <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        {JOURNAL_FOOTER}{" "}
+        {COPY.demo ? COPY.journalFooter : JOURNAL_FOOTER}{" "}
         <Link href="/accuracy" className="underline">
           How SignalDeck grades itself
         </Link>

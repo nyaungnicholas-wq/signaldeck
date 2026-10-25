@@ -570,9 +570,9 @@ export default async function Landing() {
   const maxDays = rows.reduce((m, r) => Math.max(m, r.distinct_days ?? 0), 0);
   const stats: { value: number; label: string; tone: string }[] = [
     { value: chain?.count ?? 0, label: "records on the hash chain", tone: "var(--accent)" },
-    { value: graded, label: "predictors graded live", tone: "#38bdf8" },
+    { value: graded, label: COPY.statGraded, tone: "#38bdf8" },
     { value: condemned, label: "rows failed or retired — shown, not hidden", tone: "var(--bad)" },
-    { value: maxDays, label: "distinct graded days (longest record)", tone: "var(--ok)" },
+    { value: maxDays, label: COPY.statDays, tone: "var(--ok)" },
   ].filter((s) => s.value > 0);
 
   return (
@@ -629,7 +629,7 @@ export default async function Landing() {
       )}
 
       <Reveal>
-        <Section eyebrow="The live record" title="What this platform has measured about itself">
+        <Section eyebrow={COPY.recordEyebrow} title={COPY.recordTitle}>
           <LiveRecord live={live} />
         </Section>
       </Reveal>

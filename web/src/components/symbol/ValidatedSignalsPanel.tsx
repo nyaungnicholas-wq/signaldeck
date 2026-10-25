@@ -40,6 +40,7 @@ import { withheldFromMessage } from "@/lib/withheld";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { CRYPTO_PAUSED_LABEL } from "@/lib/cryptoPause";
+import { COPY } from "@/lib/demoCopy";
 
 /** Reading order: the validated edge first, the un-tradeable trends last. */
 const KIND_ORDER = [
@@ -228,18 +229,10 @@ export default function ValidatedSignalsPanel({
   return (
     <section className="panel" aria-label={`validated regime signals for ${symbol}`}>
       <div className="panel-h flex-wrap gap-2">
-        <span>BACKTEST-VALIDATED SIGNALS · {symbol}</span>
-        <HelpTip label="why these are the validated ones">
-          These are structure calls — which side of a moving average price sits
-          on, whether volume and volatility stay in their current regime — and
-          each reports the MEASURED walk-forward accuracy of its own conviction
-          band. The volatility regime is the replicated, significant one and
-          leads on purpose. None of them is a price-direction call; the
-          experimental P(up) read is kept in its own section below precisely
-          because its live skill measured negative.
-        </HelpTip>
+        <span>{COPY.signalsTitle} · {symbol}</span>
+        <HelpTip label={COPY.signalsTipLabel}>{COPY.signalsTip}</HelpTip>
         <span className="ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          measured walk-forward · per-band accuracy
+          {COPY.signalsSub}
         </span>
       </div>
       {memberView && <HypotheticalNote short className="px-4 pt-2" />}

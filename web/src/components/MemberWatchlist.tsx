@@ -25,6 +25,7 @@ import HypotheticalNote from "@/components/HypotheticalNote";
 import Withheld from "@/components/Withheld";
 import HelpTip from "@/components/HelpTip";
 import { regimeCaveats } from "@/lib/regimeCaveat";
+import { COPY } from "@/lib/demoCopy";
 
 type Chip = { label: string; regime: string; accuracy: number };
 
@@ -280,7 +281,7 @@ export default function MemberWatchlist() {
                   <div className="flex flex-wrap gap-1">
                     {chips.map((c) => (
                       <span key={c.label} className="chip px-2 py-1 text-[0.75rem]" style={{ color: chipColor(c.regime) }}>
-                        {c.label} {c.regime} · {Math.round(c.accuracy * 100)}% backtest
+                        {c.label} {c.regime} · {Math.round(c.accuracy * 100)}% {COPY.watchChip}
                       </span>
                     ))}
                   </div>
@@ -301,12 +302,11 @@ export default function MemberWatchlist() {
       )}
 
       <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        Readings are SignalDeck&rsquo;s validated regime forecasts with their backtest accuracy; how they fare live is
-        graded on the{" "}
+        {COPY.watchFooter}{" "}
         <Link href="/accuracy" className="underline">
           record
         </Link>
-        . Prices are not shown: the market data is licensed and not redistributed. Not financial advice.{" "}
+        {COPY.watchFooterEnd}{" "}
         {/* The chips' accuracies, qualified in the daemon's own words (verbatim). */}
         {caveats.length > 0 ? (
           <HelpTip label="what these accuracies are">

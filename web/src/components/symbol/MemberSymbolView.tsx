@@ -22,6 +22,7 @@ import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import HypotheticalNote from "@/components/HypotheticalNote";
 import { useMe } from "@/hooks/useMe";
+import { COPY } from "@/lib/demoCopy";
 
 export default function MemberSymbolView({ symbol, market }: { symbol: string; market: Market }) {
   const [name, setName] = useState<string>("");
@@ -125,12 +126,11 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
       )}
 
       <p className="m-0 px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        Regime reads are SignalDeck&rsquo;s own forecasts, each shown with the accuracy it measured in
-        backtests; how they fare live is graded on the{" "}
+        {COPY.symbolFooter}{" "}
         <Link href="/accuracy" className="underline">
           record
         </Link>
-        . Filings, insider and holder data are public SEC records{finra ? "; short data is FINRA's" : ""}. Not financial advice.
+        {COPY.symbolSources}{finra ? "; short data is FINRA's" : ""}. Not financial advice.
       </p>
       <HypotheticalNote short className="px-1" />
     </div>

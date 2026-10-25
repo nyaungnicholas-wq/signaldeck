@@ -5,6 +5,11 @@
 // word as released, which demoCopy.test.mjs pins.
 // This module ships in every build, so no DEMO line may contain the banner phrase
 // ops/web-release.ps1 scans a release candidate for.
+// Member pages too (v2 review R1): a demo's watchlist, symbol page, signal panels,
+// journal and /today must not call the stub's random figures SignalDeck's measured ones.
+// Relative with the extension so node --test can load this module.
+import { HYPOTHETICAL_NOTE, HYPOTHETICAL_SHORT, LIVE_GRADED_NOTE, WHAT_SIGNALDECK_IS } from "./hypothetical.ts";
+import { JOURNAL_FOOTER } from "./journal.ts";
 
 type Footer = { generated: string; min_independent_n: number; grading_epoch?: string; survivorship_epoch: string };
 
@@ -32,6 +37,48 @@ const LIVE = {
   flagshipRetirement: true,
   accuracyFooter: (r: Footer) =>
     `Regenerated ${r.generated} · minimum ${r.min_independent_n} independent observations for any verdict · directional window starts ${r.grading_epoch ?? r.survivorship_epoch} (re-registered on the publication chain, past the 2026-07-27..08-06 collapsed cross-sections and the SD-30 label leak) · survivorship epoch ${r.survivorship_epoch} (earlier rows were graded against a survivor-seeded universe and are excluded) · intervals resample days, not rows.`,
+  // home and /accuracy headings that call the rows a live, measured record (review R2)
+  recordEyebrow: "The live record",
+  recordTitle: "What this platform has measured about itself",
+  statGraded: "predictors graded live",
+  statDays: "distinct graded days (longest record)",
+  accuracyLead:
+    "Every predictor, its claim, and what the live record actually supports — regraded daily against the naive baseline on independent (symbol, horizon, trading day) observations. The failures lead. Descriptive, not advice.",
+  // components/HypotheticalNote, on every page that shows a backtest or paper figure
+  hypoShort: HYPOTHETICAL_SHORT,
+  hypoNote: HYPOTHETICAL_NOTE,
+  liveGradedNote: LIVE_GRADED_NOTE,
+  // /watchlist: each chip's suffix, and the footer around its "record" link
+  watchChip: "backtest",
+  watchFooter:
+    "Readings are SignalDeck’s validated regime forecasts with their backtest accuracy; how they fare live is graded on the",
+  watchFooterEnd: ". Prices are not shown: the market data is licensed and not redistributed. Not financial advice.",
+  // symbol page footer, around its "record" link (FINRA's clause stays in the page)
+  symbolFooter:
+    "Regime reads are SignalDeck’s own forecasts, each shown with the accuracy it measured in backtests; how they fare live is graded on the",
+  symbolSources: ". Filings, insider and holder data are public SEC records",
+  // symbol page: the validated-signals panel, and the financials and filings panels' sources
+  signalsTitle: "BACKTEST-VALIDATED SIGNALS",
+  signalsSub: "measured walk-forward · per-band accuracy",
+  signalsTipLabel: "why these are the validated ones",
+  signalsTip:
+    "These are structure calls — which side of a moving average price sits on, whether volume and volatility stay in their current regime — and each reports the MEASURED walk-forward accuracy of its own conviction band. The volatility regime is the replicated, significant one and leads on purpose. None of them is a price-direction call; the experimental P(up) read is kept in its own section below precisely because its live skill measured negative.",
+  financialsSource: "SEC EDGAR XBRL, as filed · swept ~daily",
+  filingsSource: "EDGAR · lags by law (Form 4 ~2bd, 13F ≤45d)",
+  // /journal footer
+  journalFooter: JOURNAL_FOOTER,
+  // /today: the lead, what SignalDeck is, the risk headline, today's read, the volatility lead
+  todayLead:
+    "SignalDeck’s regime reads, each with the accuracy it measured in backtests, and the live record that grades every call. What it cannot predict, it says so.",
+  whatSignalDeckIs: WHAT_SIGNALDECK_IS,
+  riskLead: "SignalDeck’s volatility forecast is being graded live against a pre-registered test: ",
+  riskLeadAccruing:
+    "SignalDeck’s volatility forecast has reached its live evidence floor and awaits its pre-registered grade: ",
+  todaysChip: "backtest-validated signal",
+  todaysAcc: "Backtested accuracy in this conviction band:",
+  todaysSkill: "measured-skill forecast",
+  volLeadChip: "the backtest-validated forecast",
+  volLeadTested: "It is our most-tested call — checked against history, then checked again by a second build.",
 };
 
 const DEMO: typeof LIVE = {
@@ -53,6 +100,45 @@ const DEMO: typeof LIVE = {
   flagshipRetirement: false,
   accuracyFooter: (r: Footer) =>
     `Regenerated ${r.generated} · minimum ${r.min_independent_n} independent observations for any verdict · directional window starts ${r.grading_epoch ?? r.survivorship_epoch} · every row here is a synthetic demo record · intervals resample days, not rows.`,
+  recordEyebrow: "The demo record",
+  recordTitle: "A synthetic record, laid out like the live one",
+  statGraded: "demo predictors graded (synthetic)",
+  statDays: "synthetic graded days (longest record)",
+  accuracyLead:
+    "Every predictor, its claim, and what its record supports, graded against the naive baseline on independent (symbol, horizon, trading day) observations. In this demo every row is a synthetic record, not measured on any data. The failures lead. Descriptive, not advice.",
+  hypoShort:
+    "Demo accuracy is synthetic: a random stand-in for a backtest figure, not measured on any data, and it predicts nothing.",
+  hypoNote:
+    "Demo figures. Synthetic stand-ins for simulated paper results: not trades, not measured on any data, and they predict nothing.",
+  liveGradedNote: "Demo record: synthetic counts standing in for a live graded record. Nothing here was forecast or scored.",
+  watchChip: "synthetic",
+  watchFooter:
+    "Readings here are synthetic demo reads, each with a random accuracy standing in for the backtest accuracy of SignalDeck’s validated regime forecasts, not measured on any data; this demo’s",
+  watchFooterEnd: " is synthetic too. The tickers are fictional and no market data is shown. Not financial advice.",
+  symbolFooter:
+    "Regime reads here are synthetic demo reads, each with a random accuracy standing in for one measured in backtests, not measured on any data; this demo’s",
+  symbolSources: " is synthetic too. Filings, insider and holder rows are fictional demo records, not SEC data",
+  signalsTitle: "SYNTHETIC DEMO SIGNALS",
+  signalsSub: "synthetic stand-ins · not measured on any data",
+  signalsTipLabel: "what these demo rows are",
+  signalsTip:
+    "In this demo every row is synthetic: a random accuracy and sample size for a fictional ticker, standing in for SignalDeck’s backtest-validated structure calls. Nothing here was measured.",
+  financialsSource: "demo: fictional figures, not SEC filings",
+  filingsSource: "demo: fictional filings, not EDGAR",
+  journalFooter:
+    "Demo calls on fictional tickers, graded by the demo stub on synthetic closes. On the live site, members’ calls are graded by the same rules SignalDeck grades itself with. Not financial advice.",
+  todayLead:
+    "Synthetic demo reads for fictional tickers, standing in for SignalDeck’s regime reads: each accuracy is a random stand-in, not measured on any data, and the record that grades the calls is synthetic too.",
+  whatSignalDeckIs:
+    "SignalDeck does not tailor its statistical forecasts to anyone. This demo shows synthetic reads for fictional tickers to a demo member; on the live site, while the market-data licence is unresolved, the real forecasts are shown only to the operator. It does not know your portfolio and does not tell you what to buy or sell.",
+  riskLead: "In this demo a synthetic volatility record stands in for SignalDeck’s live, pre-registered test: ",
+  riskLeadAccruing:
+    "In this demo a synthetic volatility record has reached its evidence floor and awaits its pre-registered grade: ",
+  todaysChip: "synthetic demo signal",
+  todaysAcc: "Synthetic accuracy for this conviction band (a random stand-in):",
+  todaysSkill: "synthetic demo read",
+  volLeadChip: "synthetic demo rows",
+  volLeadTested: "In this demo every row is synthetic, for fictional tickers, and nothing was tested.",
 };
 
 /** The wording for this build: DEMO in a demo build, LIVE (unchanged) in every other. */

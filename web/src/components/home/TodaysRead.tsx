@@ -41,6 +41,7 @@ import Withheld from "@/components/Withheld";
 import { regimeCaveats } from "@/lib/regimeCaveat";
 import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import { COPY } from "@/lib/demoCopy";
 
 function symbolHref(symbol: string, market?: Market): string {
   const m: Market = market ?? (symbol.includes("/") ? "crypto" : "stocks");
@@ -179,7 +180,7 @@ export default function TodaysRead({
       <div className="panel-h flex-wrap gap-2">
         <span style={{ color: "var(--accent)" }}>TODAY&rsquo;S READ</span>
         <span className="chip px-2 py-[1px] text-[0.75rem]">
-          {best ? `backtest-validated signal · ${best.fc.kind}` : "evidence gate"}
+          {best ? `${COPY.todaysChip} · ${best.fc.kind}` : "evidence gate"}
         </span>
         <Link
           href="/proof"
@@ -211,7 +212,7 @@ export default function TodaysRead({
                 or not calls of its kind have since resolved live. How many have
                 is the row's evidenceCaveat (in the HelpTip below, from the
                 daemon's live count); how they scored is /api/track-record's. */}
-            Backtested accuracy in this conviction band:{" "}
+            {COPY.todaysAcc}{" "}
             <span className="tnum font-semibold" style={{ color: "var(--text)" }}>
               {pct(best.fc.historicalAccuracy)}
             </span>{" "}
@@ -228,7 +229,7 @@ export default function TodaysRead({
               </>
             ) : null}
             {best.fc.tier ? ` · ${best.fc.tier}` : ""}). This is a{" "}
-            {best.persistenceOnly ? "persistence statistic" : "measured-skill forecast"} about
+            {best.persistenceOnly ? "persistence statistic" : COPY.todaysSkill} about
             market <em>structure</em>, not a price target.
           </p>
           <HypotheticalNote short />

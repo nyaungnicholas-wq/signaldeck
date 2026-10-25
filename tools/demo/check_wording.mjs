@@ -2,7 +2,11 @@
 // demo wording and none of the live-only lines; a normal build the released wording and
 // none of the demo lines. The rendered half of web/src/lib/demoCopy.test.mjs, which pins the strings.
 // usage: node tools/demo/check_wording.mjs <baseUrl> <demo|live>
+// The member pages render client-side behind the stub's demo-member session, so they are
+// read from a headless browser (web/node_modules/playwright), not from the server HTML.
+import { createRequire } from "node:module";
 import { siteCopy } from "../../web/src/lib/demoCopy.ts";
+const { chromium } = createRequire(new URL("../../web/package.json", import.meta.url))("playwright");
 
 const [base, mode] = process.argv.slice(2);
 if (!base || !["demo", "live"].includes(mode)) {
@@ -21,6 +25,17 @@ const CHECKS = [
 	["/volatility", LIVE.volRules, DEMO.volRules],
 	["/accuracy", "past the 2026-07-27..08-06 collapsed cross-sections", "every row here is a synthetic demo record"],
 	["/accuracy", "FLAGSHIP RETIRED 2026-07-24", null],
+	["/", LIVE.recordTitle, DEMO.recordTitle],
+	["/accuracy", LIVE.accuracyLead, DEMO.accuracyLead],
+];
+// member pages (review R1), compared case-blind: panel headings are CSS upper-cased
+const MEMBER = [
+	["/watchlist", "watchFooter"], ["/watchlist", "watchFooterEnd"], ["/watchlist", "hypoShort"],
+	["/s/stocks/DEMOA", "signalsTitle"], ["/s/stocks/DEMOA", "signalsSub"], ["/s/stocks/DEMOA", "symbolFooter"],
+	["/s/stocks/DEMOA", "symbolSources"], ["/s/stocks/DEMOA", "financialsSource"], ["/s/stocks/DEMOA", "filingsSource"],
+	["/journal", "journalFooter"],
+	["/today", "todayLead"], ["/today", "whatSignalDeckIs"], ["/today", "riskLead"], ["/today", "todaysAcc"],
+	["/today", "volLeadTested"], ["/today", "hypoNote"],
 ];
 
 const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", nbsp: " " };
@@ -53,6 +68,30 @@ for (const [p, live, demo] of CHECKS) {
 	const t = pages[p] ?? "";
 	if (want) check(t.includes(want), `${p} present: ${want.slice(0, 70)}`);
 	if (not) check(!t.includes(not), `${p} absent:  ${not.slice(0, 70)}`);
+}
+const browser = await chromium.launch();
+const member = {};
+for (const p of new Set(MEMBER.map(([p]) => p))) {
+	const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
+	try {
+		await page.goto(base + p, { waitUntil: "networkidle", timeout: 60_000 });
+		await page.waitForTimeout(1500);
+		const h = await page.evaluate(() => document.documentElement.scrollHeight);
+		for (let y = 0; y < h; y += 400) await page.evaluate((y) => scrollTo(0, y), y);
+		await page.waitForTimeout(800);
+		member[p] = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, " ").toLowerCase();
+		check(!member[p].includes("not demo data"), `${p} rendered (no "not demo data" refusal)`);
+	} catch (e) {
+		member[p] = "";
+		check(false, `${p} browser load failed: ${e.message}`);
+	}
+}
+await browser.close();
+const low = (s) => s.replace(/\s+/g, " ").trim().toLowerCase();
+for (const [p, key] of MEMBER) {
+	const [want, not] = mode === "demo" ? [DEMO[key], LIVE[key]] : [LIVE[key], DEMO[key]];
+	check(member[p].includes(low(want)), `${p} present: ${key}: ${want.trim().slice(0, 60)}`);
+	check(!member[p].includes(low(not)), `${p} absent:  ${key}: ${not.trim().slice(0, 60)}`);
 }
 if (mode === "demo") check((pages["/"] ?? "").includes("DEMO DATA"), "/ carries the DEMO DATA banner");
 else check(!Object.values(pages).some((t) => t?.includes("synthetic values for illustration")), "no page carries the demo banner phrase");

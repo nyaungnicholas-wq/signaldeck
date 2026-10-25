@@ -21,6 +21,7 @@ import Withheld from "@/components/Withheld";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import HypotheticalNote from "@/components/HypotheticalNote";
+import { COPY } from "@/lib/demoCopy";
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
@@ -82,10 +83,10 @@ export default function VolRegimeLead({
     .slice(0, 6);
 
   return (
-    <section className="panel" aria-label="volatility regime — the backtest-validated forecast">
+    <section className="panel" aria-label={`volatility regime — ${COPY.volLeadChip}`}>
       <div className="panel-h flex-wrap gap-2">
         <span>VOLATILITY REGIME</span>
-        <span className="chip px-2 py-[1px] text-[0.75rem]">the backtest-validated forecast</span>
+        <span className="chip px-2 py-[1px] text-[0.75rem]">{COPY.volLeadChip}</span>
         <HelpTip label="Why this one leads">
           {data.whyHonest || data.what}
           {data.what && data.whyHonest ? ` ${data.what}` : ""}
@@ -104,8 +105,7 @@ export default function VolRegimeLead({
         <p className="mb-3 text-[0.8rem] leading-relaxed">
           Will this stock move around more than usual over the next three months, or less?{" "}
           <span style={{ color: "var(--faint)" }}>
-            This is about how much it moves, not which way. It is our most-tested call &mdash;
-            checked against history, then checked again by a second build.
+            This is about how much it moves, not which way. {COPY.volLeadTested}
           </span>
         </p>
 

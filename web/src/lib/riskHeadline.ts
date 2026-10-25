@@ -10,6 +10,8 @@
 // Anything else, or a malformed payload, is "unavailable": no claim either way.
 // Plain TS (no JSX) so node --test can run it.
 
+import { COPY } from "./demoCopy.ts"; // the lead's words, or a demo build's
+
 export type RiskState = "pass" | "fail" | "insufficient" | "accruing" | "unavailable";
 
 export interface RiskHorizon {
@@ -123,10 +125,7 @@ export function riskHeadline(record: unknown): RiskHeadline {
       .join("; ");
     // No adjective the verdict has not earned: nothing is "most predictable"
     // before the registered test has passed (H-11).
-    const lead =
-      verdict === "ACCRUING"
-        ? "SignalDeck’s volatility forecast has reached its live evidence floor and awaits its pre-registered grade: "
-        : "SignalDeck’s volatility forecast is being graded live against a pre-registered test: ";
+    const lead = verdict === "ACCRUING" ? COPY.riskLeadAccruing : COPY.riskLead;
     return {
       ...base,
       state: verdict === "ACCRUING" ? "accruing" : "insufficient",

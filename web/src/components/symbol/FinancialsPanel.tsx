@@ -15,6 +15,7 @@ import { fundamentals, pollMs, POLL_SLOW, withheldFromMessage, type FundamentalR
 import Withheld from "@/components/Withheld";
 import { ago, fmtDate } from "@/lib/format";
 import Spark from "@/components/Spark";
+import { COPY } from "@/lib/demoCopy";
 
 function fmtUSDish(v: number): string {
   if (!isFinite(v)) return "—";
@@ -84,7 +85,7 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
       <div className="panel-h flex-wrap gap-2">
         FINANCIALS · {symbol}
         <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          SEC EDGAR XBRL, as filed · swept ~daily
+          {COPY.financialsSource}
           {fetchedAt > 0 ? ` · fetched ${ago(fetchedAt)}` : ""}
         </span>
       </div>

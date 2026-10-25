@@ -23,6 +23,7 @@ import { ago } from "@/lib/format";
 import HelpTip from "@/components/HelpTip";
 import Withheld from "@/components/Withheld";
 import { withheldFromMessage } from "@/lib/withheld";
+import { COPY } from "@/lib/demoCopy";
 
 function levelColor(level: string): string {
   switch (level) {
@@ -99,7 +100,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
           </span>
         )}
         <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          EDGAR · lags by law (Form 4 ~2bd, 13F ≤45d)
+          {COPY.filingsSource}
         </span>
       </div>
 

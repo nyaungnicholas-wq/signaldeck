@@ -15,6 +15,7 @@ import VolRegimeLead from "@/components/home/VolRegimeLead";
 import RiskFirst from "@/components/home/RiskFirst";
 import ProofStrip from "@/components/home/ProofStrip";
 import { WHAT_SIGNALDECK_IS } from "@/lib/hypothetical";
+import { COPY } from "@/lib/demoCopy";
 
 const MORE = [
   { href: "/market/regimes", label: "All regime reads" },
@@ -53,10 +54,10 @@ export default function TodayPage() {
         <p className="m-0 mt-1 max-w-[75ch] text-[0.85rem]" style={{ color: "var(--dim)" }}>
           {withheld
             ? "Member accounts keep a watchlist. SignalDeck’s reads are withheld while the market-data licence is unresolved."
-            : "SignalDeck’s regime reads, each with the accuracy it measured in backtests, and the live record that grades every call. What it cannot predict, it says so."}
+            : COPY.todayLead}
         </p>
         <p className="m-0 mt-1 max-w-[75ch] text-[0.8rem]" style={{ color: "var(--faint)" }}>
-          {WHAT_SIGNALDECK_IS}
+          {COPY.demo ? COPY.whatSignalDeckIs : <>{WHAT_SIGNALDECK_IS}</>}
         </p>
       </header>
       {/* Risk first (plan step 9): leads only when the live volatility verdict passes. */}

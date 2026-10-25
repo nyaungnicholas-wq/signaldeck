@@ -212,9 +212,16 @@ def label(p, h, v):
     return p + (f" ({h}{', ' + v if v else ''})" if h else "")
 
 
+# Draw version of the record figures (review R4, 2026-10-25): the first draws showed
+# 46.1% accuracy and 2,479 resolved forecasts, both figures in the real public record.
+# Under "v13" no record figure (accuracy, baseline, skill, count) equals one there in an
+# accuracy or sample context; the selfcheck refuses the known real ones (PUBLIC_FIGURES).
+DRAW = "v13"
+
+
 def predictor_figures(p, h, st):
     """n, accuracy, baseline, skill, days and interval: only RETIRED (below) and OK (above) rows are graded."""
-    r = rng("acc", p, h)
+    r = rng("acc", p, h, DRAW)
     graded = st in ("RETIRED", "OK")
     n = r.randint(1500, 6000) if graded else r.randint(60, 400)
     null = round(r.uniform(0.51, 0.55), 3)
@@ -352,7 +359,7 @@ def track_record(q):
 def vol_record(_q):
     hs = []
     for h in (1, 5):
-        r = rng("volrec", h)
+        r = rng("volrec", h, DRAW)
         hs.append({"horizon": h, "n": r.randint(1500, 2600), "distinctDays": 23 if h == 1 else 19,
                    "ungradable": r.randint(10, 60), "sufficient": False, "verdict": "INSUFFICIENT",
                    "verdictReason": "Demo: fewer than 60 distinct trading days, so no verdict is given.",
@@ -650,6 +657,10 @@ REAL_NAMES = {"flagship", "directional-ensemble", "gapfill5", "vol21", "vol63", 
 REAL_DATES = ("2026-07-18", "2026-07-24", "2026-07-27", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
               "2026-08-17", "2026-09-25")
 VERDICT_KEYS = {"publication_status", "verdict", "retired", "retirement_sticky", "reasons"}
+# Accuracy, skill and sample figures of the real public record (git grep origin/public-launch,
+# 2026-10-25): the 1w directional accuracy 46.1% and always-up 54.5% over n 9,118, the retired
+# model's 2,479 graded rows at -13.0pp, and a 1d leg's -3.6pp.
+PUBLIC_FIGURES = {"46.1%", "54.5%", "9,118", "2,479", "13.0pp", "3.6pp"}
 
 
 def walk(o):
@@ -698,6 +709,13 @@ def selfcheck():
     text = json.dumps(everything)
     found = [d for d in REAL_DATES if d in text] + [w for w in ("RiskMetrics",) if w in text]
     assert not found, f"real record date or name in the output: {found}"
+    shown = set()  # the record figures as the pages print them (review R4)
+    for x in acc["rows"] + vol_record({})["horizons"]:
+        if x.get("live_acc") is not None:
+            shown |= {f"{x['live_acc'] * 100:.1f}%", f"{x['null_acc'] * 100:.1f}%", f"{abs(x['skill']) * 100:.1f}pp"}
+        shown.add(f"{x.get('live_n', x.get('n')):,}")
+    clash = sorted(shown & PUBLIC_FIGURES)
+    assert not clash, f"a record figure equals one in the real public record: {clash}"
     print(f"DEMO STUB SELFCHECK OK ({len(out)} routes, tickers {sorted(tickers)}, record names {sorted(names)})")
 
 

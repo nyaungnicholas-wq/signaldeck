@@ -1,4 +1,5 @@
 import { HYPOTHETICAL_NOTE, HYPOTHETICAL_SHORT, LIVE_GRADED_NOTE } from "@/lib/hypothetical";
+import { COPY } from "@/lib/demoCopy"; // a demo build's own words (its figures are synthetic)
 
 /**
  * The one hypothetical-performance disclosure. `short` for a line beside a
@@ -19,7 +20,9 @@ export default function HypotheticalNote({
       style={{ color: "var(--faint)" }}
       data-testid="hypothetical-note"
     >
-      {live ? LIVE_GRADED_NOTE : short ? HYPOTHETICAL_SHORT : HYPOTHETICAL_NOTE}
+      {COPY.demo
+        ? live ? COPY.liveGradedNote : short ? COPY.hypoShort : COPY.hypoNote
+        : live ? LIVE_GRADED_NOTE : short ? HYPOTHETICAL_SHORT : HYPOTHETICAL_NOTE}
     </p>
   );
 }
