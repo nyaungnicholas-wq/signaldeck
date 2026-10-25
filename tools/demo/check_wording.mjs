@@ -4,6 +4,7 @@
 // usage: node tools/demo/check_wording.mjs <baseUrl> <demo|live>
 // The member pages render client-side behind the stub's demo-member session, so they are
 // read from a headless browser (web/node_modules/playwright), not from the server HTML.
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { siteCopy } from "../../web/src/lib/demoCopy.ts";
 const { chromium } = createRequire(new URL("../../web/package.json", import.meta.url))("playwright");
@@ -15,6 +16,17 @@ if (!base || !["demo", "live"].includes(mode)) {
 }
 const LIVE = siteCopy("");
 const DEMO = siteCopy("demo");
+// Two released lines quote dates of the real record. They are kept here as the SHA-256 of
+// the exact line plus its shape, not as literals (R2 rule, review gap 14): a line is
+// present when some text matching the shape hashes to it. Same answer as includes().
+const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+const hashed = (hex, shape, label) => ({ hex, re: new RegExp(`(?=(${shape.source}))`, "g"), label });
+const has = (t, w) => (typeof w === "string" ? t.includes(w) : [...t.matchAll(w.re)].some((m) => sha256(m[1]) === w.hex));
+const show = (w) => (typeof w === "string" ? w.slice(0, 70) : w.label);
+const COLLAPSED = hashed("9581ff7d53b2c9c6ac7d7e4d37219a844fcea6dbb70082ee2dbaaaa083a55d68",
+	/past the \d{4}-\d{2}-\d{2}\.\.\d{2}-\d{2} collapsed cross-sections/, "past the <real window> collapsed cross-sections (sha256 9581ff7d)");
+const RETIRED = hashed("4c962493ffe5301fb78edf8c508d162d0dedafcd0eb3a60c43494ee46e6e40ac",
+	/FLAGSHIP RETIRED \d{4}-\d{2}-\d{2}/, "FLAGSHIP RETIRED <real date> (sha256 4c962493)");
 const CHECKS = [
 	["/", LIVE.skillLine, DEMO.skillLine],
 	["/", LIVE.receiptsLead, DEMO.receiptsLead],
@@ -23,8 +35,8 @@ const CHECKS = [
 	["/", LIVE.signupBody, DEMO.signupBody],
 	["/proof", LIVE.proofSource, DEMO.proofSource],
 	["/volatility", LIVE.volRules, DEMO.volRules],
-	["/accuracy", "past the 2026-07-27..08-06 collapsed cross-sections", "every row here is a synthetic demo record"],
-	["/accuracy", "FLAGSHIP RETIRED 2026-07-24", null],
+	["/accuracy", COLLAPSED, "every row here is a synthetic demo record"],
+	["/accuracy", RETIRED, null],
 	["/", LIVE.recordTitle, DEMO.recordTitle],
 	["/accuracy", LIVE.accuracyLead, DEMO.accuracyLead],
 ];
@@ -68,8 +80,8 @@ for (const [p, live, demo] of CHECKS) {
 	const want = mode === "demo" ? demo : live;
 	const not = mode === "demo" ? live : demo;
 	const t = pages[p] ?? "";
-	if (want) check(t.includes(want), `${p} present: ${want.slice(0, 70)}`);
-	if (not) check(!t.includes(not), `${p} absent:  ${not.slice(0, 70)}`);
+	if (want) check(has(t, want), `${p} present: ${show(want)}`);
+	if (not) check(!has(t, not), `${p} absent:  ${show(not)}`);
 }
 const browser = await chromium.launch();
 const member = {};

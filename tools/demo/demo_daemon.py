@@ -127,11 +127,11 @@ def bars(symbol, tf="1d", limit=250):
 REGIMES = {"vol21": ("calm", "elevated"), "trend21": ("uptrend", "downtrend"), "liquidity21": ("liquid", "thin")}
 REGIME_WORD = {"vol21": "volatility", "trend21": "trend", "liquidity21": "liquidity"}
 # Draw version of the regime reads (v3 review B3-3, 2026-10-25): the first draw showed DEMOA's
-# conviction 91.0% and its quarterly banded accuracy 78.4%, both figures in the real public
-# record. LEAD_CONVICTION is DEMOA's (it leads every kind so the demo's first stock has a read).
+# conviction and its quarterly banded accuracy at two figures of the real public record.
+# LEAD_CONVICTION is DEMOA's (it leads every kind so the demo's first stock has a read).
 # Under "r721" (and 0.88) none of the scene-7 regime figures (the watchlist's DEMOA, DEMOB and
 # DEMOC chips, DEMOA's conviction, banded accuracy and n) occurs in the public record outside
-# .sql, .json and .csv files; the selfcheck refuses the two known real ones (PUBLIC_FIGURES).
+# .sql, .json and .csv files; the selfcheck refuses the two known real ones (PUBLIC_FIGURE_SHA256).
 RDRAW = "r721"
 LEAD_CONVICTION = 0.88
 
@@ -220,10 +220,10 @@ def label(p, h, v):
     return p + (f" ({h}{', ' + v if v else ''})" if h else "")
 
 
-# Draw version of the record figures (review R4, 2026-10-25): the first draws showed
-# 46.1% accuracy and 2,479 resolved forecasts, both figures in the real public record.
+# Draw version of the record figures (review R4, 2026-10-25): the first draws showed an
+# accuracy and a resolved-forecast count that are both figures of the real public record.
 # Under "v13" no record figure (accuracy, baseline, skill, count) equals one there in an
-# accuracy or sample context; the selfcheck refuses the known real ones (PUBLIC_FIGURES).
+# accuracy or sample context; the selfcheck refuses the known real ones (PUBLIC_FIGURE_SHA256).
 DRAW = "v13"
 
 
@@ -656,20 +656,44 @@ def all_gets():
 
 
 # The real record this stub must never echo: predictor and claim names, and the
-# dates of real verdicts and windows (retirement and survivorship epoch 2026-07-24,
-# first structural call 2026-07-18, collapsed cross-sections 2026-07-27..08-06,
-# registered first-gradable date and grading epoch 2026-08-07, and later dates).
+# dates of real verdicts and windows (the retirement and survivorship epoch, the
+# first structural call, the collapsed cross-sections, the registered first-gradable
+# date and grading epoch, and later dates).
 REAL_NAMES = {"flagship", "directional-ensemble", "gapfill5", "vol21", "vol63", "trend21", "trend63", "liquidity21",
               "liquidity21-crypto", "trend21-crypto", "filingsdrift21", "market-benchmark", "prequential-majority",
               "vol-forecast-har", "auto-retire-rule", "grading-protocol"}
-REAL_DATES = ("2026-07-18", "2026-07-24", "2026-07-27", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
-              "2026-08-17", "2026-09-25")
+# The dates and figures are stored as SHA-256 of the exact string (sha() below), not
+# as literals, so this tracked file carries none of the real record's values (R2 rule,
+# review gap 14). The check hashes each candidate in the output and compares.
+# ponytail: a hash of a short date or percentage is trivially brute-forced; it keeps
+# the literal out of the file and out of greps, it does not make it secret.
+REAL_DATE_SHA256 = frozenset({
+    "84c891e73298e979d9d12a975e60ec9505a4c67c50b5d3c50e69d29d8cfb5b71",
+    "5c20e4f57ac9e3d5d51bf61a5672166faba14df6f6392cb74fe45ca8c2b53604",
+    "35c3fa061a14ba5d622c4f02873a8d73c90de9e6b94b32f0ccf3ef94b9465f73",
+    "f48cfc10d1af69ee7c7e270e7bcbfba756a64a64ae91473c544442d174a48d29",
+    "ba288c795c142c7e81be91b5d83fc39717a74007e9119362c5caa1bc1d69cf4e",
+    "d6ea804d536c3e2d8e84f5b4ddeee64c8a50a1a34ec0ebd8ebba0f3afff56ec1",
+    "66ee466d12f6f42f840e3ebd93312a9bfa9dc776d8d5cf2c03e772dcea31953b",
+    "aeab91871bf04623c49f458b74408f42d2cf9b814ab4bda068e72c7a5666ba26",
+    "e4bc2ddfd7fb7c8f9b1d17e4273031e2c91939b36926b8afe47e795d160e75dc",
+})
+DATE_SHAPE = re.compile(r"(?=(\d{4}-\d{2}-\d{2}))")  # every position, overlaps included
 VERDICT_KEYS = {"publication_status", "verdict", "retired", "retirement_sticky", "reasons"}
 # Accuracy, skill and sample figures of the real public record (git grep origin/public-launch,
-# 2026-10-25): the 1w directional accuracy 46.1% and always-up 54.5% over n 9,118, the retired
-# model's 2,479 graded rows at -13.0pp, and a 1d leg's -3.6pp; and (v3 review B3-3) trend21's
-# moderate-band accuracy 91.0% and the gap-fill rate 78.4%.
-PUBLIC_FIGURES = {"46.1%", "54.5%", "9,118", "2,479", "13.0pp", "3.6pp", "91.0%", "78.4%"}
+# 2026-10-25): the 1w directional accuracy and always-up rate with their n, the retired
+# model's graded-row count and skill, a 1d leg's skill; and (v3 review B3-3) trend21's
+# moderate-band accuracy and the gap-fill rate. Same SHA-256 form as REAL_DATE_SHA256.
+PUBLIC_FIGURE_SHA256 = frozenset({
+    "90837d4675b596e83620f6fe2a6213b906d73896a55729126268aa9dd6e674ae",
+    "da135bc719aa7d5b8590f9f0d8c65b4d1e86ecd3205557ab10aee789144c5938",
+    "2a19c28de834b9aa56da60daf5e3dd4e2bf28e7e83bbbe02f7fa67a14a5752e6",
+    "e8c463c8002c19e4350bb4cabfff906ffa8fb715a92c3ac3c2d86005830b52d4",
+    "48bf2322bc657fdb5d03b929101b98eaedda605c863ff4e5d08e9a062a94a651",
+    "6c179cd45449dfe004bbc9935ee567a77d64bfd826fcd6f34a90002debf6492b",
+    "a1d2f94e1eb535341ec2bf4fd7d9ebe920458b4432592fceb3bf7e90b919ffd3",
+    "23eee34b06b2ffa3149b1d926dd6312f3004753eeca85d37eb1a84ca15fb2554",
+})
 
 
 def walk(o):
@@ -716,7 +740,8 @@ def selfcheck():
     names = {str(x.get("predictor", x.get("kind"))).split(" (")[0] for x in acc["rows"] + reg["rows"] + recs}
     assert all(n.startswith("demo-") for n in names), f"non-fictional name in the record: {sorted(names)}"
     text = json.dumps(everything)
-    found = [d for d in REAL_DATES if d in text] + [w for w in ("RiskMetrics",) if w in text]
+    found = sorted({d for d in DATE_SHAPE.findall(text) if sha(d) in REAL_DATE_SHA256})
+    found += [w for w in ("RiskMetrics",) if w in text]
     assert not found, f"real record date or name in the output: {found}"
     shown = set()  # the record figures as the pages print them (review R4)
     for x in acc["rows"] + vol_record({})["horizons"]:
@@ -726,7 +751,7 @@ def selfcheck():
     for x in [x for k in REGIMES for x in regime_rows(k)] + vol_regime({})["forecasts"]:  # regime reads (B3-3)
         shown |= {f"{x['conviction'] * 100:.1f}%", f"{x['historicalAccuracy'] * 100:.1f}%", f"{x['n']:,}"}
     shown |= {f"{LEDGER_N:,}", f"{LEDGER_N - 137:,}"}
-    clash = sorted(shown & PUBLIC_FIGURES)
+    clash = sorted(s for s in shown if sha(s) in PUBLIC_FIGURE_SHA256)
     assert not clash, f"a record figure equals one in the real public record: {clash}"
     print(f"DEMO STUB SELFCHECK OK ({len(out)} routes, tickers {sorted(tickers)}, record names {sorted(names)})")
 
