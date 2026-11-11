@@ -27,7 +27,7 @@
       <UserId>{{USER}}</UserId>
     </LogonTrigger>
     <TimeTrigger>
-      <StartBoundary>2026-08-04T00:00:00-07:00</StartBoundary>
+      <StartBoundary>2026-08-04T00:00:00</StartBoundary>
       <Repetition>
         <Interval>PT5M</Interval>
         <StopAtDurationEnd>true</StopAtDurationEnd>

@@ -28,7 +28,7 @@
   </Settings>
   <Triggers>
     <TimeTrigger>
-      <StartBoundary>2026-09-05T19:59:39-07:00</StartBoundary>
+      <StartBoundary>2026-09-05T19:59:39</StartBoundary>
       <Repetition>
         <Interval>PT5M</Interval>
         <StopAtDurationEnd>true</StopAtDurationEnd>
