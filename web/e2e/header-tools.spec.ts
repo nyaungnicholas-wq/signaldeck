@@ -1,10 +1,12 @@
 import { test, expect } from "@playwright/test";
 import type { BrowserContext } from "@playwright/test";
+import { isolatedDaemon } from "./isolation";
 
 const SMOKE_USER = "e2e-smoke";
 const SMOKE_PASS = "E2eSmoke!2026";
 
 async function signIn(context: BrowserContext): Promise<void> {
+  isolatedDaemon(); // registers an account: never against production
   const headers = { "X-Signaldeck": "1" };
   const data = { username: SMOKE_USER, password: SMOKE_PASS };
   const reg = await context.request.post("/api/auth/register", { headers, data });

@@ -12,6 +12,10 @@ import { defineConfig, devices } from "@playwright/test";
 // /api/. A GitHub runner has no daemon, and the database it reads is ~6 GB and
 // gitignored, so the suite cannot mean there what it means here.
 //
+// ISOLATION: the specs that sign in WRITE (account, paper orders, watchlist).
+// They refuse to run unless SIGNALDECK_DAEMON names an isolated daemon on a
+// port other than 8322 (e2e/isolation.ts); the default is production.
+//
 // It is a PRE-RELEASE MANUAL GATE instead — docs/PUBLIC_RELEASE_PLAN.md — run
 // against a real daemon with `npm run e2e`. Wiring it into CI would need the
 // daemon built, booted on a temp database and seeded, and a browser download

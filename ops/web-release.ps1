@@ -92,6 +92,38 @@ function Remove-StalePrevBuilds([string]$WebDir, [string]$RecordPath, [int]$Keep
     return $removed
 }
 
+# The swap is two moves. If the second throws (a file in the candidate still
+# held by a process that outlived the task) the first has already taken web\.next
+# away, and the caller used to die there with the task stopped: site down, no
+# restart. This never throws. On failure it puts the previous build back and
+# says so; the caller restarts the task either way.
+function Switch-WebBuild([string]$LiveDist, [string]$CandidateDir, [string]$Kept) {
+    $movedAside = $false
+    try {
+        if (Test-Path -LiteralPath $LiveDist) {
+            Move-Item -LiteralPath $LiveDist -Destination $Kept
+            $movedAside = $true
+        }
+        Move-Item -LiteralPath $CandidateDir -Destination $LiveDist
+        return @{ Ok = $true; MovedAside = $movedAside; Restored = $false; Error = '' }
+    } catch {
+        $why = [string]$_.Exception.Message
+        $restored = $false
+        if ($movedAside) {
+            try {
+                # A failed directory move falls back to copy-then-delete, so a
+                # PARTIAL web\.next can exist here. Set it aside, never serve it.
+                if (Test-Path -LiteralPath $LiveDist) {
+                    Move-Item -LiteralPath $LiveDist -Destination ($Kept + '-failed')
+                }
+                Move-Item -LiteralPath $Kept -Destination $LiveDist
+                $restored = $true
+            } catch { $restored = $false }
+        }
+        return @{ Ok = $false; MovedAside = $movedAside; Restored = $restored; Error = $why }
+    }
+}
+
 if ($SelfTestOnly) { return }
 
 if (-not (Test-Path -LiteralPath (Join-Path $Web 'package.json'))) {
@@ -259,14 +291,22 @@ try {
     Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
 
-    if (Test-Path -LiteralPath $LiveDist) {
-        Write-Log ("moving the previous build to {0}" -f $Kept)
-        Move-Item -LiteralPath $LiveDist -Destination $Kept
-    } else {
+    $swap = Switch-WebBuild -LiveDist $LiveDist -CandidateDir $CandidateDir -Kept $Kept
+    if (-not $swap.MovedAside) {
         Write-Log 'there was no web\.next to keep'
         $Kept = '(none)'
+    } else {
+        Write-Log ("moved the previous build to {0}" -f $Kept)
     }
-    Move-Item -LiteralPath $CandidateDir -Destination $LiveDist
+    if (-not $swap.Ok) {
+        # Whatever is in web\.next now, the task must not stay stopped.
+        Write-Log ("SWAP FAILED: {0}" -f $swap.Error)
+        if ($swap.Restored) { Write-Log 'the previous build is back in web\.next' }
+        elseif ($swap.MovedAside) { Write-Log ("COULD NOT RESTORE the previous build; it is at {0}" -f $Kept) }
+        Write-Log ("restarting task '{0}' on the previous build; nothing was promoted" -f $Task)
+        Start-ScheduledTask -TaskName $Task
+        exit 1
+    }
     Write-Log ("starting task '{0}'" -f $Task)
     Start-ScheduledTask -TaskName $Task
 

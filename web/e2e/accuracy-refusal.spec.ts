@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { BrowserContext } from "@playwright/test";
+import { isolatedDaemon } from "./isolation";
 
 // Every refusal daemon/internal/api/accuracy.go emits. REFUSED_UNAVAILABLE is
 // the collapse gate's check outage (since 2026-09-13), distinct from a finding.
@@ -34,6 +35,7 @@ const SMOKE_PASS = "E2eSmoke!2026";
 // in a full run, 2 passed / 2 skipped when run alone after smoke had created
 // the user.
 async function signIn(context: BrowserContext): Promise<void> {
+  isolatedDaemon(); // registers an account: never against production
   const headers = { "X-Signaldeck": "1" };
   const data = { username: SMOKE_USER, password: SMOKE_PASS };
   const reg = await context.request.post("/api/auth/register", { headers, data });

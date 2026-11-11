@@ -1,4 +1,5 @@
 import { expect, type BrowserContext } from "@playwright/test";
+import { isolatedDaemon } from "./isolation";
 
 /**
  * THE SHARED E2E IDENTITY.
@@ -54,6 +55,8 @@ function retryAfterMs(headers: Record<string, string>, attempt: number): number 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
+  // Before the first write: never against the production daemon (isolation.ts).
+  isolatedDaemon();
   const headers = { "X-Signaldeck": "1" };
   const body = { username: SMOKE_USER, password: SMOKE_PASS };
 
