@@ -16,6 +16,18 @@ export function fmtPct(v: number, signed = true): string {
   return `${s}${v.toFixed(2)}%`;
 }
 
+// The daemon sends returns, VaR, stress shocks and P&L as FRACTIONS (0.02 =
+// 2%). fmtPct takes a value already in percent, so passing a fraction straight
+// in showed a 10% gain as "+0.10%" and a 2% loss on $50,000 as $10.
+export function fmtFracPct(frac: number, signed = true): string {
+  return fmtPct(frac * 100, signed);
+}
+
+/** Signed dollar amount of a fractional move on a notional. */
+export function fracUSD(frac: number, notional: number): number {
+  return frac * notional;
+}
+
 export function fmtScore(v: number): string {
   if (!isFinite(v)) return "—";
   return `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;

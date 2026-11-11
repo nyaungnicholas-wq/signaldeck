@@ -8,13 +8,14 @@
 // a click/keyboard HelpTip.
 
 import { type RiskReport } from "@/lib/api";
-import { fmtPct } from "@/lib/format";
+import { fmtFracPct, fracUSD } from "@/lib/format";
 import EmptyState from "@/components/EmptyState";
 import HelpTip from "@/components/HelpTip";
 
-// $ amount from a loss percent, always shown as the dollar magnitude lost.
-function lossUSD(pct: number, notional: number): number {
-  return (Math.abs(pct) / 100) * notional;
+// $ amount from a loss FRACTION (the daemon sends 0.02 for 2%), always shown
+// as the dollar magnitude lost.
+function lossUSD(frac: number, notional: number): number {
+  return Math.abs(fracUSD(frac, notional));
 }
 
 function fmtUSD(v: number): string {
@@ -51,7 +52,7 @@ function VaRCell({
         className="tnum text-[1.5rem] font-bold leading-none"
         style={{ color: has ? "var(--bad)" : "var(--faint)", opacity: faded ? 0.75 : 1 }}
       >
-        {has ? `−${Math.abs(pct).toFixed(2)}%` : "—"}
+        {has ? `−${fmtFracPct(Math.abs(pct), false)}` : "—"}
       </div>
       <div className="tnum text-[0.75rem]" style={{ color: "var(--dim)" }}>
         {has ? `−$${fmtUSD(lossUSD(pct, notional))}` : "—"}
@@ -306,7 +307,7 @@ export default function RiskResults({
                       : s.PnLPct < 0
                         ? "var(--ask)"
                         : "var(--dim)";
-                  const usd = has ? (s.PnLPct / 100) * ranNotional : NaN;
+                  const usd = has ? fracUSD(s.PnLPct, ranNotional) : NaN;
                   return (
                     <tr
                       key={`${s.Name}:${i}`}
@@ -317,7 +318,7 @@ export default function RiskResults({
                         {s.Name}
                       </td>
                       <td className="px-3 py-2 text-right" style={{ color }}>
-                        {has ? fmtPct(s.PnLPct) : "—"}
+                        {has ? fmtFracPct(s.PnLPct) : "—"}
                       </td>
                       <td className="px-3 py-2 text-right" style={{ color }}>
                         {has

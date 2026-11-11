@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { api, type PositionRow } from "@/lib/api";
-import { ago, fmtPct, fmtPrice, fmtScore, fmtTs, scoreColor } from "@/lib/format";
+import { ago, fmtFracPct, fmtPrice, fmtScore, fmtTs, scoreColor, signColor } from "@/lib/format";
 import HelpTip from "@/components/HelpTip";
 
 export default function PositionsTable({
@@ -94,9 +94,15 @@ export default function PositionsTable({
                     </span>
                   )}
                 </td>
-                <td className="px-2 py-2 text-right" style={{ color: scoreColor(p.pnlPct) }}>
-                  {fmtPct(p.pnlPct)}
-                </td>
+                {p.unpriced ? (
+                  <td className="px-2 py-2 text-right" style={{ color: "var(--faint)" }} title="no price available; P&L unknown">
+                    —
+                  </td>
+                ) : (
+                  <td className="px-2 py-2 text-right" style={{ color: p.pnlPct === 0 ? "var(--dim)" : signColor(p.pnlPct) }}>
+                    {fmtFracPct(p.pnlPct)}
+                  </td>
+                )}
                 <td className="px-2 py-2 text-right">
                   {hasScore ? (
                     <span style={{ color: scoreColor(p.scoreAtEntry) }}>

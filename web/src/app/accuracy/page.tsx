@@ -595,9 +595,16 @@ export default async function AccuracyPage() {
   // rather than dropped silently — a reader must be able to tell "withheld"
   // from "there was never such a row".
   const approved = (r: RegistryRow) => !unapproved.includes(r.predictor);
+  // "Failures first" follows the DAEMON's status, the same one the row leads
+  // with. It used to sort on the grader's sentence, so a row the daemon had
+  // FAILED or RETIRED could sit below a healthy one.
+  const daemonFailed = (r: RegistryRow) => {
+    const p = pubFor(r.predictor);
+    return p ? p.publication_status === "FAILED" || p.publication_status === "RETIRED" : verdictOf(r).startsWith("FAILED");
+  };
   const directional = rows
     .filter((r) => r.family === "direction" && approved(r))
-    .sort((a, b) => Number(verdictOf(b).startsWith("FAILED")) - Number(verdictOf(a).startsWith("FAILED")));
+    .sort((a, b) => Number(daemonFailed(b)) - Number(daemonFailed(a)));
   const structural = rows.filter((r) => r.family === "structure" && approved(r));
   const pendingCount = structural.filter((r) => verdictOf(r).startsWith("PENDING")).length;
 
@@ -729,7 +736,25 @@ export default async function AccuracyPage() {
                       )}
                     </td>
                     <td className="tnum pr-4">{pct(r.claimed)}</td>
-                    <td style={{ color: verdictTone(verdictOf(r)) }}>{verdictOf(r)}</td>
+                    {/* daemon status first, grader sentence second and labelled:
+                        the same single verdict path as the directional rows */}
+                    <td>
+                      {(() => {
+                        const p = pubFor(r.predictor);
+                        if (!p) return <span style={{ color: verdictTone(verdictOf(r)) }}>{verdictOf(r)}</span>;
+                        return (
+                          <>
+                            <span data-testid="structural-status" style={{ color: statusTone(p.publication_status) }}>
+                              {p.publication_status}
+                              {p.retired ? " — retired; retirement does not lapse" : ""}
+                            </span>
+                            <span className="block text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                              Grader&apos;s sentence: {verdictOf(r)}
+                            </span>
+                          </>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 ))}
               </tbody>

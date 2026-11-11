@@ -4,7 +4,7 @@
 // /lab/portfolio page (pure refactor; behavior identical).
 
 import { type PortfolioResponse } from "@/lib/api";
-import { fmtPct, fmtPrice, scoreColor } from "@/lib/format";
+import { fmtFracPct, fmtPrice, signColor } from "@/lib/format";
 
 export default function SummaryBar({ stat }: { stat: PortfolioResponse["stat"] }) {
   const cells: { label: string; value: React.ReactNode }[] = [
@@ -15,8 +15,8 @@ export default function SummaryBar({ stat }: { stat: PortfolioResponse["stat"] }
     {
       label: "total P&L",
       value: (
-        <span className="tnum" style={{ color: scoreColor(stat.TotalPnLPct) }}>
-          {fmtPct(stat.TotalPnLPct)}
+        <span className="tnum" style={{ color: stat.TotalPnLPct === 0 ? "var(--dim)" : signColor(stat.TotalPnLPct) }}>
+          {fmtFracPct(stat.TotalPnLPct)}
           <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {stat.TotalPnLAbs >= 0 ? "+" : "−"}
             {fmtPrice(Math.abs(stat.TotalPnLAbs))}

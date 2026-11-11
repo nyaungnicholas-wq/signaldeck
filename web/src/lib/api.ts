@@ -1032,13 +1032,17 @@ export interface PositionRow {
   exitTs: number | null;
   lastPrice: number;
   pnlAbs: number;
+  /** A fraction (0.10 = 10%), not a percent. */
   pnlPct: number;
+  /** Marked at entry because no close could be read; P&L is unknown. */
+  unpriced?: boolean;
 }
 export interface PortfolioResponse {
   positions: PositionRow[] | null;
   stat: {
     GrossValue: number;
     TotalPnLAbs: number;
+    /** A fraction of total cost basis, not a percent. */
     TotalPnLPct: number;
     Winners: number;
     Losers: number;

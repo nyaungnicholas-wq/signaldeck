@@ -23,8 +23,9 @@ export default function PortfolioPage() {
   // out of the response — GrossValue is sum(|qty| * lastPrice) in dollars and
   // Winners is an integer count, so "Avg Score" showed 42000.00 and "Win Rate"
   // showed 3.0% for three winning positions. <SummaryBar> renders the same two
-  // fields correctly, forty lines down the same page, which is how a $42,000
-  // gross could sit under a hero tile labelled Avg Score.
+  // fields forty lines down the same page, which is how a $42,000 gross could
+  // sit under a hero tile labelled Avg Score. (TotalPnLPct is a FRACTION; both
+  // the tile below and SummaryBar scale it to percent.)
   const scored = positions.map((p) => p.scoreAtEntry).filter((s): s is number => typeof s === "number");
   const avgScore = scored.length > 0 ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
   // Winners and Losers count positions with STRICTLY positive / strictly
@@ -73,7 +74,7 @@ export default function PortfolioPage() {
                 value={totalPnL}
                 decimals={2}
                 prefix="$"
-                delta={stat?.TotalPnLPct}
+                delta={stat ? stat.TotalPnLPct * 100 : undefined}
                 glow={totalPnL > 0 ? "up" : totalPnL < 0 ? "down" : undefined}
                 i={0}
               />

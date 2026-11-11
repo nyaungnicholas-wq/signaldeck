@@ -40,7 +40,8 @@ export interface PlainCtx {
   n?: number;
   /** The gate threshold n must reach (for sample_gate wording). */
   minN?: number;
-  /** Benchmark for win-rate (realized base rate), 0..1. */
+  /** Benchmark for win-rate, 0..1: the MAJORITY-direction baseline (see
+   *  majorityBaseline), never the raw up-rate. */
   baseRate?: number;
   /** Horizon tag for wording ("1d", "1w", …). */
   horizon?: string;
@@ -303,7 +304,7 @@ export const PLAIN: Record<MetricKey, MetricDef> = {
     label: { simple: "how often right", pro: "win rate" },
     read(v, ctx) {
       const detail =
-        "Fraction of resolved predictions where the market moved the predicted way. Only meaningful against the base rate — the market drifts up on its own.";
+        "Fraction of resolved predictions where the market moved the predicted way. Only meaningful against always guessing the majority direction — the market drifts on its own.";
       if (bad(v, ctx) || typeof v !== "number") return noRead(detail);
       const base = ctx?.baseRate;
       let vs = "";
@@ -312,8 +313,8 @@ export const PLAIN: Record<MetricKey, MetricDef> = {
         const d = v - base;
         vs =
           Math.abs(d) < 0.005
-            ? ` — same as just guessing the base rate (${pct(base)})`
-            : ` — ${d > 0 ? "beats" : "LOSES to"} the ${pct(base)} base rate by ${pct(Math.abs(d), 1)}`;
+            ? ` — same as always guessing the majority direction (${pct(base)})`
+            : ` — ${d > 0 ? "beats" : "LOSES to"} the ${pct(base)} majority-guess baseline by ${pct(Math.abs(d), 1)}`;
         good = clamp(d * 10);
       }
       return {
@@ -330,10 +331,10 @@ export const PLAIN: Record<MetricKey, MetricDef> = {
     label: { simple: "the bar to beat", pro: "base rate" },
     read(v, ctx) {
       const detail =
-        "Realized up-rate of the sample — what a constant 'always up' forecast would score. Any claimed skill must beat this.";
+        "Realized up-rate of the sample. The bar to beat is the better constant guess: always up, or always down when the market fell more often than it rose.";
       if (bad(v, ctx) || typeof v !== "number") return noRead(detail);
       return {
-        plain: `the market rose ${pct(v)} of the time on its own — that's the bar to beat`,
+        plain: `the market rose ${pct(v)} of the time on its own — always guessing the majority direction scores ${pct(majorityBaseline(v) ?? v)}, the bar to beat`,
         detail,
         goodness: null,
         raw: pct(v, 1),
@@ -569,4 +570,13 @@ export function goodnessColor(g: Goodness): string {
   if (g > 0.15) return "var(--bid)";
   if (g < -0.15) return "var(--ask)";
   return "var(--dim)";
+}
+
+/** The honest benchmark for a directional win rate: the better constant guess.
+ *  The daemon sends it as naiveBaseline; when absent it is derived from the
+ *  up-rate. With a 44% up-rate the bar is 56%, not 44%. */
+export function majorityBaseline(upRate: number | null | undefined, naive?: number | null): number | undefined {
+  if (naive != null && Number.isFinite(naive)) return naive;
+  if (upRate == null || !Number.isFinite(upRate)) return undefined;
+  return Math.max(upRate, 1 - upRate);
 }

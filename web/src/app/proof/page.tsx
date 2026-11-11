@@ -576,7 +576,7 @@ export default function ProofPage() {
                 value={pct(tr.winRate)}
                 sub={
                   tr.naiveBaseline != null
-                    ? `vs ${pct(tr.naiveBaseline)} always-up`
+                    ? `vs ${pct(tr.naiveBaseline)} majority-direction baseline`
                       + (tr.edgeVsNaive != null
                           ? ` · ${tr.edgeVsNaive >= 0 ? "+" : ""}${(tr.edgeVsNaive * 100).toFixed(1)}pp`
                             + (tr.edgeVsNaive > 0 ? "" : " — does not beat the naive guess")

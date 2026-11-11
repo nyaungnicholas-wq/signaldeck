@@ -130,10 +130,10 @@ test("brier wording anchors 0.25 = coin flip, lower is better", () => {
 // ── win rate & base rate & lift ───────────────────────────────────────────
 test("win_rate is only 'good' relative to the base rate", () => {
   const beats = readMetric("win_rate", 0.58, { baseRate: 0.52 });
-  assert.match(beats.plain, /beats the 52% base rate/);
+  assert.match(beats.plain, /beats the 52% majority-guess baseline/);
   assert.ok(beats.goodness > 0);
   const loses = readMetric("win_rate", 0.5, { baseRate: 0.54 });
-  assert.match(loses.plain, /LOSES to the 54% base rate/);
+  assert.match(loses.plain, /LOSES to the 54% majority-guess baseline/);
   assert.ok(loses.goodness < 0);
   const noBase = readMetric("win_rate", 0.58);
   assert.equal(noBase.goodness, null, "no benchmark → no good/bad claim");
@@ -218,4 +218,16 @@ test("goodnessColor maps to design tokens", () => {
   assert.equal(goodnessColor(0.8), "var(--bid)");
   assert.equal(goodnessColor(-0.8), "var(--ask)");
   assert.equal(goodnessColor(0.05), "var(--dim)");
+});
+
+// The track record compared the win rate with the UP-rate. With the market up
+// 44% of the time, always guessing "down" scores 56%: a 50% win rate loses.
+test("win rate is judged against the majority baseline, not the up-rate", async () => {
+  const { majorityBaseline } = await import("./plain.ts");
+  assert.equal(majorityBaseline(0.44), 0.56);
+  assert.equal(majorityBaseline(0.44, 0.57), 0.57, "the daemon's own figure wins");
+  assert.equal(majorityBaseline(null), undefined);
+  const r = readMetric("win_rate", 0.5, { baseRate: majorityBaseline(0.44) });
+  assert.match(r.plain, /LOSES to the 56%/);
+  assert.ok(r.goodness < 0);
 });

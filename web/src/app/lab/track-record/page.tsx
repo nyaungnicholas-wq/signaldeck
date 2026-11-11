@@ -25,7 +25,7 @@ import {
   type TrackRecordWithGate,
 } from "@/lib/api";
 import { ago, fmtDate, fmtPct, signColor } from "@/lib/format";
-import { metricLabel, readMetric, type MetricKey, type PlainCtx } from "@/lib/plain";
+import { majorityBaseline, metricLabel, readMetric, type MetricKey, type PlainCtx } from "@/lib/plain";
 import Plain, { useViewMode } from "@/components/Plain";
 import GradeMeter from "@/components/viz/GradeMeter";
 import CellBar from "@/components/viz/CellBar";
@@ -109,6 +109,10 @@ export default function TrackRecordPage() {
   }, [horizon, retryTick]);
 
   const current = data && data.horizon === horizon ? data : null;
+  // The bar a win rate has to beat is the majority-direction guess the daemon
+  // sends as naiveBaseline, NOT the up-rate (baseRate): with the market up 44%
+  // of the time the bar is 56%.
+  const bar = current ? majorityBaseline(current.baseRate, current.naiveBaseline) : undefined;
   // Same verdict as the /proof headline: `intact` alone reads a regenerated chain green.
   const ledgerHead = current?.ledger ? ledgerHeadline(current.ledger) : null;
   const loading = !current && !err;
@@ -223,8 +227,8 @@ export default function TrackRecordPage() {
               value={current.winRate != null ? current.winRate * 100 : "withheld"}
               decimals={1}
               suffix={current.winRate != null ? "%" : ""}
-              sub={current.baseRate != null ? `base rate ${(current.baseRate * 100).toFixed(1)}%` : "vs realized outcomes"}
-              glow={current.winRate != null && current.baseRate != null && current.winRate > current.baseRate ? "up" : undefined}
+              sub={bar != null ? `majority baseline ${(bar * 100).toFixed(1)}%` : "vs realized outcomes"}
+              glow={current.winRate != null && bar != null && current.winRate > bar ? "up" : undefined}
               i={1}
             />
             <StatTile
@@ -318,7 +322,7 @@ export default function TrackRecordPage() {
                 over {(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol,
                 trading day) resolutions
                 {current.winRateCI ? ` · 95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}` : ""}
-                {current.baseRate != null ? ` · vs a ${pct(current.baseRate)} always-up base rate` : ""}
+                {bar != null ? ` · vs a ${pct(bar)} majority-direction baseline` : ""}
               </p>
             </section>
           )}
@@ -391,7 +395,7 @@ export default function TrackRecordPage() {
             <Stat
               metric="win_rate"
               value={current.winRate}
-              ctx={{ gated, n: current.independentN, baseRate: current.baseRate ?? undefined }}
+              ctx={{ gated, n: current.independentN, baseRate: bar }}
               raw={pct(current.winRate)}
               sub={
                 current.winRateCI
@@ -444,7 +448,7 @@ export default function TrackRecordPage() {
             gated={gated}
             n={current.independentN ?? 0}
             winRate={current.winRate}
-            baseRate={current.baseRate}
+            baseRate={bar}
             brier={current.brier}
             reliabilityScore={current.reliabilityScore}
           />
