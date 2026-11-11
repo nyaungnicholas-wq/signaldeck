@@ -109,7 +109,13 @@ func (w *SplitRepair) Run(ctx context.Context) (string, error) {
 		}
 
 		worst := rep.Suspects[len(rep.Suspects)-1]
-		if _, err := w.Alpaca.BackfillDaily(ctx, w.St, s.ID, s.Symbol); err != nil {
+		// Re-fetch the WHOLE stored daily series, not the rolling two years
+		// BackfillDaily assumes: hist-backfill deepens daily bars to 2019, so a
+		// two-year refetch repaired the recent bars and left everything older on
+		// the pre-split basis, a new seam two years back that the detector
+		// (recent damage only) never sees again.
+		start := splitRepairStart(bars[0].Ts, time.Unix(now, 0))
+		if _, err := w.Alpaca.BackfillDailyFrom(ctx, w.St, s.ID, s.Symbol, start); err != nil {
 			failed++
 			_ = w.St.RecordSplitRepair(ctx, s.ID, worst.Date, worst.NearestName,
 				len(rep.Suspects), false, err.Error(), now)
@@ -208,4 +214,17 @@ func (w *SplitRepair) repairIntraday(ctx context.Context, symbolID int64, symbol
 				"repaired but minute history may still be on a stale basis", symbol, err),
 		})
 	}
+}
+
+// splitRepairStart is where a split repair re-fetches daily bars from: the
+// earliest stored bar, and never later than the two-year window the repair
+// always covered.
+func splitRepairStart(earliestTs int64, now time.Time) time.Time {
+	start := now.UTC().AddDate(-2, 0, 0)
+	if earliestTs > 0 {
+		if e := time.Unix(earliestTs, 0).UTC(); e.Before(start) {
+			return e
+		}
+	}
+	return start
 }

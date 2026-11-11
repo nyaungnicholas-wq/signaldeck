@@ -265,6 +265,13 @@ func (w *FilingsPoller) parseForm4(ctx context.Context, cik, symbolID int64, f e
 	if err != nil {
 		return w.form4Failure(ctx, symbolID, f, err)
 	}
+	if parsed.IssuerCIK != 0 && parsed.IssuerCIK != cik {
+		// The swept company is the reporting OWNER here (e.g. a 10% holder of
+		// another issuer), not the issuer. Storing the trade under it invented
+		// insider activity in the wrong company. Sentinel row, so the accession
+		// leaves the backlog and nothing reaches the insider-trades feed.
+		return w.insertForm4Sentinel(ctx, symbolID, f, "", "")
+	}
 	code, shares, price, value, txTs, ok := edgar.AggregateForm4(parsed)
 	if !ok {
 		// Derivative-only Form 4 (options/RSUs, no non-derivative table):
@@ -580,6 +587,9 @@ func (w *ThirteenFPoller) Run(ctx context.Context) (string, error) {
 			continue
 		}
 		for _, h := range holdings {
+			if h.PutCall != "" {
+				continue // an option line is not shares held
+			}
 			row := store.InstHoldingRow{
 				CIK: fmt.Sprint(m.CIK), Manager: m.Name, Period: period,
 				CUSIP: h.CUSIP, Name: h.Issuer, Value: h.Value, Shares: h.Shares,

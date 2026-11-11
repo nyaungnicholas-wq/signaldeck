@@ -70,12 +70,12 @@ func (c *Client) CachedCIKMap(ctx context.Context, st *store.Store) (map[string]
 
 // SubFiling is one row of a company's recent-filings list.
 type SubFiling struct {
-	Accession  string // e.g. 0000320193-26-000005
-	Form       string // raw form type ("4", "8-K", "S-3", …)
-	FiledTs    int64  // acceptance time when parseable, else filing date (unix s)
-	ReportDate string // period of report (YYYY-MM-DD; 13F quarter end)
-	Items      string // 8-K item codes ("2.02,9.01")
-	PrimaryDoc string // primary document path within the filing folder
+	Accession   string // e.g. 0000320193-26-000005
+	Form        string // raw form type ("4", "8-K", "S-3", …)
+	FiledTs     int64  // acceptance time when parseable, else filing date (unix s)
+	ReportDate  string // period of report (YYYY-MM-DD; 13F quarter end)
+	Items       string // 8-K item codes ("2.02,9.01")
+	PrimaryDoc  string // primary document path within the filing folder
 	PrimaryDesc string
 }
 
@@ -90,13 +90,13 @@ type submissionsResp struct {
 	SICDesc string          `json:"sicDescription"`
 	Filings struct {
 		Recent struct {
-			AccessionNumber    []string `json:"accessionNumber"`
-			FilingDate         []string `json:"filingDate"`
-			AcceptanceDateTime []string `json:"acceptanceDateTime"`
-			ReportDate         []string `json:"reportDate"`
-			Form               []string `json:"form"`
-			Items              []string `json:"items"`
-			PrimaryDocument    []string `json:"primaryDocument"`
+			AccessionNumber       []string `json:"accessionNumber"`
+			FilingDate            []string `json:"filingDate"`
+			AcceptanceDateTime    []string `json:"acceptanceDateTime"`
+			ReportDate            []string `json:"reportDate"`
+			Form                  []string `json:"form"`
+			Items                 []string `json:"items"`
+			PrimaryDocument       []string `json:"primaryDocument"`
 			PrimaryDocDescription []string `json:"primaryDocDescription"`
 		} `json:"recent"`
 	} `json:"filings"`
@@ -332,7 +332,7 @@ func InterestingForm(form string) bool {
 
 // Form4Tx is one non-derivative transaction inside a Form 4.
 type Form4Tx struct {
-	Code       string  // P/S/A/M/G/F/…
+	Code       string // P/S/A/M/G/F/…
 	Shares     float64
 	Price      float64
 	AcqDisp    string // A (acquired) / D (disposed)
@@ -342,6 +342,10 @@ type Form4Tx struct {
 
 // Form4 is the parsed essence of one ownershipDocument.
 type Form4 struct {
+	// IssuerCIK is the company whose shares were traded (0 when the document
+	// names none). A company's submissions list also carries Form 4s it filed
+	// as the REPORTING OWNER of another issuer; those are not its insiders.
+	IssuerCIK    int64
 	Insider      string
 	Title        string // officer title / "Director" / "10% owner"
 	Transactions []Form4Tx
@@ -349,6 +353,9 @@ type Form4 struct {
 
 // form4XML mirrors the ownershipDocument XML (fields we consume).
 type form4XML struct {
+	Issuer struct {
+		CIK string `xml:"issuerCik"`
+	} `xml:"issuer"`
 	Owners []struct {
 		ID struct {
 			Name string `xml:"rptOwnerName"`
@@ -396,6 +403,9 @@ func ParseForm4(data []byte) (Form4, error) {
 		return Form4{}, fmt.Errorf("edgar: parse form 4: %w", err)
 	}
 	var out Form4
+	if n, err := strconv.ParseInt(strings.TrimLeft(strings.TrimSpace(doc.Issuer.CIK), "0"), 10, 64); err == nil && n > 0 {
+		out.IssuerCIK = n
+	}
 	if len(doc.Owners) > 0 {
 		o := doc.Owners[0]
 		out.Insider = strings.TrimSpace(o.ID.Name)
@@ -598,6 +608,9 @@ type Holding13F struct {
 	Value  float64 // as reported (USD on current filings)
 	Shares float64
 	Type   string // SH / PRN
+	// PutCall is "PUT" or "CALL" on an option line, "" on a share holding. An
+	// option line reports the UNDERLYING shares and value, not shares held.
+	PutCall string
 }
 
 // infoTableXML mirrors the 13F information table (namespace-agnostic:
@@ -612,6 +625,7 @@ type infoTableXML struct {
 			Shares string `xml:"sshPrnamt"`
 			Type   string `xml:"sshPrnamtType"`
 		} `xml:"shrsOrPrnAmt"`
+		PutCall string `xml:"putCall"`
 	} `xml:"infoTable"`
 }
 
@@ -624,12 +638,13 @@ func Parse13F(data []byte) ([]Holding13F, error) {
 	out := make([]Holding13F, 0, len(doc.Entries))
 	for _, e := range doc.Entries {
 		h := Holding13F{
-			Issuer: strings.TrimSpace(e.Issuer),
-			Class:  strings.TrimSpace(e.Class),
-			CUSIP:  strings.ToUpper(strings.TrimSpace(e.CUSIP)),
-			Value:  xmlFloat(e.Value),
-			Shares: xmlFloat(e.Amt.Shares),
-			Type:   strings.TrimSpace(e.Amt.Type),
+			Issuer:  strings.TrimSpace(e.Issuer),
+			Class:   strings.TrimSpace(e.Class),
+			CUSIP:   strings.ToUpper(strings.TrimSpace(e.CUSIP)),
+			Value:   xmlFloat(e.Value),
+			Shares:  xmlFloat(e.Amt.Shares),
+			Type:    strings.TrimSpace(e.Amt.Type),
+			PutCall: strings.ToUpper(strings.TrimSpace(e.PutCall)),
 		}
 		if h.CUSIP == "" {
 			continue
