@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-01T10:20:22+00:00",
+  "generated": "2026-11-01T11:20:29+00:00",
   "withheld": "licence: the revalidation's accuracies are computed from Alpaca market data and are not published (SIGNALDECK_PUBLISH_DERIVED is not 1). The full snapshot is kept privately in data/revalidation-status.json.",
   "full_snapshot": "data/revalidation-status.json"
 }
