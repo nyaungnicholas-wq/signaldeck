@@ -197,6 +197,9 @@ export default function RiskResults({
               </thead>
               <tbody className="tnum">
                 {drivers.map((c) => {
+                  // PctOfRisk is ALREADY a percent (risklens multiplies by 100),
+                  // unlike the VaR and stress fractions. Scaling it again showed
+                  // a 45% share as "4500.0%".
                   const share = isFinite(c.PctOfRisk) ? c.PctOfRisk : 0;
                   const barPct = maxPct > 0 ? (share / maxPct) * 100 : 0;
                   return (
@@ -216,7 +219,7 @@ export default function RiskResults({
                             role="meter"
                             aria-valuemin={0}
                             aria-valuemax={100}
-                            aria-valuenow={Number((share * 100).toFixed(1))}
+                            aria-valuenow={Number(share.toFixed(1))}
                             aria-label={`${c.Symbol} share of portfolio risk`}
                           >
                             <div
@@ -228,7 +231,7 @@ export default function RiskResults({
                             className="w-12 shrink-0 text-right"
                             style={{ color: "var(--text)" }}
                           >
-                            {(share * 100).toFixed(1)}%
+                            {share.toFixed(1)}%
                           </span>
                         </div>
                       </td>

@@ -50,6 +50,10 @@ type FilingsPoller struct {
 	MaxForm4 int
 	// Now is a test hook; nil = time.Now.
 	Now func() time.Time
+	// issuerSymbol maps an SEC CIK to the tracked stock that IS that issuer,
+	// rebuilt each run. A Form 4 belongs to its issuer, whichever company's
+	// submissions list it was found in.
+	issuerSymbol map[int64]int64
 }
 
 func (w *FilingsPoller) Name() string            { return "filings-poller" }
@@ -101,6 +105,15 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 	cikMap, err := w.Client.CachedCIKMap(ctx, w.St)
 	if err != nil {
 		return "", err
+	}
+
+	w.issuerSymbol = make(map[int64]int64, len(stocks))
+	for _, s := range stocks {
+		if c, ok := cikMap[strings.ToUpper(s.Symbol)]; ok {
+			if _, dup := w.issuerSymbol[c]; !dup {
+				w.issuerSymbol[c] = s.ID
+			}
+		}
 	}
 
 	batch := w.MaxSymbols
@@ -268,9 +281,16 @@ func (w *FilingsPoller) parseForm4(ctx context.Context, cik, symbolID int64, f e
 	if parsed.IssuerCIK != 0 && parsed.IssuerCIK != cik {
 		// The swept company is the reporting OWNER here (e.g. a 10% holder of
 		// another issuer), not the issuer. Storing the trade under it invented
-		// insider activity in the wrong company. Sentinel row, so the accession
-		// leaves the backlog and nothing reaches the insider-trades feed.
-		return w.insertForm4Sentinel(ctx, symbolID, f, "", "")
+		// insider activity in the wrong company. The trade belongs to the
+		// ISSUER: store it there when that stock is tracked. The accession is
+		// the key of both tables, so the issuer's own sweep will never see this
+		// filing as new; attributing it here is the only chance. Untracked
+		// issuer: sentinel row, so the accession leaves the backlog.
+		issuerID, tracked := w.issuerSymbol[parsed.IssuerCIK]
+		if !tracked {
+			return w.insertForm4Sentinel(ctx, symbolID, f, "", "")
+		}
+		symbolID = issuerID
 	}
 	code, shares, price, value, txTs, ok := edgar.AggregateForm4(parsed)
 	if !ok {

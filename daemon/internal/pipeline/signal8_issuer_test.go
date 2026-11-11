@@ -97,3 +97,45 @@ func TestThirteenFPoller_SkipsOptionLines(t *testing.T) {
 		t.Fatalf("holdings = %+v, want only the APPLE share line (the TESLA PUT is not a holding)", got)
 	}
 }
+
+// Both the owner (HOLD) and the issuer (AAPL) are tracked and the owner is swept
+// first. The filing's accession is claimed by HOLD's sweep, so AAPL's sweep will
+// never see it as new: the trade must be stored under AAPL right here.
+func TestFilingsPoller_Form4GoesToTheTrackedIssuer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "company_tickers.json"):
+			_, _ = w.Write([]byte(`{"0": {"cik_str": 999999, "ticker": "HOLD", "title": "Holder Corp"},
+				"1": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}`))
+		case strings.Contains(r.URL.Path, "/submissions/CIK0000999999"):
+			_, _ = w.Write([]byte(s8Submissions))
+		case strings.HasSuffix(r.URL.Path, "wk-form4_1.xml"):
+			_, _ = w.Write(edgarFixture(t, "form4_sale.xml"))
+		default:
+			w.WriteHeader(404) // AAPL's own submissions: not reached with a trade
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := edgar.NewFilings()
+	c.TickersURL = srv.URL + "/files/company_tickers.json"
+	c.SubmissionsBase = srv.URL + "/submissions"
+	c.ArchivesBase = srv.URL + "/Archives/edgar/data"
+	c.MinInterval = time.Millisecond
+
+	st := openS8Store(t)
+	ctx := context.Background()
+	hold, _ := st.UpsertSymbol(ctx, "HOLD", md.Stocks, "Holder Corp")
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple Inc.")
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	w := &FilingsPoller{St: st, Client: c, Now: func() time.Time { return now }}
+	if detail, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v (%s)", err, detail)
+	}
+	if got, _ := st.InsiderTrades(ctx, hold.ID, "", 10); len(got) != 0 {
+		t.Fatalf("the owner must not carry the issuer's insider trade: %+v", got)
+	}
+	got, err := st.InsiderTrades(ctx, aapl.ID, "", 10)
+	if err != nil || len(got) != 1 || got[0].Insider != "COOK TIMOTHY D" {
+		t.Fatalf("the trade must be stored under the tracked issuer AAPL: %+v err=%v", got, err)
+	}
+}

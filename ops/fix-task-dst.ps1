@@ -30,6 +30,14 @@ function Convert-ToLocalBoundary([string]$Boundary) {
     return $local.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+# Everything about a task's triggers EXCEPT the boundary, as one string.
+function Get-TriggerShape($Task) {
+    return (@($Task.Triggers | ForEach-Object {
+        '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $_.CimClass.CimClassName, $_.DaysOfWeek, $_.WeeksInterval, $_.DaysInterval,
+            $_.Repetition.Interval, $_.Repetition.Duration, $_.Enabled
+    }) -join ';')
+}
+
 function Get-Plan {
     $plan = @()
     foreach ($t in (Get-ScheduledTask -TaskName 'SignalDeck*')) {
@@ -64,13 +72,14 @@ Start-Transcript -Path $log -Append | Out-Null
 try {
     # Never re-register a scheduled job underneath itself. The long-running
     # services are expected to be Running and have no time-of-day trigger.
-    $services = 'SignalDeck Daemon', 'SignalDeck Web', 'SignalDeck Local Workspace', 'SignalDeck Tunnel', 'SignalDeck Cloudflare Tunnel'
+    $services = 'SignalDeck Daemon', 'SignalDeck Web', 'SignalDeck Local Workspace', 'SignalDeck Tunnel', 'SignalDeck Cloudflare Tunnel', 'SignalDeck Quick Tunnel'
     $busy = @(Get-ScheduledTask -TaskName 'SignalDeck*' | Where-Object { $_.State -eq 'Running' -and $services -notcontains $_.TaskName })
     if ($busy.Count -gt 0) {
         Write-Host ("REFUSED: running right now: {0}. Run this again when they finish." -f (($busy | ForEach-Object { $_.TaskName }) -join ', ')) -ForegroundColor Red
-        return
     }
-    foreach ($t in (Get-ScheduledTask -TaskName 'SignalDeck*')) {
+    $shape = @{}
+    foreach ($t in $(if ($busy.Count -gt 0) { @() } else { @(Get-ScheduledTask -TaskName 'SignalDeck*') })) {
+        $shape[$t.TaskName] = (Get-TriggerShape $t)
         $changed = 0
         foreach ($tr in $t.Triggers) {
             $sb = [string]$tr.StartBoundary
@@ -87,13 +96,20 @@ try {
     $left = @(Get-Plan)
     $want = @{ 'SignalDeck Market-Close' = '13:10'; 'SignalDeck Daily-Refresh' = '13:15'; 'SignalDeck Accuracy' = '14:05'; 'SignalDeck Market-Open' = '06:20' }
     $wrong = @()
+    # Only the boundary may have moved: same trigger kinds, weekdays, intervals
+    # and repetition as before.
+    foreach ($name in $shape.Keys) {
+        if ((Get-TriggerShape (Get-ScheduledTask -TaskName $name)) -ne $shape[$name]) { $wrong += ($name + ' (trigger shape changed)') }
+    }
     foreach ($name in ($want.Keys | Sort-Object)) {
         $next = (Get-ScheduledTask -TaskName $name | Get-ScheduledTaskInfo).NextRunTime
         $got = if ($next) { $next.ToString('HH:mm') } else { '(none)' }
         Write-Host ("  {0,-26} next run {1}  (want {2} local)" -f $name, $next, $want[$name])
         if ($got -ne $want[$name]) { $wrong += $name }
     }
-    if ($left.Count -gt 0 -or $wrong.Count -gt 0) {
+    if ($busy.Count -gt 0) {
+        Write-Host 'FIX-TASK-DST DID NOTHING (see REFUSED above)' -ForegroundColor Red
+    } elseif ($left.Count -gt 0 -or $wrong.Count -gt 0) {
         Write-Host ("FIX-TASK-DST FAILED: {0} trigger(s) still carry an offset; wrong next-run time: {1}" -f $left.Count, ($wrong -join ', ')) -ForegroundColor Red
     } else {
         Write-Host 'FIX-TASK-DST OK' -ForegroundColor Green

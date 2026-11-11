@@ -292,20 +292,24 @@ try {
     Start-Sleep -Seconds 3
 
     $swap = Switch-WebBuild -LiveDist $LiveDist -CandidateDir $CandidateDir -Kept $Kept
+    if (-not $swap.Ok) {
+        # Whatever is in web\.next now, the task must not stay stopped.
+        Write-Log ("SWAP FAILED: {0}" -f $swap.Error)
+        if ($swap.Restored) {
+            Write-Log ("the previous build is back in web\.next; restarting task '{0}' on it. Nothing was promoted." -f $Task)
+        } elseif ($swap.MovedAside) {
+            Write-Log ("COULD NOT RESTORE the previous build; it is at {0} and web\.next is NOT usable. Restarting task '{1}' anyway; move that build back by hand." -f $Kept, $Task)
+        } else {
+            Write-Log ("web\.next was not moved and is still the previous build; restarting task '{0}' on it. Nothing was promoted." -f $Task)
+        }
+        Start-ScheduledTask -TaskName $Task
+        exit 1
+    }
     if (-not $swap.MovedAside) {
         Write-Log 'there was no web\.next to keep'
         $Kept = '(none)'
     } else {
         Write-Log ("moved the previous build to {0}" -f $Kept)
-    }
-    if (-not $swap.Ok) {
-        # Whatever is in web\.next now, the task must not stay stopped.
-        Write-Log ("SWAP FAILED: {0}" -f $swap.Error)
-        if ($swap.Restored) { Write-Log 'the previous build is back in web\.next' }
-        elseif ($swap.MovedAside) { Write-Log ("COULD NOT RESTORE the previous build; it is at {0}" -f $Kept) }
-        Write-Log ("restarting task '{0}' on the previous build; nothing was promoted" -f $Task)
-        Start-ScheduledTask -TaskName $Task
-        exit 1
     }
     Write-Log ("starting task '{0}'" -f $Task)
     Start-ScheduledTask -TaskName $Task
