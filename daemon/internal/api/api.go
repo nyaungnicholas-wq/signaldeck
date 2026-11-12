@@ -628,6 +628,9 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// bot check, so the sign-up page can say why instead of failing.
 			"signupPaused": d.Cfg.OpenSignup && !d.signupOpen(),
 			"detail":       "sign in or send the API token for the full breakdown",
+			// The price source this instance shows publicly ("" = none). The web
+			// tier renders the citation the source's terms require from it.
+			"priceSource": d.Cfg.PublicPriceSource,
 			// Public by design: Turnstile site keys are embedded in every page that
 			// renders the widget. Served here so no rebuild is needed to set one.
 			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
@@ -647,6 +650,7 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 		"revision":        lineage.RevisionStamp(),
 		"uptimeS":         int(time.Since(d.Started).Seconds()),
 		"alpaca":          d.Cfg.HasAlpaca(),
+		"priceSource":     d.Cfg.PublicPriceSource,
 		"time":            time.Now().Unix(),
 		"schemaContract":  refusals,
 		"workers":         failing,

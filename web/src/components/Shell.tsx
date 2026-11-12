@@ -405,10 +405,26 @@ function Brand() {
 }
 
 /** App chrome: brand bar + nav + daemon connectivity dot. */
+// IEX's terms require this citation wherever its data is shown. It renders only
+// on an instance whose daemon reports IEX as its public price source.
+function SourceCitation({ source }: { source: string }) {
+  if (source !== "iexhist") return null;
+  return (
+    <span data-testid="price-source-citation" className="mb-1 block" style={{ color: "var(--dim)" }}>
+      <a href="https://www.iex.io/legal/hist-data-terms" target="_blank" rel="noreferrer" className="hover:underline">
+        Data provided for free by IEX.
+      </a>{" "}
+      Prices and volumes are trades on the IEX exchange only, not the whole market, and are from
+      the previous trading day.
+    </span>
+  );
+}
+
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [up, setUp] = useState<boolean | null>(null);
+  const [priceSource, setPriceSource] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const pro = useSyncExternalStore(subscribeViewMode, getViewModePro, getServerFalse);
   const label = useLabel();
@@ -447,7 +463,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     const check = () =>
       api
         .health()
-        .then(() => alive && setUp(true))
+        .then((h) => {
+          if (!alive) return;
+          setUp(true);
+          setPriceSource(h?.priceSource ?? "");
+        })
         .catch(() => alive && setUp(false));
     check();
     // A hidden tab sends nothing: one forgotten tab polling every 10 s was
@@ -515,6 +535,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           className="px-2 pb-2 text-[0.75rem] leading-relaxed"
           style={{ color: "var(--faint)" }}
         >
+          <SourceCitation source={priceSource} />
           SignalDeck measures and stores; it does not advise. Not financial advice.{" "}
           <Link href="/privacy" className="hover:underline" style={{ color: "var(--dim)" }}>Privacy</Link>
           {" · "}
@@ -659,6 +680,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"
         style={{ color: "var(--faint)", borderColor: "var(--border)" }}
       >
+        <SourceCitation source={priceSource} />
         SignalDeck measures and stores; it does not advise. Every score decomposes into its
         components; every tendency ships with its sample size; the Honesty page grades the
         scores against what actually happened. Not financial advice.{" "}

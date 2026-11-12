@@ -565,7 +565,7 @@ export type AlertPrefs = {
 export type TelegramLink = { code: string; botUsername?: string; expiresAt: number };
 
 export const api = {
-  health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
+  health: () => get<{ version: string; uptimeS: number; alpaca: boolean; priceSource?: string }>("/api/health"),
 
   // ── sentiment-correlation wave: the first non-price signal test ──
   sentimentCorrelation: (p?: { symbol?: string; market?: Market }) => sentimentCorrelation(p),
