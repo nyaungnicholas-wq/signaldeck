@@ -19,6 +19,8 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/logrotate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/volregime"
 )
 
 const version = "0.1.0-dev"
@@ -95,6 +97,12 @@ func main() {
 	// The licence gate trusts SIGNALDECK_PUBLIC_PRICE_SOURCE; make sure the
 	// database it is about to serve really is that source's, before any worker
 	// or request touches it.
+	if cfg.PublicPriceSource != "" && cfg.PublicPriceSource != "alpaca" {
+		// Backtest accuracy tables were measured on Alpaca bars: they do not
+		// describe this instance's data and may not be shown from it.
+		structregime.DisableBacktestTables()
+		volregime.DisableBacktestTables()
+	}
 	if err := st.CheckPriceSource(ctx, cfg.PublicPriceSource); err != nil {
 		slog.Error("refusing to start: price source and database disagree", "err", err)
 		stop()
