@@ -94,7 +94,7 @@ var testSymbol = regexp.MustCompile(`^Z[A-Z]ZZT$|^ZEXIT$|^ZIEXT$|^ZXIET$|^ZTEST$
 // ponytail: funds and leveraged products are not excluded (IEX's feed does not
 // label them). The public record must say so; a fund list would fix it.
 func PickUniverse(series map[string][]Day, dates []string, recent, n int, minCoverage float64) []string {
-	if len(dates) == 0 {
+	if len(dates) == 0 || recent < 1 || n < 1 {
 		return nil
 	}
 	if recent > len(dates) {
@@ -116,7 +116,7 @@ func PickUniverse(series map[string][]Day, dates []string, recent, n int, minCov
 				dv = append(dv, d.Close*float64(d.Volume))
 			}
 		}
-		if len(dv) < recent*9/10 {
+		if len(dv) == 0 || len(dv) < recent*9/10 {
 			continue
 		}
 		sort.Float64s(dv)

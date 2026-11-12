@@ -92,6 +92,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The licence gate trusts SIGNALDECK_PUBLIC_PRICE_SOURCE; make sure the
+	// database it is about to serve really is that source's, before any worker
+	// or request touches it.
+	if err := st.CheckPriceSource(ctx, cfg.PublicPriceSource); err != nil {
+		slog.Error("refusing to start: price source and database disagree", "err", err)
+		stop()
+		st.Close() //nolint:errcheck
+		os.Exit(1)
+	}
+
 	// Lineage spine (Layers 2+8): record the running build's VCS revision
 	// (embedded by the Go toolchain — no git exec at runtime) so the DB knows
 	// which code versions have operated on it; research producers stamp the

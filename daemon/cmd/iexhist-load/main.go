@@ -29,7 +29,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-const sourceMetaKey = "price_source"
+const sourceMetaKey = store.PriceSourceMetaKey
 
 func main() {
 	dir := flag.String("dir", "", "directory of YYYYMMDD.csv day files")
@@ -37,6 +37,7 @@ func main() {
 	top := flag.Int("top", 400, "universe size: symbols ranked by median IEX dollar volume")
 	recent := flag.Int("recent", 60, "trading days the ranking looks at")
 	coverage := flag.Float64("coverage", 0.9, "minimum share of all loaded days a symbol must have traded on")
+	minDays := flag.Int("min-days", 260, "refuse to load fewer day files than this (the forecasts need about 230 bars)")
 	dry := flag.Bool("dry-run", false, "report what would be loaded; write nothing")
 	flag.Parse()
 	if *dir == "" || (*dbPath == "" && !*dry) {
@@ -64,6 +65,9 @@ func main() {
 		dates = append(dates, date)
 	}
 
+	if len(dates) < *minDays {
+		fail(fmt.Errorf("only %d day files; -min-days is %d. A short history yields symbols no predictor can use", len(dates), *minDays))
+	}
 	universe := iexhist.PickUniverse(series, dates, *recent, *top, *coverage)
 	fmt.Printf("iexhist-load: %d day files (%s..%s), %d symbols seen, universe %d\n",
 		len(dates), dates[0], dates[len(dates)-1], len(series), len(universe))
@@ -112,6 +116,28 @@ func main() {
 	if err := st.SetMeta(ctx, sourceMetaKey, "iexhist"); err != nil {
 		fail(err)
 	}
+
+	// Only the symbols loaded here stay active. A name that fell out of the
+	// ranking, or one the daemon's first boot registered with no bars, would
+	// otherwise sit active on frozen or absent history.
+	keep := map[string]bool{}
+	for _, b := range out {
+		keep[b.sym] = true
+	}
+	all, err := st.ListSymbols(ctx, false)
+	if err != nil {
+		fail(err)
+	}
+	dropped := 0
+	for _, s := range all {
+		if s.Market == md.Stocks && s.Active && !keep[s.Symbol] {
+			if err := st.SetSymbolActive(ctx, s.ID, false); err != nil {
+				fail(err)
+			}
+			dropped++
+		}
+	}
+	fmt.Printf("iexhist-load: %d symbol(s) outside the universe set inactive\n", dropped)
 
 	written := 0
 	for _, b := range out {

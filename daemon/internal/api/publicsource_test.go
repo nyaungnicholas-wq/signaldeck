@@ -40,3 +40,31 @@ func TestPublicPriceSourceOpensOnlyPriceDerivedRoutes(t *testing.T) {
 		checkWithheld(t, "anonymous", "price-derived route with source "+src, code, ctype, body, "alpaca")
 	}
 }
+
+// Owner decision 11 Nov 2026: the public (IEX-fed) instance needs no sign-in for
+// its forecast reads. Personal routes, writes and every other auth-tier route
+// still need an account there, and the default instance is unchanged.
+func TestVisitorsReadForecastsOnlyOnAPublicSourceInstance(t *testing.T) {
+	closedReads := func(c *config.Config) { c.PublicSurface, c.PublicReads = true, false }
+
+	srv, _, _, _ := startGuardOnly(t, func(c *config.Config) { closedReads(c); c.PublicPriceSource = "iexhist" })
+	anon := newClient(t)
+	for _, p := range []string{"/api/regimes", "/api/vol-forecast/latest", "/api/market-regimes", "/api/filings"} {
+		if code, _, body := call(t, anon, srv, http.MethodGet, p); code != 200 || body != "reached" {
+			t.Errorf("visitor GET %s on the IEX instance: %d %.80s, want it reached", p, code, body)
+		}
+	}
+	for _, p := range []string{"/api/watchlist", "/api/journal", "/api/account/export", "/api/alert-prefs", "/api/ask", "/api/paper"} {
+		if code, _, _ := call(t, anon, srv, http.MethodGet, p); code != http.StatusUnauthorized {
+			t.Errorf("visitor GET %s on the IEX instance: %d, want 401", p, code)
+		}
+	}
+	if code, _, _ := call(t, anon, srv, http.MethodPost, "/api/regimes"); code != http.StatusUnauthorized {
+		t.Errorf("visitor POST /api/regimes on the IEX instance: %d, want 401", code)
+	}
+
+	def, _, _, _ := startGuardOnly(t, closedReads)
+	if code, _, _ := call(t, newClient(t), def, http.MethodGet, "/api/regimes"); code != http.StatusUnauthorized {
+		t.Errorf("visitor GET /api/regimes on the default instance: %d, want 401", code)
+	}
+}
