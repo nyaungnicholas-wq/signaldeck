@@ -161,8 +161,12 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// member accounts alike reach only the rights-cleared allowlist; every
 		// other path, including one added next month, is a 451 naming the
 		// source. Below the auth and member tiers, so it only ever narrows them.
-		if d.withheldFrom(r) {
-			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared {
+		// An instance fed only by a displayable price source (PublicPriceSource)
+		// clears the Alpaca-governed routes; Kadoa and every other source stay
+		// withheld on it.
+		if d.published() && !d.isOperator(r) {
+			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared &&
+				!(src == "alpaca" && datalicense.PublicPriceCleared(d.Cfg.PublicPriceSource)) {
 				writeWithheld(w, src)
 				return
 			}
@@ -197,7 +201,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 // deployment: anonymous visitors and member accounts. Handlers on the
 // rights-cleared allowlist strip their derived fields for exactly this caller.
 func (d Deps) withheldFrom(r *http.Request) bool {
-	return d.published() && !d.isOperator(r)
+	return d.published() && !d.isOperator(r) && !datalicense.PublicPriceCleared(d.Cfg.PublicPriceSource)
 }
 
 // writeWithheld is the 451 contract the web tier renders: status 451, JSON,
