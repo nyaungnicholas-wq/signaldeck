@@ -1,7 +1,7 @@
 # SignalDeck — Strategy Deck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-09-19 · **Revalidate by:** 2026-10-19
+> **Owner:** Nicholas Nyaung · **Version:** 1.3 · **Last reviewed:** 2026-11-12 · **Revalidate by:** 2026-12-12
 > **Revalidation trigger:** any re-grade, or any phase artefact filed in `proofs/`. A status document with no expiry drifts silently; §2's live record is generated so it cannot, but the prose around it can.
 > **Status:** ACTIVE — supersedes prior summary decks
 > **Scope:** The single current status document for the platform. Where it disagrees with an older document, this one wins: the others are publishable as a record of what was measured when, not as current status.
@@ -23,10 +23,12 @@ SignalDeck is a market-measurement and research-record platform. It records live
 It is not an auto-trader. It has no broker connection. It executes nothing. It holds no capital. It is not financial advice.
 The Go daemon lives in `daemon/`. The web UI lives in `web/`.
 
+**Two instances run from this source since 2026-11-12, and they must not be confused.** The research instance described in the rest of this deck is fed by Alpaca market data; under Alpaca's licence nothing derived from that data is shown to anyone but the operator (§2), so its record is private. A second, isolated instance is fed only by IEX Exchange historical data, which IEX's terms allow to be shown with the citation "Data provided for free by IEX." It has its own database and holds no Alpaca data, and the daemon refuses to start if a database does not match the price source it is configured to show. That instance is what the public site serves. It shows current rule-based readings (trend, volatility, trading activity) for a few hundred heavily traded symbols, and it has **no graded record at all**: its first forecast windows have not closed, and no accuracy figure of any kind is published from it. IEX data is one venue's trades from the previous session, unadjusted for dividends and split-adjusted only by a ratio test, and its symbol list includes funds and leveraged products. Every statement about skill, baselines, intervals and retirement elsewhere in this deck is about the research instance.
+
 ## 2. Current grader status
 The directional ensemble is RETIRED. The `modelhealth` component set `verdict: retired, emitting: false`. It is off and does not publish.
-The headline structural predictors are trend21, vol21 and liquidity21, but the registry carries **seven** registered backtested claims — those three plus `trend63`, `filingsdrift21`, `trend21-crypto` and `liquidity21-crypto`. All seven are PENDING with zero graded forecasts. *(v1.1 named only three here while its own generated block listed seven.)*
-First resolvable structural evidence: 2026-08-07. **First grading dates differ per predictor and are carried per-row in the registry, not summarised here:** the structural trio grades 2026-08-14, `filingsdrift21` a day earlier, and `trend63` materially later. A 21-day horizon cannot be graded sooner than its horizon allows.
+The headline structural predictors are trend21, vol21 and liquidity21, but the registry carries **seven** registered backtested claims — those three plus `trend63`, `filingsdrift21`, `trend21-crypto` and `liquidity21-crypto`. *(v1.1 named only three here while its own generated block listed seven.)* **That sentence used to end "all seven are PENDING with zero graded forecasts"; that stopped being true in August and stayed in this deck until the 2026-11-12 review.** The structural rows have been graded daily since their horizons allowed. Their current statuses and figures are in the private registry and are withheld here under the licence, so this deck states no verdict for them. The two crypto claims were withdrawn in October: crypto ingestion was switched off on a licence review, and their open forecasts were voided with the reason recorded, never deleted.
+First resolvable structural evidence: 2026-08-07. **First grading dates differ per predictor and are carried per-row in the registry, not summarised here.** The dates this deck used to type for the structural trio were the registered ones, and one of them was later corrected through the amendment path; read the registry row, not a date typed here. A 21-day horizon cannot be graded sooner than its horizon allows.
 Outstanding structural forecast counts are not typed in this corpus any more. They were previously stated two ways in one document; they come from the generated block below, per predictor, when it carries figures (withheld under the licence). That closed FC8.
 
 The live record is not typed into this deck. It is generated from `data/accuracy_registry.json` by `tools/live_accuracy.py` and injected into every document listed in `partials/INCLUDES.txt`, this one included; CI fails on a superseded literal. Intervals appear only where the sample clears `min_distinct_blocks = 10`; every other row reads `withheld`, and a withheld interval carries no verdict. That describes the block when it carries figures at all: until the operator records Alpaca's written permission it carries none, because every one of them is derived from Alpaca market data.
@@ -62,6 +64,15 @@ Inversion is not a rescue: inverting a below-baseline directional predictor prod
 ## 5. Structural family — pending and weakened
 Status: PENDING and weakened. Weakened for two reasons. The backtests behind the structural band tables (HISTORICAL) are computed over a bar history that `ALPHA_WORKFLOW.md` §B2 measured survivor-seeded; the P3A backfill closes that for 2019–2022 and leaves a stated 2023–2025 residual — see section 8. And the live record (LIVE) does not begin until 2026-08-07, with first grading 2026-08-14.
 trend21 was refuted as a predictor in a separate study: it reproduces a driftless random walk. Treat trend21's HISTORICAL band tables as explained by geometry, not skill.
+
+**A code audit on 2026-11-10 found four further weaknesses in how this family is measured. None is repaired, and each makes the family look better than it is.** They were read out of the source and are stated here so the next grade is not quoted without them.
+
+1. **The forecasts and their grading can read a daily bar that is still forming.** The structural runner loads bars without the settled-bar trim every other runner applies, and the resolver checks that enough bars exist, not that the last one has closed. The owner confirmed this one independently. Repairing it means changing which bar a call is made from, frozen against and resolved to, together, with a cut-over date; that changes the input of a pre-registered record, so it waits for an explicit decision and goes through the amendment path.
+2. **The grader counts calendar days where the horizon is in trading sessions**, so neighbouring evidence blocks overlap and the number of independent blocks is overstated. The grader is hash-pinned; correcting it is a re-registration.
+3. **For three of the kinds the registered "all decisions" claim is the lowest-conviction band's figure**, which sets the bar below the backtest's own all-decisions rate.
+4. **For trend and liquidity the model's call and the naive-persistence baseline are the same computation**, so "beats the baseline" cannot be passed or failed for those kinds; only the volatility kind can show skill against its baseline at all.
+
+Items 2 to 4 have not been independently confirmed. They are listed as open because an unconfirmed defect that inflates a result is still a reason not to quote the result.
 
 ## 6. Pre-registration rules
 `PREREGISTRATION.md` holds the frozen 2026-08-14 structural grading protocol.
@@ -238,7 +249,17 @@ Every limit resolves through a `SIGNALDECK_RISK_*` environment variable, and not
 
 Remediation phases were landing while this deck was written. Read `proofs/` directly before relying on a phase status.
 
-### 8.7 Closed
+### 8.7 Filings and split-repair defects — fixed going forward 2026-11-10, stored rows NOT repaired
+
+Three ingestion defects were fixed in the daemon on 2026-11-10. Each fix applies to rows written from then on. **The rows already stored were not repaired**, and nothing in this deck should be read as if they had been.
+
+- **Split repair re-fetched only a rolling two-year window**, while the stored daily history reaches back much further, so a repaired symbol kept its older bars on the pre-split basis. It now re-fetches from the earliest stored bar. Symbols repaired under the old window still carry a basis change in their older history.
+- **A Form 4 was stored as an insider trade of whichever company's filing list it was found in**, including filings that company made as the reporting owner of another issuer. Trades are now stored under the issuer the filing names. Trades stored earlier may sit under the wrong company.
+- **13F option lines were stored as share holdings.** They are now skipped. Quarters stored earlier may include them.
+
+Repairing the stored rows means re-fetching from the provider and from SEC EDGAR and rewriting history, so each repair waits for the owner's decision, a fresh backup, and a written list of every row changed.
+
+### 8.8 Closed
 
 - ~~Walk-forward validation runs on demand only.~~ **CLOSED 2026-08-04.** `ops/com.signaldeck.revalidation.plist` schedules it monthly via `ops/revalidate-structural.sh`, which writes `ops/revalidation-status.json`; `tools/check_revalidation.py` gates it in CI, failing on a missing or stale snapshot rather than skipping.
 
@@ -342,7 +363,7 @@ The prediction ledger is hash-chained and signed. Its anchors live in the same S
 Anchor publishing is BUILT AND IN FORCE: `ops/anchor-publish.sh` runs from a scheduled task and its log records a published anchor line, where it previously recorded only a refusal that no anchors clone existed. **What that does NOT establish is independent verifiability, which stays BUILT BUT NOT IN FORCE:** the anchors repository is private and the operator holds its credentials, so publishing moves the record to a second host without moving it beyond the operator's reach.
 Therefore the chain is tamper-evident against an actor without the signing key, and is NOT evidence against the operator, who holds both the key and the database.
 Offsite backup is BUILT AND IN FORCE: the nightly job uploads the compressed database to the private repository named by `SIGNALDECK_OFFSITE_GH_REPO` and counts the copy only after the release API reports the same byte size back, and `ops/restore-rehearsal.sh --from-github` has downloaded the newest copy, re-computed its checksum and run a full integrity check over the restored database, its ledger chain and its anchors. That store is a SEPARATE private repository from the source, because release assets follow repository visibility and the source repository is public.
-Single operator, single machine. There is no independent reviewer.
+Single operator, single machine. There is no independent reviewer. The 2026-11-12 revalidation of this deck was a full re-read against the source and the running system by the AI assistant that works on this repository at the owner's instruction. That is a check by the same hands that write the code, not an independent review, and it does not change the sentence before it.
 
 ## 14. Next actions
 1. Close the 2023–2025 survivorship residual that `proofs/P3A_SURVIVORSHIP_BACKFILL.md` quantifies. Until then, HISTORICAL results spanning those years stay survivor-seeded and FC3 stays frozen for that window.
@@ -350,5 +371,9 @@ Single operator, single machine. There is no independent reviewer.
 3. Make the anchors repository public and treat a push failure as an alert rather than a log line. The scheduling half is **DONE**; publishing to a repository the operator controls is what still falls short of independent timestamping.
 4. Add third-party timestamping over the chain head, weekly. Steps 3 and 4 differ: step 3 moves evidence to a host whose credentials the operator still holds.
 5. ~~Configure `SIGNALDECK_OFFSITE_DIR` to a volume that is not the machine's own.~~ **DONE** — met by the GitHub release arm rather than a local volume, checked by byte count on upload and by a rehearsed restore.
+7. Decide the settled-bar repair for the structural family (§5, item 1) and, if taken, register it through the amendment path with a cut-over date.
+8. Confirm or dismiss the other three measurement weaknesses in §5, and re-register the grader if the block count is wrong.
+9. Decide the stored-row repairs in §8.7.
+10. Build grading for the public IEX-fed record before its first forecast windows close, and publish its results whichever way they come out.
 6. ~~Audit the completeness of the `bars-1d` history itself.~~ **DONE 2026-08-04** — `tools/bars_completeness.py`, `proofs/P11_BARS_COMPLETENESS.md`. The foundation is now bounded rather than assumed, and the bound is **generated into §8** rather than recorded here: the figures P11 filed on 2026-08-04 (stocks 96.49%, common stock alone 97.36%, over 1,770 symbols) are already well behind the database, because the symbol count has since grown by two-thirds and the new names carry shorter histories. That is the same staleness this line would have kept reproducing. The shortfall is sized, not repaired.
 7. ~~File the remaining phase artefacts.~~ **DONE 2026-08-04** — P1 through P11 are filed in `proofs/`. P2 and P3A, the two this line was waiting on, are among them.

@@ -98,6 +98,8 @@ ALLOWED = {
     "6", "8", "11", "12", "13", "1.0", "04", "27", "5322",
     # "09" is the month in the header's Revalidate by: 2026-09-04.
     "09", "1.1",
+    # "1.3" is the header's Version after the 2026-11-12 revalidation.
+    "1.3",
     "01d6bcdfe1451b6f2c84185478f9c8f3c405ef3ae845a11a937d865eacf2a724",
     # structural / ordinal
     "7", "3.6", "256", "128",
