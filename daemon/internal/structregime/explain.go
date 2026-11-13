@@ -47,17 +47,17 @@ type Analog struct {
 
 // Explanation is the full auditable record behind one trend21 forecast.
 type Explanation struct {
-	Kind      Kind           `json:"kind"`
-	Regime    string         `json:"regime"`
-	Horizon   int            `json:"horizonDays"`
-	Accuracy  float64        `json:"bandedAccuracy"`
-	Tier      string         `json:"tier"`
-	Conviction float64       `json:"conviction"`
-	Supports  []Contribution `json:"supports"`
-	Opposes   []Contribution `json:"opposes"`
-	Analog    Analog         `json:"analog"`
-	Summary   string         `json:"summary"`
-	Caveat    string         `json:"caveat"`
+	Kind       Kind           `json:"kind"`
+	Regime     string         `json:"regime"`
+	Horizon    int            `json:"horizonDays"`
+	Accuracy   float64        `json:"bandedAccuracy"`
+	Tier       string         `json:"tier"`
+	Conviction float64        `json:"conviction"`
+	Supports   []Contribution `json:"supports"`
+	Opposes    []Contribution `json:"opposes"`
+	Analog     Analog         `json:"analog"`
+	Summary    string         `json:"summary"`
+	Caveat     string         `json:"caveat"`
 }
 
 // AuditTrend decomposes the trend21 call into weighted contributors plus a

@@ -1,8 +1,12 @@
+import PublicInstanceNote from "@/components/PublicInstanceNote";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { OPERATOR_NAME, CONTACT_EMAIL, TERMS_UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = { title: "Terms of Use" };
+
+// Rendered per request: the note at the top depends on which instance serves it.
+export const dynamic = "force-dynamic";
 
 export default function TermsPage() {
   return (
@@ -10,6 +14,8 @@ export default function TermsPage() {
       <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">
         Terms of Use
       </h1>
+
+      <PublicInstanceNote page="terms" />
 
       <div
         role="note"

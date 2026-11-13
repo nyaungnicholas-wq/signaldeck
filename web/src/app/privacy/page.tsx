@@ -1,8 +1,12 @@
+import PublicInstanceNote from "@/components/PublicInstanceNote";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { OPERATOR_NAME, CONTACT_EMAIL, LEGAL_UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = { title: "Privacy Notice" };
+
+// Rendered per request: the note at the top depends on which instance serves it.
+export const dynamic = "force-dynamic";
 
 export default function PrivacyPage() {
   return (
@@ -10,6 +14,8 @@ export default function PrivacyPage() {
       <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">
         Privacy Notice
       </h1>
+
+      <PublicInstanceNote page="privacy" />
       <div role="note" className="panel px-4 py-3 text-[0.8rem]" style={{ color: "var(--dim)" }}>
         Draft, pending legal review. Last updated {LEGAL_UPDATED}. Questions: <a href={`mailto:${CONTACT_EMAIL}`} style={{ color: "var(--dim)", textDecoration: "underline" }}>{CONTACT_EMAIL}</a>.
       </div>

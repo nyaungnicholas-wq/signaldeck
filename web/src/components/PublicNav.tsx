@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
 const ITEMS = [
   { label: "Grades", href: "/accuracy" },
@@ -21,11 +23,34 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
   const current = pathname ?? routed;
   const isActive = (href: string) =>
     current === href || current.startsWith(href + "/");
+  // "Forecasts" is offered only where the daemon says its price source may be
+  // shown publicly; elsewhere the link would lead to a refusal.
+  const [forecasts, setForecasts] = useState(false);
+  // The IEX-fed public instance needs no account, so it offers none.
+  const [noAccounts, setNoAccounts] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (!alive) return;
+        setForecasts(!!h?.priceSource);
+        setNoAccounts(h?.priceSource === "iexhist");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // The receipts page verifies a hash chain the public instance has not begun
+  // (its forecasts are frozen for grading, not chained), so it is not offered there.
+  const base = noAccounts ? ITEMS.filter((i) => i.href !== "/proof") : ITEMS;
+  const items = forecasts ? [{ label: "Forecasts", href: "/forecasts" }, ...base] : base;
 
   return (
     <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 sm:flex-1 sm:basis-auto">
       <nav aria-label="Public record" className="flex flex-wrap items-center gap-1">
-        {ITEMS.map(({ label, href }) => {
+        {items.map(({ label, href }) => {
           const active = isActive(href);
           return (
             <Link
@@ -40,12 +65,12 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
         })}
       </nav>
       <div className="ml-auto flex items-center gap-2">
-        {current !== "/login" && (
+        {!noAccounts && current !== "/login" && (
           <Link href="/login" className="chip">
             Sign in
           </Link>
         )}
-        {current !== "/signup" && (
+        {!noAccounts && current !== "/signup" && (
           <Link href="/signup" className="chip chip-cta">
             Sign up
           </Link>

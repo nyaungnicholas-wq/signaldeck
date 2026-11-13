@@ -123,6 +123,12 @@ type Config struct {
 	// Multi-user + exposure controls.
 	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default: open only on a private, untunnelled box; see `private` in Load): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
+	// PublicPriceSource (SIGNALDECK_PUBLIC_PRICE_SOURCE, default empty): the one
+	// price source this instance's bars come from, when that source may be shown
+	// to the public (datalicense.PublicPriceCleared). Any value other than
+	// "alpaca" also removes the Alpaca keys below, so an instance that shows its
+	// data publicly cannot ingest Alpaca data by accident.
+	PublicPriceSource string
 	// PublicReads (SIGNALDECK_PUBLIC_READS): read-only endpoints answer without
 	// auth. The default is NOT true -- it is reachablePrivately(), i.e. open
 	// only when the daemon is on loopback AND no tunnel is in the allowlist.
@@ -309,8 +315,8 @@ func Load() Config {
 		TrustProxy:     boolEnv("SIGNALDECK_TRUST_PROXY", false),
 		RateRPS:        atoiOr("SIGNALDECK_RATE_RPS", os.Getenv("SIGNALDECK_RATE_RPS"), 0),
 		RateBurst:      atoiOr("SIGNALDECK_RATE_BURST", os.Getenv("SIGNALDECK_RATE_BURST"), 0),
-		MemberCopilot: boolEnv("SIGNALDECK_MEMBER_COPILOT", false), // ask the data, for members
-		MemberFINRA:   boolEnv("SIGNALDECK_MEMBER_FINRA", false),   // FINRA short data, for members
+		MemberCopilot:  boolEnv("SIGNALDECK_MEMBER_COPILOT", false), // ask the data, for members
+		MemberFINRA:    boolEnv("SIGNALDECK_MEMBER_FINRA", false),   // FINRA short data, for members
 		// The MCP server never inherits an "open on loopback" default the way
 		// PublicReads does. Exposing an interface built for someone else's AI
 		// agent is a decision with compliance implications, so it is made once,
@@ -334,6 +340,10 @@ func Load() Config {
 		}
 	}
 	cfg.AlpacaFeed = os.Getenv("SIGNALDECK_ALPACA_FEED") // "" → client default "sip"
+	cfg.PublicPriceSource = strings.ToLower(strings.TrimSpace(os.Getenv("SIGNALDECK_PUBLIC_PRICE_SOURCE")))
+	if cfg.PublicPriceSource != "" && cfg.PublicPriceSource != "alpaca" {
+		cfg.AlpacaKey, cfg.AlpacaSecret = "", ""
+	}
 	return cfg
 }
 

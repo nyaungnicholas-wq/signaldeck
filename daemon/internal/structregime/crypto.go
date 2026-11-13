@@ -48,6 +48,9 @@ const (
 // accuracy per the conservative tier rule above. Monotone non-decreasing in
 // conviction by construction.
 func cryptoAccuracyFor(k Kind, conv float64) float64 {
+	if backtestOff.Load() {
+		return 0
+	}
 	type bands struct{ lo, b50, b80, b90 float64 }
 	var t bands
 	switch k {

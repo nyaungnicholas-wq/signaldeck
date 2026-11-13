@@ -17,6 +17,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  api,
   trackRecord,
   ledgerVerify,
   ApiError,
@@ -227,6 +228,19 @@ export default function ProofPage() {
   // record that only holds at one horizon is not much of a record. The API
   // already took this argument; the page just never let anyone change it.
   const [horizon, setHorizon] = useState<Horizon>("1d");
+  const [publicInstance, setPublicInstance] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (alive) setPublicInstance(h?.priceSource === "iexhist");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // The track-record result is stored WITH the horizon it belongs to, and the
   // displayed value is derived from whether those match. That is what makes a
@@ -340,6 +354,24 @@ export default function ProofPage() {
       alive = false;
     };
   }, [horizon]);
+
+  if (publicInstance) {
+    // The receipts page verifies a hash chain and a record that this public
+    // (IEX-fed) instance has not begun; the routes it reads are withheld here.
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5" data-testid="proof-public-notice">
+        <h1 className="text-[1.4rem] font-extrabold tracking-tight">Receipts</h1>
+        <section className="panel px-5 py-5 text-[0.85rem] leading-relaxed">
+          <p className="m-0 font-semibold">Nothing to verify here yet.</p>
+          <p className="mt-2" style={{ color: "var(--dim)" }}>
+            This page checks a hash-chained record of predictions. The public record on this site
+            is new and has not started that chain. Its one-month forecasts are stored with a simple
+            baseline before the outcome is known, and will be graded as their windows pass.
+          </p>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
@@ -479,7 +511,10 @@ export default function ProofPage() {
       {/* THE REGISTRATION ITSELF, not a promise of one. /volatility sends
           readers here to "read that registration" and until now there was
           nothing on this page to read. */}
-      <Registrations />
+      {/* Not on the IEX-fed public instance: its record is new and carries no
+          registered accuracy claims, and the claim details shown here belong
+          to the older record measured on licensed data. */}
+      {!publicInstance && <Registrations />}
 
       {/* The horizon picker lives ABOVE the three track-record states, not
           inside the loaded one — changing horizon clears `tr`, and a control

@@ -21,6 +21,10 @@ export const PUBLIC_ROUTES = [
   // NOT "/risk": next.config.ts already redirects that to /lab/risk for old
   // bookmarks, so a page there would be unreachable. Same trap as /deck.
   "/volatility", // the volatility estimates and their live record
+  // Visitor forecasts on a public-source instance (daemon: /api/public/forecasts,
+  // security.go visitorForecastRoutes). On any other instance the daemon refuses
+  // the read and the page says the forecasts are not public there.
+  "/forecasts",
   "/glossary", // plain-English terms; static, no daemon call
   "/privacy", // privacy notice; static, no daemon call
   "/terms", // terms of use; static, no daemon call

@@ -47,6 +47,15 @@ type Source struct {
 // Sources is the authoritative classification. Adding an ingest package without
 // adding it here is the mistake this table exists to make visible.
 var Sources = map[string]Source{
+	// IEX publishes its own exchange feed as free T+1 downloads. Its terms
+	// (https://www.iex.io/legal/hist-data-terms) allow distributing the data
+	// with the citation in IEXCitation. One venue only, not the consolidated
+	// tape. It never shares a database with another price source.
+	"iexhist": {
+		Name: "iexhist", Class: Public, Provider: "IEX Exchange (historical data)",
+		Note:      "free T+1 exchange feed; distribution allowed with the IEX citation",
+		Redistrib: true,
+	},
 	"alpaca": {
 		Name: "alpaca", Class: Licensed, Provider: "Alpaca Markets",
 		Note:      "market data under the Alpaca agreement; redistribution prohibited",
@@ -359,6 +368,28 @@ func NonOperatorSource(path string) (source string, cleared bool) {
 		return s, false
 	}
 	return "alpaca", false
+}
+
+// IEXCitation is the wording IEX's terms require wherever its data is shown.
+const IEXCitation = "Data provided for free by IEX. https://www.iex.io/legal/hist-data-terms"
+
+// PublicPriceCleared reports whether an instance whose price bars come ONLY
+// from publicSource may show price-derived content to non-operators.
+//
+// publicSource is the operator's SIGNALDECK_PUBLIC_PRICE_SOURCE. Empty (the
+// default) clears nothing: every price-derived route stays operator-only, as
+// it has been since 23 Oct 2026. A source listed here as redistributable
+// clears. "alpaca" clears too, and is the operator's own statement that Alpaca
+// has given written permission; nothing in the code can check that.
+func PublicPriceCleared(publicSource string) bool {
+	if publicSource == "" {
+		return false
+	}
+	if publicSource == "alpaca" {
+		return true
+	}
+	s, ok := Sources[publicSource]
+	return ok && s.Redistrib
 }
 
 // WithheldNotice is the plain sentence a withheld caller is shown for source.

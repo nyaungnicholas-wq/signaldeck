@@ -182,6 +182,9 @@ func Predict(rets []float64) (Forecast, bool) {
 // of this method (see package doc). Monotone non-decreasing; never exceeds the
 // measured ceiling; a coin-flip conviction returns ~0.5 (no claimed skill).
 func AccuracyForConviction(conv float64) float64 {
+	if backtestOff.Load() {
+		return 0
+	}
 	switch {
 	case conv >= 0.9:
 		return 0.76

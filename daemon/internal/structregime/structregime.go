@@ -523,6 +523,9 @@ func PredictVol21(rets []float64) (Forecast, bool) {
 // of the measured cumulative tiers (2026-07-17 loop, independently
 // re-verified same day). Monotone non-decreasing in conviction.
 func accuracyFor(k Kind, conv float64) float64 {
+	if backtestOff.Load() {
+		return 0
+	}
 	type bands struct{ lo, b50, b80, b90 float64 }
 	var t bands
 	switch k {
@@ -761,6 +764,9 @@ func max(a, b int) int {
 // confident band is by construction the most extended one, and extended names
 // mean-revert over the next month.
 func forwardReturnFor(k Kind, conv float64) (pct float64, ok bool) {
+	if backtestOff.Load() {
+		return 0, false
+	}
 	type bands struct{ lo, b50, b80, b90 float64 }
 	nm := math.NaN() // not measured — refuse rather than interpolate
 	var t bands

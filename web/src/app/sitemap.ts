@@ -21,7 +21,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
   if (!base) return [];
   // /health is public but robots.ts does not allow it; listing a URL the
   // crawler is told to skip is "Submitted URL blocked by robots.txt".
-  return PUBLIC_ROUTES.filter((r) => r !== "/login" && r !== "/health").map((route) => ({
+  // /forecasts is a real page only on a public-source instance; elsewhere it
+  // says the forecasts are not public, which does not belong in a sitemap.
+  const forecasts = !!(process.env.SIGNALDECK_WEB_PRICE_SOURCE || "").trim();
+  return PUBLIC_ROUTES.filter((r) => r !== "/login" && r !== "/health" && (forecasts || r !== "/forecasts")).map((route) => ({
     url: route === "/" ? base : `${base}${route}`,
     lastModified: new Date(),
     changeFrequency: "daily" as const,

@@ -186,29 +186,30 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux.HandleFunc("GET /api/research-ledger", func(w http.ResponseWriter, r *http.Request) {
 		sharedResearchLedgerSWR.serve(d.St.CacheKey()+"|research-ledger", w, r, d.researchLedger)
 	})
-	mux.HandleFunc("GET /api/research-loop", d.researchLoop)      // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
-	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
-	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
-	mux.HandleFunc("GET /api/signal-report", d.signalReport)      // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
-	mux.HandleFunc("GET /api/universe", d.universe)               // broad-universe wave: streamed-count vs daily-universe-count + caps
-	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent)        // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
-	d.registerFreeData(mux)                                       // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
-	d.registerLedger(mux)                                         // Stage 3: append-only hash-chained prediction ledger (verify + per-symbol list)
-	d.registerPaper(mux)                                          // Stage 4: INTERNAL simulated paper-trading book (equity curve + positions + trades + costed summary)
-	d.registerSignalBT(mux)                                       // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
-	d.registerTrackRecord(mux)                                    // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
-	d.registerChartOverlays(mux)                                  // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
-	d.registerSignal8(mux)                                        // Signal8 wave Stage 1: SEC filings feed + Form 4 insiders + 13F institutions + dilution flags (all reads, honest lag notes)
-	d.registerCongress(mux)                                       // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
-	d.registerAnomalies(mux)                                      // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
-	d.registerSignal8Home(mux)                                    // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
-	d.registerDashboard(mux)                                      // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
-	d.registerStage5(mux)                                         // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
-	d.registerCompanies(mux)                                      // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
-	d.registerNotify(mux)                                         // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook/Slack/SMTP) are configured + last delivery/redacted error; the LOCAL desktop row names this platform's real channel with an honest "untracked" note
-	d.registerTVWebhook(mux)                                      // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
-	d.registerTVStatus(mux)                                       // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
-	d.registerShorts(mux)                                         // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
+	mux.HandleFunc("GET /api/research-loop", d.researchLoop)       // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
+	mux.HandleFunc("GET /api/public/forecasts", d.publicForecasts) // visitor read on a public-source instance: allowlisted fields only
+	mux.HandleFunc("GET /api/vol-regime", d.volRegime)             // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
+	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached)  // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
+	mux.HandleFunc("GET /api/signal-report", d.signalReport)       // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
+	mux.HandleFunc("GET /api/universe", d.universe)                // broad-universe wave: streamed-count vs daily-universe-count + caps
+	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent)         // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
+	d.registerFreeData(mux)                                        // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
+	d.registerLedger(mux)                                          // Stage 3: append-only hash-chained prediction ledger (verify + per-symbol list)
+	d.registerPaper(mux)                                           // Stage 4: INTERNAL simulated paper-trading book (equity curve + positions + trades + costed summary)
+	d.registerSignalBT(mux)                                        // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
+	d.registerTrackRecord(mux)                                     // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
+	d.registerChartOverlays(mux)                                   // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
+	d.registerSignal8(mux)                                         // Signal8 wave Stage 1: SEC filings feed + Form 4 insiders + 13F institutions + dilution flags (all reads, honest lag notes)
+	d.registerCongress(mux)                                        // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
+	d.registerAnomalies(mux)                                       // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
+	d.registerSignal8Home(mux)                                     // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
+	d.registerDashboard(mux)                                       // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
+	d.registerStage5(mux)                                          // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
+	d.registerCompanies(mux)                                       // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
+	d.registerNotify(mux)                                          // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook/Slack/SMTP) are configured + last delivery/redacted error; the LOCAL desktop row names this platform's real channel with an honest "untracked" note
+	d.registerTVWebhook(mux)                                       // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
+	d.registerTVStatus(mux)                                        // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
+	d.registerShorts(mux)                                          // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
 	// ── SIGNALS-hub overhaul (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerStream(mux)         // live-feed wave: SSE push of the newest 1s microstructure snap (GET /api/stream/snaps) so the UI keeps up at 1 Hz+ without REST polling
@@ -628,6 +629,9 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// bot check, so the sign-up page can say why instead of failing.
 			"signupPaused": d.Cfg.OpenSignup && !d.signupOpen(),
 			"detail":       "sign in or send the API token for the full breakdown",
+			// The price source this instance shows publicly ("" = none). The web
+			// tier renders the citation the source's terms require from it.
+			"priceSource": d.Cfg.PublicPriceSource,
 			// Public by design: Turnstile site keys are embedded in every page that
 			// renders the widget. Served here so no rebuild is needed to set one.
 			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
@@ -647,6 +651,7 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 		"revision":        lineage.RevisionStamp(),
 		"uptimeS":         int(time.Since(d.Started).Seconds()),
 		"alpaca":          d.Cfg.HasAlpaca(),
+		"priceSource":     d.Cfg.PublicPriceSource,
 		"time":            time.Now().Unix(),
 		"schemaContract":  refusals,
 		"workers":         failing,

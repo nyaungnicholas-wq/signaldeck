@@ -140,7 +140,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		}
 
 		// 6. Auth enforcement per endpoint.
-		if uid == 0 && d.requiresAuth(r.URL.Path) {
+		if uid == 0 && d.requiresAuth(r.URL.Path) && !d.openToVisitors(r) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"authentication required"}` + "\n"))
@@ -161,8 +161,16 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// member accounts alike reach only the rights-cleared allowlist; every
 		// other path, including one added next month, is a 451 naming the
 		// source. Below the auth and member tiers, so it only ever narrows them.
-		if d.withheldFrom(r) {
-			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared {
+		// Two narrow exceptions, both stated by the operator in
+		// SIGNALDECK_PUBLIC_PRICE_SOURCE. "alpaca" (written consent received)
+		// clears every Alpaca-governed route. A displayable source such as IEX
+		// clears ONLY the allowlisted visitor forecast read: the other routes on
+		// such an instance still carry figures and seeded claims that were
+		// measured on Alpaca bars (evidence seeds, claimed accuracies, model
+		// health), so they stay withheld there. Kadoa is never cleared.
+		if d.published() && !d.isOperator(r) {
+			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared &&
+				!(src == "alpaca" && d.priceRouteCleared(r.URL.Path)) {
 				writeWithheld(w, src)
 				return
 			}
@@ -197,6 +205,10 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 // deployment: anonymous visitors and member accounts. Handlers on the
 // rights-cleared allowlist strip their derived fields for exactly this caller.
 func (d Deps) withheldFrom(r *http.Request) bool {
+	// Deliberately NOT relaxed by PublicPriceSource. The handlers that ask this
+	// strip figures MEASURED on Alpaca bars (prereg bands and baselines) and gate
+	// the paid LLM summary; neither becomes shareable because today's bars come
+	// from somewhere else. Only step 6c above opens routes.
 	return d.published() && !d.isOperator(r)
 }
 
@@ -402,6 +414,39 @@ func alwaysOpen(path string) bool {
 	return path == "/api/health" || path == "/api/ready" ||
 		strings.HasPrefix(path, "/api/auth/") ||
 		path == "/api/tv-webhook" || mcpExempt(path)
+}
+
+// visitorForecastRoutes are the member-tier READS a visitor with no account may
+// make on an instance whose public price source is cleared (owner decision,
+// 11 Nov 2026: the public instance needs no sign-in). Forecasts built from that
+// instance's own bars, and SEC public filings. Nothing personal (watchlist,
+// journal, alerts, account), nothing that writes, nothing that spends LLM
+// budget. On the default instance this list opens nothing.
+var visitorForecastRoutes = map[string]bool{
+	// ONE forecast read, built from an allowlist of fields. The member forecast
+	// routes are NOT here: their payloads carry accuracy tiers and methodology
+	// text measured on Alpaca bars.
+	"/api/public/forecasts": true,
+	"/api/companies":        true,
+	"/api/filings":          true, "/api/insiders": true, "/api/institutions": true,
+	"/api/dilution": true, "/api/fundamentals": true,
+}
+
+// priceRouteCleared reports whether an Alpaca-governed path is cleared for a
+// non-operator on this instance (see step 6c).
+func (d Deps) priceRouteCleared(path string) bool {
+	src := d.Cfg.PublicPriceSource
+	if src == "alpaca" {
+		return true
+	}
+	return path == "/api/public/forecasts" && datalicense.PublicPriceCleared(src)
+}
+
+// openToVisitors is true for an anonymous GET of a visitor forecast route on an
+// instance fed only by a displayable price source.
+func (d Deps) openToVisitors(r *http.Request) bool {
+	return r.Method == http.MethodGet && visitorForecastRoutes[r.URL.Path] &&
+		datalicense.PublicPriceCleared(d.Cfg.PublicPriceSource)
 }
 
 // requiresAuth reports whether an anonymous request to path must be rejected.
