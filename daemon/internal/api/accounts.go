@@ -67,8 +67,8 @@ var memberRoutes = map[string]bool{
 	"/api/regimes": true, "/api/vol-regime": true, "/api/market-regimes": true,
 	// The visitor forecast read (publicforecasts.go): a signed-in member must
 	// not get less than a visitor with no account.
-	"/api/public/forecasts": true,
-	"/api/symbol-agent":     true,
+	"/api/public/forecasts": true, "/api/public/grades": true,
+	"/api/symbol-agent": true,
 	// Public intel: SEC EDGAR filings, Form 4, 13F and XBRL fundamentals,
 	// STOCK Act disclosures. /api/shorts and /api/short-interest left this list
 	// on 22 Oct 2026: FINRA's terms do not permit this use, and the licence guard

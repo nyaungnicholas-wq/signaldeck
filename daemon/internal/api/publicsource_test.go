@@ -28,8 +28,10 @@ func TestPublicPriceSourceOpensOnlyPriceDerivedRoutes(t *testing.T) {
 	// evidence ledger and the track record stay withheld on an IEX instance:
 	// they carry figures and seeded claims measured on Alpaca bars.
 	for who, cl := range map[string]*http.Client{"anonymous": newClient(t), "member": member} {
-		if code, _, body := call(t, cl, srv, http.MethodGet, "/api/public/forecasts"); code != 200 || body != "reached" {
-			t.Errorf("%s on an IEX-fed instance: /api/public/forecasts answered %d %.80s, want it reached", who, code, body)
+		for _, p := range []string{"/api/public/forecasts", "/api/public/grades"} {
+			if code, _, body := call(t, cl, srv, http.MethodGet, p); code != 200 || body != "reached" {
+				t.Errorf("%s on an IEX-fed instance: %s answered %d %.80s, want it reached", who, p, code, body)
+			}
 		}
 		for _, p := range []string{"/api/accuracy", "/api/evidence", "/api/track-record", "/api/model-health"} {
 			code, ctype, body := call(t, cl, srv, http.MethodGet, p)

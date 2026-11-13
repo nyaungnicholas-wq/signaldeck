@@ -187,6 +187,7 @@ func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 		sharedResearchLedgerSWR.serve(d.St.CacheKey()+"|research-ledger", w, r, d.researchLedger)
 	})
 	mux.HandleFunc("GET /api/research-loop", d.researchLoop)       // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
+	mux.HandleFunc("GET /api/public/grades", d.publicGrades)       // visitor read: the public record's tallies, allowlisted
 	mux.HandleFunc("GET /api/public/forecasts", d.publicForecasts) // visitor read on a public-source instance: allowlisted fields only
 	mux.HandleFunc("GET /api/vol-regime", d.volRegime)             // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
 	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached)  // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload

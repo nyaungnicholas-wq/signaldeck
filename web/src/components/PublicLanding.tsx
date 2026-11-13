@@ -15,7 +15,7 @@ const POINTS: { title: string; body: string }[] = [
   },
   {
     title: "What has not been measured",
-    body: "How often these readings turn out right. This public record is new, so there are no grades yet. They are added as each forecast window passes, and they will be shown whether they are good or bad.",
+    body: "How often these readings turn out right. This public record is new, so there are no grades yet. The Grades page fills in by itself as each forecast window passes, and shows the result next to a simple baseline whether it is good or bad.",
   },
 ];
 

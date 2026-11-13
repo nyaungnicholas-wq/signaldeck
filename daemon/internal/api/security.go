@@ -427,6 +427,7 @@ var visitorForecastRoutes = map[string]bool{
 	// routes are NOT here: their payloads carry accuracy tiers and methodology
 	// text measured on Alpaca bars.
 	"/api/public/forecasts": true,
+	"/api/public/grades":    true,
 	"/api/companies":        true,
 	"/api/filings":          true, "/api/insiders": true, "/api/institutions": true,
 	"/api/dilution": true, "/api/fundamentals": true,
@@ -439,7 +440,7 @@ func (d Deps) priceRouteCleared(path string) bool {
 	if src == "alpaca" {
 		return true
 	}
-	return path == "/api/public/forecasts" && datalicense.PublicPriceCleared(src)
+	return (path == "/api/public/forecasts" || path == "/api/public/grades") && datalicense.PublicPriceCleared(src)
 }
 
 // openToVisitors is true for an anonymous GET of a visitor forecast route on an

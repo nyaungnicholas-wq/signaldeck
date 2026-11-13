@@ -10,7 +10,7 @@
 // is no second copy of the verdict logic here to drift.
 
 import { getPriceSource, IEX_SOURCE } from "@/lib/instance";
-import NewRecordNotice from "@/components/NewRecordNotice";
+import PublicGrades from "@/components/PublicGrades";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { cookies } from "next/headers";
@@ -436,14 +436,9 @@ type PublishedRow = {
 };
 
 export default async function AccuracyPage() {
-  if ((await getPriceSource()) === IEX_SOURCE) {
-    return (
-      <NewRecordNotice
-        title="Grades"
-        what="How often each kind of forecast turned out right, compared with a simple baseline, with failures listed first."
-      />
-    );
-  }
+  // The public (IEX-fed) instance shows its own record's tallies, read from
+  // the daemon's allowlisted feed. Nothing from the research registry is read.
+  if ((await getPriceSource()) === IEX_SOURCE) return <PublicGrades />;
   const pub = await loadPublicationStatus();
 
   // Withheld under the data licence. Checked FIRST and returns before
