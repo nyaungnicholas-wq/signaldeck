@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
 const ITEMS = [
   { label: "Grades", href: "/accuracy" },
@@ -21,11 +23,27 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
   const current = pathname ?? routed;
   const isActive = (href: string) =>
     current === href || current.startsWith(href + "/");
+  // "Forecasts" is offered only where the daemon says its price source may be
+  // shown publicly; elsewhere the link would lead to a refusal.
+  const [forecasts, setForecasts] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (alive) setForecasts(!!h?.priceSource);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const items = forecasts ? [{ label: "Forecasts", href: "/forecasts" }, ...ITEMS] : ITEMS;
 
   return (
     <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 sm:flex-1 sm:basis-auto">
       <nav aria-label="Public record" className="flex flex-wrap items-center gap-1">
-        {ITEMS.map(({ label, href }) => {
+        {items.map(({ label, href }) => {
           const active = isActive(href);
           return (
             <Link
