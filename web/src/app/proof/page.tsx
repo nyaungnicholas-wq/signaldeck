@@ -354,6 +354,24 @@ export default function ProofPage() {
       alive = false;
     };
   }, [horizon]);
+
+  if (publicInstance) {
+    // The receipts page verifies a hash chain and a record that this public
+    // (IEX-fed) instance has not begun; the routes it reads are withheld here.
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5" data-testid="proof-public-notice">
+        <h1 className="text-[1.4rem] font-extrabold tracking-tight">Receipts</h1>
+        <section className="panel px-5 py-5 text-[0.85rem] leading-relaxed">
+          <p className="m-0 font-semibold">Nothing to verify here yet.</p>
+          <p className="mt-2" style={{ color: "var(--dim)" }}>
+            This page checks a hash-chained record of predictions. The public record on this site
+            is new and has not started that chain. Its one-month forecasts are stored with a simple
+            baseline before the outcome is known, and will be graded as their windows pass.
+          </p>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">

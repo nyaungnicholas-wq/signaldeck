@@ -24,11 +24,20 @@ func TestPublicPriceSourceOpensOnlyPriceDerivedRoutes(t *testing.T) {
 	base := func(c *config.Config) { c.PublicSurface, c.PublicReads = false, true }
 
 	srv, _, member, _ := startGuardOnly(t, func(c *config.Config) { base(c); c.PublicPriceSource = "iexhist" })
-	// /api/accuracy is on both the anonymous and the member tier, and is a 451
-	// for both on the default instance (it is built from price bars).
+	// ONLY the allowlisted visitor forecast read opens. /api/accuracy, the
+	// evidence ledger and the track record stay withheld on an IEX instance:
+	// they carry figures and seeded claims measured on Alpaca bars.
 	for who, cl := range map[string]*http.Client{"anonymous": newClient(t), "member": member} {
-		if code, _, body := call(t, cl, srv, http.MethodGet, "/api/accuracy"); code != 200 || body != "reached" {
-			t.Errorf("%s on an IEX-fed instance: price-derived route answered %d %.80s, want it reached", who, code, body)
+		if code, _, body := call(t, cl, srv, http.MethodGet, "/api/public/forecasts"); code != 200 || body != "reached" {
+			t.Errorf("%s on an IEX-fed instance: /api/public/forecasts answered %d %.80s, want it reached", who, code, body)
+		}
+		for _, p := range []string{"/api/accuracy", "/api/evidence", "/api/track-record", "/api/model-health"} {
+			code, ctype, body := call(t, cl, srv, http.MethodGet, p)
+			if code == 200 {
+				t.Errorf("%s on an IEX-fed instance reached %s: it carries Alpaca-measured content", who, p)
+			} else if code == http.StatusUnavailableForLegalReasons {
+				checkWithheld(t, who, p+" on an IEX-fed instance", code, ctype, body, "alpaca")
+			}
 		}
 		code, ctype, body := call(t, cl, srv, http.MethodGet, "/api/congress")
 		checkWithheld(t, who, "/api/congress on an IEX-fed instance", code, ctype, body, "kadoa")
@@ -66,5 +75,17 @@ func TestVisitorsReadForecastsOnlyOnAPublicSourceInstance(t *testing.T) {
 	def, _, _, _ := startGuardOnly(t, closedReads)
 	if code, _, _ := call(t, newClient(t), def, http.MethodGet, "/api/public/forecasts"); code != http.StatusUnauthorized {
 		t.Errorf("visitor GET /api/public/forecasts on the default instance: %d, want 401", code)
+	}
+}
+
+// After Alpaca gives written consent the operator sets the source to "alpaca":
+// that, and only that, clears every Alpaca-governed route.
+func TestAlpacaAsPublicSourceClearsEverything(t *testing.T) {
+	srv, _, _, _ := startGuardOnly(t, func(c *config.Config) {
+		c.PublicSurface, c.PublicReads = false, true
+		c.PublicPriceSource = "alpaca"
+	})
+	if code, _, body := call(t, newClient(t), srv, http.MethodGet, "/api/accuracy"); code != 200 || body != "reached" {
+		t.Errorf("alpaca-public instance: /api/accuracy answered %d %.80s, want it reached", code, body)
 	}
 }

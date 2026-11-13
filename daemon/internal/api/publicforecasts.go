@@ -46,10 +46,22 @@ func (d Deps) publicForecasts(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	// Only symbols still covered. A symbol that dropped out of the universe
+	// keeps its last row in vol_forecasts forever; serving it would present a
+	// stale reading as current.
+	syms, err := d.St.ListSymbols(r.Context(), true)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	active := make(map[string]bool, len(syms))
+	for _, s := range syms {
+		active[s.Symbol] = true
+	}
 	rows := make([]publicForecastRow, 0, len(vols)+len(regs))
 	var newest int64
 	for _, v := range vols {
-		if v.Market != "stocks" {
+		if v.Market != "stocks" || !active[v.Symbol] {
 			continue
 		}
 		rows = append(rows, publicForecastRow{Symbol: v.Symbol, Kind: "vol63", HorizonDays: 63,
@@ -59,7 +71,7 @@ func (d Deps) publicForecasts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, f := range regs {
-		if f.Market != "stocks" {
+		if f.Market != "stocks" || !active[f.Symbol] {
 			continue
 		}
 		rows = append(rows, publicForecastRow{Symbol: f.Symbol, Kind: string(f.Kind), HorizonDays: f.HorizonDays,

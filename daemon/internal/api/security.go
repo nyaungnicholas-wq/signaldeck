@@ -161,12 +161,16 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// member accounts alike reach only the rights-cleared allowlist; every
 		// other path, including one added next month, is a 451 naming the
 		// source. Below the auth and member tiers, so it only ever narrows them.
-		// An instance fed only by a displayable price source (PublicPriceSource)
-		// clears the Alpaca-governed routes; Kadoa and every other source stay
-		// withheld on it.
+		// Two narrow exceptions, both stated by the operator in
+		// SIGNALDECK_PUBLIC_PRICE_SOURCE. "alpaca" (written consent received)
+		// clears every Alpaca-governed route. A displayable source such as IEX
+		// clears ONLY the allowlisted visitor forecast read: the other routes on
+		// such an instance still carry figures and seeded claims that were
+		// measured on Alpaca bars (evidence seeds, claimed accuracies, model
+		// health), so they stay withheld there. Kadoa is never cleared.
 		if d.published() && !d.isOperator(r) {
 			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared &&
-				!(src == "alpaca" && datalicense.PublicPriceCleared(d.Cfg.PublicPriceSource)) {
+				!(src == "alpaca" && d.priceRouteCleared(r.URL.Path)) {
 				writeWithheld(w, src)
 				return
 			}
@@ -426,6 +430,16 @@ var visitorForecastRoutes = map[string]bool{
 	"/api/companies":        true,
 	"/api/filings":          true, "/api/insiders": true, "/api/institutions": true,
 	"/api/dilution": true, "/api/fundamentals": true,
+}
+
+// priceRouteCleared reports whether an Alpaca-governed path is cleared for a
+// non-operator on this instance (see step 6c).
+func (d Deps) priceRouteCleared(path string) bool {
+	src := d.Cfg.PublicPriceSource
+	if src == "alpaca" {
+		return true
+	}
+	return path == "/api/public/forecasts" && datalicense.PublicPriceCleared(src)
 }
 
 // openToVisitors is true for an anonymous GET of a visitor forecast route on an
