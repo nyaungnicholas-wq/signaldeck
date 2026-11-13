@@ -49,22 +49,22 @@ func TestVisitorsReadForecastsOnlyOnAPublicSourceInstance(t *testing.T) {
 
 	srv, _, _, _ := startGuardOnly(t, func(c *config.Config) { closedReads(c); c.PublicPriceSource = "iexhist" })
 	anon := newClient(t)
-	for _, p := range []string{"/api/regimes", "/api/vol-forecast/latest", "/api/market-regimes", "/api/filings"} {
+	for _, p := range []string{"/api/public/forecasts", "/api/filings", "/api/insiders"} {
 		if code, _, body := call(t, anon, srv, http.MethodGet, p); code != 200 || body != "reached" {
 			t.Errorf("visitor GET %s on the IEX instance: %d %.80s, want it reached", p, code, body)
 		}
 	}
-	for _, p := range []string{"/api/watchlist", "/api/journal", "/api/account/export", "/api/alert-prefs", "/api/ask", "/api/paper"} {
+	for _, p := range []string{"/api/regimes", "/api/vol-regime", "/api/market-regimes", "/api/watchlist", "/api/journal", "/api/account/export", "/api/alert-prefs", "/api/ask", "/api/paper"} {
 		if code, _, _ := call(t, anon, srv, http.MethodGet, p); code != http.StatusUnauthorized {
 			t.Errorf("visitor GET %s on the IEX instance: %d, want 401", p, code)
 		}
 	}
-	if code, _, _ := call(t, anon, srv, http.MethodPost, "/api/regimes"); code != http.StatusUnauthorized {
-		t.Errorf("visitor POST /api/regimes on the IEX instance: %d, want 401", code)
+	if code, _, _ := call(t, anon, srv, http.MethodPost, "/api/public/forecasts"); code != http.StatusUnauthorized {
+		t.Errorf("visitor POST /api/public/forecasts on the IEX instance: %d, want 401", code)
 	}
 
 	def, _, _, _ := startGuardOnly(t, closedReads)
-	if code, _, _ := call(t, newClient(t), def, http.MethodGet, "/api/regimes"); code != http.StatusUnauthorized {
-		t.Errorf("visitor GET /api/regimes on the default instance: %d, want 401", code)
+	if code, _, _ := call(t, newClient(t), def, http.MethodGet, "/api/public/forecasts"); code != http.StatusUnauthorized {
+		t.Errorf("visitor GET /api/public/forecasts on the default instance: %d, want 401", code)
 	}
 }

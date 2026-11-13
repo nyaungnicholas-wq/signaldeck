@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/iexhist"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -53,6 +54,15 @@ func main() {
 	var dates []string
 	for _, f := range files {
 		date := strings.TrimSuffix(filepath.Base(f), ".csv")
+		// IEX publishes small test captures on some weekends. They are not
+		// sessions; skipping by calendar keeps the partial-day refusal below
+		// meaningful for real trading days.
+		if d, err := time.Parse("20060102", date); err != nil {
+			fail(fmt.Errorf("%s: not a YYYYMMDD day file", f))
+		} else if wd := d.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			fmt.Printf("iexhist-load: skipping weekend file %s\n", date)
+			continue
+		}
 		n, err := readDay(f, date, series)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", f, err))

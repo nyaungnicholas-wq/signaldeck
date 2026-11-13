@@ -419,9 +419,12 @@ func alwaysOpen(path string) bool {
 // journal, alerts, account), nothing that writes, nothing that spends LLM
 // budget. On the default instance this list opens nothing.
 var visitorForecastRoutes = map[string]bool{
-	"/api/regimes": true, "/api/vol-regime": true, "/api/market-regimes": true,
-	"/api/vol-forecast/latest": true, "/api/companies": true,
-	"/api/filings": true, "/api/insiders": true, "/api/institutions": true,
+	// ONE forecast read, built from an allowlist of fields. The member forecast
+	// routes are NOT here: their payloads carry accuracy tiers and methodology
+	// text measured on Alpaca bars.
+	"/api/public/forecasts": true,
+	"/api/companies":        true,
+	"/api/filings":          true, "/api/insiders": true, "/api/institutions": true,
 	"/api/dilution": true, "/api/fundamentals": true,
 }
 
