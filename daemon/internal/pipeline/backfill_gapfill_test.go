@@ -311,6 +311,18 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 	if err := st.UpsertBars(ctx, dailyBars(part.ID, time.Now())[:20]); err != nil {
 		t.Fatal(err)
 	}
+	// TRUNC was stamped 60 days ago but its stored history stops ~100 days ago:
+	// the gap before the stamp is still fetchable, so it is not waived.
+	trunc, err := st.UpsertSymbol(ctx, "TRUNC", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkDelisted(ctx, trunc.ID, time.Now().AddDate(0, 0, -60).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBars(ctx, dailyBars(trunc.ID, time.Now())[100:120]); err != nil {
+		t.Fatal(err)
+	}
 	thin, err := st.UpsertSymbol(ctx, "THIN", md.Stocks, "")
 	if err != nil {
 		t.Fatal(err)
@@ -329,10 +341,10 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 	for _, s := range got {
 		ids[s.ID] = true
 	}
-	if len(got) != 2 || !ids[live.ID] || !ids[thin.ID] {
-		t.Fatalf("got %v, want LIVE and THIN (not DEAD, not PART); detail: %s", got, detail)
+	if len(got) != 3 || !ids[live.ID] || !ids[thin.ID] || !ids[trunc.ID] {
+		t.Fatalf("got %v, want LIVE, THIN and TRUNC (not DEAD, not PART); detail: %s", got, detail)
 	}
-	if !strings.Contains(detail, "re-enqueued 2 under-covered") || !strings.Contains(detail, "skipped 2 delisted") {
+	if !strings.Contains(detail, "re-enqueued 3 under-covered") || !strings.Contains(detail, "skipped 2 delisted") {
 		t.Errorf("detail missing expected content: %s", detail)
 	}
 }

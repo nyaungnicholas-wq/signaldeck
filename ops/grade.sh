@@ -123,6 +123,10 @@ try:
     os.mkdir(sys.argv[1])
 except FileExistsError:
     sys.exit(3)
+except PermissionError as e:
+    # Windows raises this, not FileExistsError, when the dir is mid-delete by
+    # another grader: contention, if the path is (still) there.
+    sys.exit(3 if os.path.exists(sys.argv[1]) else "take_lock: %s" % e)
 except OSError as e:
     sys.exit("take_lock: %s" % e)' "$(cygpath -m "$LOCK" 2>/dev/null || printf '%s' "$LOCK")"
   _tl=$?

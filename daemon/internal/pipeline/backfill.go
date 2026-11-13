@@ -139,32 +139,32 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 	// A delisted stock never prints the minute bars that would clear its
 	// floor, so it was re-enqueued every pass forever (CRNX, SOBR, VTAK, MVO on
 	// 2026-11-12), spending vendor calls on dead names. Survivorship keeps them
-	// active for their history. Its floors are waived once ANY daily history has
-	// landed (a name that traded 50 days never reaches 100 bars); one stamped
-	// delisted before its history landed can still fetch it, so it is retried.
-	delisted, err := r.St.DelistedSymbolIDs(ctx)
+	// active for their history. Its floors are waived once its daily history
+	// reaches the delisting (a name that traded 50 days never reaches 100 bars);
+	// one whose history stops short of the stamp can still fetch the rest.
+	delistedAt, err := r.St.DelistedAtByID(ctx)
 	if err != nil {
 		return "", err
 	}
+	const delistSlack = 10 * 86400 // the stamp is the last bar's UTC day, maybe restamped forward
 	requeued, skipped := 0, 0
 	for _, s := range syms {
-		nDaily, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1d)
+		nDaily, _, lastDaily, err := r.St.BarCount(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return "", err
 		}
-		need := nDaily < minCoverage
-		waived := delisted[s.ID] && nDaily > 0
-		if waived {
-			need = false
-		}
-		if s.Market == md.Stocks && !waived {
+		at, isDelisted := delistedAt[s.ID]
+		waived := isDelisted && nDaily > 0 && lastDaily >= at-delistSlack
+		short := nDaily < minCoverage
+		if s.Market == md.Stocks {
 			nMin, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1m)
 			if err != nil {
 				return "", err
 			}
-			need = need || nMin < minCoverage
+			short = short || nMin < minCoverage
 		}
-		if waived && (nDaily < minCoverage || s.Market == md.Stocks) {
+		need := short && !waived
+		if short && waived {
 			skipped++ // a floor it can never meet again, no longer re-enqueued
 		}
 		if need {
@@ -184,7 +184,7 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 		budgetOK, why = r.gapFillBudgetOK(ctx)
 		retention := retention1mDays()
 		for _, s := range syms {
-			if s.Market == md.Stocks && s.Stream && !delisted[s.ID] {
+			if _, dead := delistedAt[s.ID]; s.Market == md.Stocks && s.Stream && !dead {
 				counts, err := r.St.SessionBarCounts(ctx, s.ID, md.TF1m, now.Add(-time.Duration(retention)*24*time.Hour).Unix())
 				if err != nil {
 					return "", err

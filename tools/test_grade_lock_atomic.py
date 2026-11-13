@@ -56,6 +56,28 @@ class GradeLockIsExclusive(unittest.TestCase):
                 self.assertIn("both=0", out, out)
                 self.assertNotIn("NO LOCK DIR", out, out)
 
+    def test_held_is_rc3_and_a_broken_python_refuses(self):
+        """A held lock is contention (rc 3, the SKIPPED path); a python that
+        cannot run is NOT contention and must stop the run (exit 1)."""
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash not available")
+        for script in (REPO / "ops" / "grade.sh", REPO / "ops" / "accuracy-registry.sh"):
+            fn = _take_lock_fn(script)
+            with self.subTest(script=script.name), tempfile.TemporaryDirectory() as d:
+                lock = Path(d).resolve().as_posix() + "/held"
+                Path(lock).mkdir()
+                pre = f'log() {{ echo "$*"; }}\nLOG=/dev/null\nLOCK="{lock}"\n{fn}\n'
+                held = pre + f'PY="{Path(sys.executable).as_posix()}"\ntake_lock\necho "rc=$?"\n'
+                broken = pre + 'PY=/nonexistent/python3\ntake_lock\necho "UNREACHED"\n'
+                p1 = subprocess.run([bash, "-s"], input=held.encode(), capture_output=True, timeout=60)
+                self.assertIn("rc=3", p1.stdout.decode(), p1.stdout + p1.stderr)
+                p2 = subprocess.run([bash, "-s"], input=broken.encode(), capture_output=True, timeout=60)
+                out2 = (p2.stdout + p2.stderr).decode("utf-8", "replace")
+                self.assertEqual(p2.returncode, 1, out2)
+                self.assertIn("REFUSED", out2)
+                self.assertNotIn("UNREACHED", out2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

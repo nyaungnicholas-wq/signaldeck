@@ -375,3 +375,21 @@ func (s *Store) DelistedSymbolIDs(ctx context.Context) (map[int64]bool, error) {
 	}
 	return scanIDSet(rows)
 }
+
+// DelistedAtByID maps every symbol carrying a delisting stamp to that stamp.
+func (s *Store) DelistedAtByID(ctx context.Context) (map[int64]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, delisted_at FROM symbols WHERE COALESCE(delisted_at, 0) > 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[int64]int64{}
+	for rows.Next() {
+		var id, at int64
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = at
+	}
+	return out, rows.Err()
+}

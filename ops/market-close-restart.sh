@@ -49,7 +49,7 @@ fi
 # this task starts the binary directly, past daemon-guard. Do not start the
 # daemon into the prune; the refresh's own restart or daemon-guard brings it
 # back once the refresh releases the lock.
-if [ -s "$SD/ops/.maintenance" ]; then
+if grep -q '^refresh ' "$SD/ops/.maintenance" 2>/dev/null; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: the refresh holds the maintenance lock; not starting the daemon into its prune (daemon-guard restarts it after)" >> "$SD/logs/backup-offline.log"
   exit 0
 fi

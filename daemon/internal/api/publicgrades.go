@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // publicGradeMinDays is how many distinct graded days a kind needs before any
@@ -46,31 +47,7 @@ func (d Deps) publicGrades(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]publicGrade, 0, len(tallies))
 	for _, t := range tallies {
-		g := publicGrade{Kind: t.Kind, Open: t.Open, Graded: t.Graded, Days: t.Days}
-		switch {
-		case t.Graded == 0:
-			g.Status = "no forecast window has closed yet"
-		case t.Days < publicGradeMinDays:
-			g.Status = "too few graded days to show a rate"
-		default:
-			// With a baseline, both rates come from the SAME rows (the ones
-			// that froze a baseline), and the day floor applies to those rows:
-			// the page says "on the same forecasts" and shows "compared".
-			if t.BaselineN > 0 {
-				if t.BaselineDays < publicGradeMinDays {
-					g.Status = "too few graded days with a baseline to show a rate"
-					break
-				}
-				acc := float64(t.CorrectOnBaseline) / float64(t.BaselineN)
-				base := float64(t.BaselineCorrect) / float64(t.BaselineN)
-				g.Accuracy, g.Baseline, g.Compared = &acc, &base, t.BaselineN
-			} else {
-				acc := float64(t.Correct) / float64(t.Graded)
-				g.Accuracy = &acc
-			}
-			g.Status = "graded"
-		}
-		out = append(out, g)
+		out = append(out, gradeOf(t))
 	}
 	body := map[string]any{
 		"source":  src,
@@ -85,4 +62,34 @@ func (d Deps) publicGrades(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, body)
+}
+
+// gradeOf turns one kind's tally into what a visitor sees: a rate only past
+// the day floor, and with a baseline, both rates on the same rows.
+func gradeOf(t store.RegimeKindTally) publicGrade {
+	g := publicGrade{Kind: t.Kind, Open: t.Open, Graded: t.Graded, Days: t.Days}
+	switch {
+	case t.Graded == 0:
+		g.Status = "no forecast window has closed yet"
+	case t.Days < publicGradeMinDays:
+		g.Status = "too few graded days to show a rate"
+	default:
+		// With a baseline, both rates come from the SAME rows (the ones
+		// that froze a baseline), and the day floor applies to those rows:
+		// the page says "on the same forecasts" and shows "compared".
+		if t.BaselineN > 0 {
+			if t.BaselineDays < publicGradeMinDays {
+				g.Status = "too few graded days with a baseline to show a rate"
+				break
+			}
+			acc := float64(t.CorrectOnBaseline) / float64(t.BaselineN)
+			base := float64(t.BaselineCorrect) / float64(t.BaselineN)
+			g.Accuracy, g.Baseline, g.Compared = &acc, &base, t.BaselineN
+		} else {
+			acc := float64(t.Correct) / float64(t.Graded)
+			g.Accuracy = &acc
+		}
+		g.Status = "graded"
+	}
+	return g
 }
