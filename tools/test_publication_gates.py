@@ -929,10 +929,15 @@ class StagingLockTests(unittest.TestCase):
             t.join(timeout=240)
 
         self.assertEqual(len(results), 2, "one of the invocations never returned")
-        combined = "".join(p.stdout + p.stderr for p in results.values())
         skipped = sum("grade SKIPPED" in (p.stdout + p.stderr) for p in results.values())
+        # Per run, labelled: CI failed this 3 times in 4 (2026-11-13) with both
+        # runs graded and NO lock line from either, and it did not reproduce on
+        # Windows or Linux locally. Say which run printed what, and how it exited.
+        per_run = "".join(
+            f"--- run {k} rc={p.returncode}\n[stdout]\n{p.stdout}[stderr]\n{p.stderr}"
+            for k, p in sorted(results.items()))
         self.assertEqual(skipped, 1,
-                         "exactly one run must decline the lock:\n" + combined)
+                         "exactly one run must decline the lock:\n" + per_run)
 
         published = json.loads(self.sb.out.read_text(encoding="utf-8"))
         # Whole, and one grade's worth: the marker, the timestamp and the row

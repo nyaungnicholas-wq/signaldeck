@@ -127,7 +127,7 @@ func open(path string) (*Store, error) {
 	// file settles AT, not below. 64MB is still far above the per-checkpoint
 	// working set while returning ~200MB to disk.
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=journal_size_limit(67108864)", path)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openReads(dsn) // times every read snapshot (readhold.go)
 	if err != nil {
 		return nil, err
 	}
@@ -833,7 +833,7 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 	if maxConns <= 0 {
 		maxConns = 4
 	}
-	db, err := sql.Open("sqlite", s.dsn)
+	db, err := openReads(s.dsn)
 	if err != nil {
 		return nil, err
 	}

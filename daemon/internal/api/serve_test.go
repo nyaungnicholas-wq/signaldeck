@@ -38,7 +38,7 @@ func TestServeUntilWaitsForASlowHandlerThatHonoursItsContext(t *testing.T) {
 	go func() {
 		resp, err := http.Get("http://" + ln.Addr().String() + "/")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}()
 
@@ -70,7 +70,7 @@ func TestServeUntilReturnsTheServeError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln.Close()
+	_ = ln.Close()
 
 	srv := &http.Server{Handler: http.NotFoundHandler()}
 	err = serveUntil(context.Background(), srv, ln, time.Second)
