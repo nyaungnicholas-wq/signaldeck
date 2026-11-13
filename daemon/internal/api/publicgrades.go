@@ -54,15 +54,20 @@ func (d Deps) publicGrades(w http.ResponseWriter, r *http.Request) {
 			g.Status = "too few graded days to show a rate"
 		default:
 			// With a baseline, both rates come from the SAME rows (the ones
-			// that froze a baseline): the page says "on the same forecasts".
-			acc := float64(t.Correct) / float64(t.Graded)
+			// that froze a baseline), and the day floor applies to those rows:
+			// the page says "on the same forecasts" and shows "compared".
 			if t.BaselineN > 0 {
-				acc = float64(t.CorrectOnBaseline) / float64(t.BaselineN)
+				if t.BaselineDays < publicGradeMinDays {
+					g.Status = "too few graded days with a baseline to show a rate"
+					break
+				}
+				acc := float64(t.CorrectOnBaseline) / float64(t.BaselineN)
 				base := float64(t.BaselineCorrect) / float64(t.BaselineN)
-				g.Baseline = &base
-				g.Compared = t.BaselineN
+				g.Accuracy, g.Baseline, g.Compared = &acc, &base, t.BaselineN
+			} else {
+				acc := float64(t.Correct) / float64(t.Graded)
+				g.Accuracy = &acc
 			}
-			g.Accuracy = &acc
 			g.Status = "graded"
 		}
 		out = append(out, g)

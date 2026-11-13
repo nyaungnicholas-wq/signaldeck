@@ -45,6 +45,14 @@ if [ -x "$(command -v powershell)" ] || command -v powershell >/dev/null 2>&1; t
     || echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: provenance preflight reported a problem (non-fatal; see logs/daemon-provenance.log)" >> "$SD/logs/backup-offline.log"
 fi
 
+# A non-empty lock is the daily refresh's ("refresh <pid>"): it is pruning, and
+# this task starts the binary directly, past daemon-guard. Do not start the
+# daemon into the prune; the refresh's own restart or daemon-guard brings it
+# back once the refresh releases the lock.
+if [ -s "$SD/ops/.maintenance" ]; then
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: the refresh holds the maintenance lock; not starting the daemon into its prune (daemon-guard restarts it after)" >> "$SD/logs/backup-offline.log"
+  exit 0
+fi
 schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1
 daemon_rc=$?
 

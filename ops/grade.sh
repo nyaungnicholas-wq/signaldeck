@@ -114,8 +114,23 @@ lock_holder_dead() {
 # `mkdir`s BOTH succeed in 59 of 200 trials (2026-11-13), and two graders then
 # held the lock and published at once. os.mkdir is the mkdir(2) syscall, which
 # is exclusive by POSIX (0 of 200). cygpath gives Windows Python a native path.
+# Exit 3 = the lock exists (held). Anything else (no python, a missing parent,
+# a permission error) is NOT a held lock: refuse loudly instead of reading it as
+# contention and exiting 0 as if another grader had the job.
 take_lock() {
-  "$PY" -c 'import os,sys; os.mkdir(sys.argv[1])' "$(cygpath -m "$LOCK" 2>/dev/null || printf '%s' "$LOCK")" 2>/dev/null
+  "$PY" -c 'import os, sys
+try:
+    os.mkdir(sys.argv[1])
+except FileExistsError:
+    sys.exit(3)
+except OSError as e:
+    sys.exit("take_lock: %s" % e)' "$(cygpath -m "$LOCK" 2>/dev/null || printf '%s' "$LOCK")"
+  _tl=$?
+  if [ "$_tl" -ne 0 ] && [ "$_tl" -ne 3 ]; then
+    log "GRADE REFUSED: could not take the grade lock $LOCK at all (take_lock rc=$_tl) -- not contention; check SIGNALDECK_PYTHON and the registry directory"
+    exit 1
+  fi
+  return "$_tl"
 }
 
 if ! take_lock; then

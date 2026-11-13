@@ -300,6 +300,17 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 	if err := st.UpsertBars(ctx, dailyBars(dead.ID, time.Now())); err != nil {
 		t.Fatal(err)
 	}
+	// PART traded 20 days before delisting: under the daily floor forever.
+	part, err := st.UpsertSymbol(ctx, "PART", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkDelisted(ctx, part.ID, time.Now().AddDate(0, 0, -60).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBars(ctx, dailyBars(part.ID, time.Now())[:20]); err != nil {
+		t.Fatal(err)
+	}
 	thin, err := st.UpsertSymbol(ctx, "THIN", md.Stocks, "")
 	if err != nil {
 		t.Fatal(err)
@@ -319,9 +330,9 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 		ids[s.ID] = true
 	}
 	if len(got) != 2 || !ids[live.ID] || !ids[thin.ID] {
-		t.Fatalf("got %v, want LIVE and THIN (not DEAD); detail: %s", got, detail)
+		t.Fatalf("got %v, want LIVE and THIN (not DEAD, not PART); detail: %s", got, detail)
 	}
-	if !strings.Contains(detail, "re-enqueued 2 under-covered") || !strings.Contains(detail, "skipped 1 delisted") {
+	if !strings.Contains(detail, "re-enqueued 2 under-covered") || !strings.Contains(detail, "skipped 2 delisted") {
 		t.Errorf("detail missing expected content: %s", detail)
 	}
 }

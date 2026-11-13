@@ -12,6 +12,7 @@ type RegimeKindTally struct {
 	// CorrectOnBaseline is Correct restricted to the BaselineN rows, so a
 	// rate shown beside the baseline is measured on the same forecasts.
 	CorrectOnBaseline int
+	BaselineDays      int // distinct graded days among the BaselineN rows
 }
 
 // RegimeKindTallies counts live (not superseded, not ungradable) regime calls
@@ -25,7 +26,8 @@ func (s *Store) RegimeKindTallies(ctx context.Context) ([]RegimeKindTally, error
 		       COALESCE(SUM(correct), 0),
 		       COALESCE(SUM(resolved_at IS NOT NULL AND naive_label IS NOT NULL), 0),
 		       COALESCE(SUM(resolved_at IS NOT NULL AND naive_label IS NOT NULL AND naive_label = actual), 0),
-		       COALESCE(SUM(CASE WHEN resolved_at IS NOT NULL AND naive_label IS NOT NULL THEN correct END), 0)
+		       COALESCE(SUM(CASE WHEN resolved_at IS NOT NULL AND naive_label IS NOT NULL THEN correct END), 0),
+		       COUNT(DISTINCT CASE WHEN resolved_at IS NOT NULL AND naive_label IS NOT NULL THEN day END)
 		FROM regime_outcomes
 		WHERE superseded_by IS NULL AND ungradable IS NULL
 		GROUP BY kind ORDER BY kind`)
@@ -36,7 +38,7 @@ func (s *Store) RegimeKindTallies(ctx context.Context) ([]RegimeKindTally, error
 	var out []RegimeKindTally
 	for rows.Next() {
 		var t RegimeKindTally
-		if err := rows.Scan(&t.Kind, &t.Open, &t.Graded, &t.Days, &t.Correct, &t.BaselineN, &t.BaselineCorrect, &t.CorrectOnBaseline); err != nil {
+		if err := rows.Scan(&t.Kind, &t.Open, &t.Graded, &t.Days, &t.Correct, &t.BaselineN, &t.BaselineCorrect, &t.CorrectOnBaseline, &t.BaselineDays); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

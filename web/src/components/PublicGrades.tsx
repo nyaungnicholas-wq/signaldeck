@@ -16,6 +16,7 @@ type Grade = {
   days: number;
   accuracy?: number;
   baseline?: number;
+  compared?: number;
   status: string;
 };
 type Grades = { kinds?: Grade[]; minDays?: number; note?: string };
@@ -76,6 +77,7 @@ export default async function PublicGrades() {
                   <th scope="col" className="px-3 py-2 text-right font-medium">still open</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">graded</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">days</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">compared</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">right</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">baseline right</th>
                 </tr>
@@ -89,11 +91,12 @@ export default async function PublicGrades() {
                     <td className="px-3 py-2 text-right">{k.days.toLocaleString("en-US")}</td>
                     {k.accuracy != null ? (
                       <>
+                        <td className="px-3 py-2 text-right">{(k.compared ?? k.graded).toLocaleString("en-US")}</td>
                         <td className="px-3 py-2 text-right">{pct(k.accuracy)}</td>
                         <td className="px-3 py-2 text-right">{pct(k.baseline) || "—"}</td>
                       </>
                     ) : (
-                      <td colSpan={2} className="px-3 py-2 text-right" style={{ color: "var(--faint)" }}>
+                      <td colSpan={3} className="px-3 py-2 text-right" style={{ color: "var(--faint)" }}>
                         {k.status}
                       </td>
                     )}

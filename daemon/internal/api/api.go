@@ -102,8 +102,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// cancelled. Returning at ErrServerClosed let main() close the store under
 	// handlers still running past the 3s drain: `request failed: sql: database
 	// is closed` at slow shutdowns (10-28, 10-29, 11-03..05).
-	stopLife := context.AfterFunc(ctx, stopAPILife) // detached builds end with the server
-	defer stopLife()
+	// Detached builds end with the server: cancelled AFTER the drain, so a
+	// request finishing inside the drain still gets the build it waits on.
+	defer stopAPILife()
 	err = serveUntil(ctx, srv, ln, 3*time.Second)
 	// Account mail runs after its response (mailInBackground); let it finish,
 	// bounded, before main() closes the store.
