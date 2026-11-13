@@ -13,6 +13,8 @@ import SignupCTA from "@/components/landing/SignupCTA";
 import Withheld from "@/components/Withheld";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import { parseWithheld } from "@/lib/withheld";
+import { getPriceSource, IEX_SOURCE } from "@/lib/instance";
+import PublicLanding from "@/components/PublicLanding";
 import "@/components/landing/landing.css";
 
 /**
@@ -553,6 +555,9 @@ function LiveRecord({ live }: { live: Live }) {
 }
 
 export default async function Landing() {
+  // The public (IEX-fed) instance has its own front page: nothing is withheld
+  // there and no account is needed, so this page's wording would be wrong.
+  if ((await getPriceSource()) === IEX_SOURCE) return <PublicLanding />;
   const [live, chain] = await Promise.all([loadLive(), loadChain()]);
 
   // Headline figures, all computed from the same live payloads the sections

@@ -9,6 +9,8 @@
 // so the page can never disagree with the file the daily grade wrote — there
 // is no second copy of the verdict logic here to drift.
 
+import { getPriceSource, IEX_SOURCE } from "@/lib/instance";
+import NewRecordNotice from "@/components/NewRecordNotice";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { cookies } from "next/headers";
@@ -434,6 +436,14 @@ type PublishedRow = {
 };
 
 export default async function AccuracyPage() {
+  if ((await getPriceSource()) === IEX_SOURCE) {
+    return (
+      <NewRecordNotice
+        title="Grades"
+        what="How often each kind of forecast turned out right, compared with a simple baseline, with failures listed first."
+      />
+    );
+  }
   const pub = await loadPublicationStatus();
 
   // Withheld under the data licence. Checked FIRST and returns before

@@ -1,3 +1,5 @@
+import { getPriceSource, IEX_SOURCE } from "@/lib/instance";
+import NewRecordNotice from "@/components/NewRecordNotice";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import WithheldNotice from "@/components/Withheld";
@@ -104,6 +106,14 @@ function Progress({ have, need }: { have: number; need: number }) {
 }
 
 export default async function RiskPage() {
+  if ((await getPriceSource()) === IEX_SOURCE) {
+    return (
+      <NewRecordNotice
+        title="Volatility record"
+        what="How the volatility forecast scores against two simple rules anyone could run instead."
+      />
+    );
+  }
   const got = await loadRecord();
   const withheld = got && "notice" in got ? got : null;
   const rec = withheld ? null : (got as Record | null);

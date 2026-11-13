@@ -17,6 +17,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  api,
   trackRecord,
   ledgerVerify,
   ApiError,
@@ -227,6 +228,19 @@ export default function ProofPage() {
   // record that only holds at one horizon is not much of a record. The API
   // already took this argument; the page just never let anyone change it.
   const [horizon, setHorizon] = useState<Horizon>("1d");
+  const [publicInstance, setPublicInstance] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (alive) setPublicInstance(h?.priceSource === "iexhist");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // The track-record result is stored WITH the horizon it belongs to, and the
   // displayed value is derived from whether those match. That is what makes a
@@ -479,7 +493,10 @@ export default function ProofPage() {
       {/* THE REGISTRATION ITSELF, not a promise of one. /volatility sends
           readers here to "read that registration" and until now there was
           nothing on this page to read. */}
-      <Registrations />
+      {/* Not on the IEX-fed public instance: its record is new and carries no
+          registered accuracy claims, and the claim details shown here belong
+          to the older record measured on licensed data. */}
+      {!publicInstance && <Registrations />}
 
       {/* The horizon picker lives ABOVE the three track-record states, not
           inside the loaded one — changing horizon clears `tr`, and a control

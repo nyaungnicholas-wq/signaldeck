@@ -26,19 +26,26 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
   // "Forecasts" is offered only where the daemon says its price source may be
   // shown publicly; elsewhere the link would lead to a refusal.
   const [forecasts, setForecasts] = useState(false);
+  // The IEX-fed public instance needs no account, so it offers none.
+  const [noAccounts, setNoAccounts] = useState(false);
   useEffect(() => {
     let alive = true;
     api
       .health()
       .then((h) => {
-        if (alive) setForecasts(!!h?.priceSource);
+        if (!alive) return;
+        setForecasts(!!h?.priceSource);
+        setNoAccounts(h?.priceSource === "iexhist");
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
-  const items = forecasts ? [{ label: "Forecasts", href: "/forecasts" }, ...ITEMS] : ITEMS;
+  // The receipts page verifies a hash chain the public instance has not begun
+  // (its forecasts are frozen for grading, not chained), so it is not offered there.
+  const base = noAccounts ? ITEMS.filter((i) => i.href !== "/proof") : ITEMS;
+  const items = forecasts ? [{ label: "Forecasts", href: "/forecasts" }, ...base] : base;
 
   return (
     <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 sm:flex-1 sm:basis-auto">
@@ -58,12 +65,12 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
         })}
       </nav>
       <div className="ml-auto flex items-center gap-2">
-        {current !== "/login" && (
+        {!noAccounts && current !== "/login" && (
           <Link href="/login" className="chip">
             Sign in
           </Link>
         )}
-        {current !== "/signup" && (
+        {!noAccounts && current !== "/signup" && (
           <Link href="/signup" className="chip chip-cta">
             Sign up
           </Link>
