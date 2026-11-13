@@ -273,6 +273,7 @@ if ($stale.Count -gt 0) {
 # outlives the task that started it (schtasks /End does not cascade to the
 # child holding the socket), so task state cannot answer this question.
 $portsDown = @()
+$maintLock = Join-Path (Split-Path -Parent $PSScriptRoot) 'ops\.maintenance'
 foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 })) {
     # One instant sample turns the nightly fleet restart into a red that
     # sticks until the next scheduled run: measured 2026-08-25, this gate said
@@ -288,6 +289,13 @@ foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 
     }
     if ($listening) {
         Write-Host ("  = {0,-14} listening on {1}" -f $svc.n, $svc.p)
+    }
+    elseif ($svc.p -eq 8322 -and (Test-Path -LiteralPath $maintLock) -and
+            ((Get-Date) - (Get-Item -LiteralPath $maintLock).LastWriteTime).TotalMinutes -lt 90) {
+        # A planned stop, announced the way daemon-guard.ps1 reads it (same 90
+        # min ceiling). 2026-11-12 19:05 this check fired in the market-close
+        # backup's window and went red on a deliberate stop.
+        Write-Host ("  ~ {0,-14} down inside a maintenance window (ops\.maintenance) - not judged" -f $svc.n)
     }
     else {
         $portsDown += ("{0} - nothing listening on {1}" -f $svc.n, $svc.p)

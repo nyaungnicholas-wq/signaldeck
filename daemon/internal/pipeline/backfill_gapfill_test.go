@@ -273,3 +273,39 @@ func TestGapFillHeadroomOpensAboveOldBudget(t *testing.T) {
 		t.Errorf("gap-fill gate open inside the 512 MB margin: %s", why)
 	}
 }
+
+// Delisted symbols must be skipped to prevent infinite re-enqueuing without coverage.
+func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
+	t.Setenv("SIGNALDECK_1M_GAPFILL", "off")
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "delist.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	live, err := st.UpsertSymbol(ctx, "LIVE", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead, err := st.UpsertSymbol(ctx, "DEAD", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkDelisted(ctx, dead.ID, time.Now().AddDate(0, 0, -60).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	bf := NewBackfiller(st, nil, nil)
+	r := &BackfillReconciler{St: st, BF: bf}
+	detail, err := r.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := drain(bf)
+	if len(got) != 1 || got[0].ID != live.ID {
+		t.Fatalf("got %v, want [live]; detail: %s", got, detail)
+	}
+	if !strings.Contains(detail, "re-enqueued 1 under-covered") || !strings.Contains(detail, "skipped 1 delisted") {
+		t.Errorf("detail missing expected content: %s", detail)
+	}
+}

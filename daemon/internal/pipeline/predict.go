@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
@@ -258,12 +259,30 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 		// An uncalibrated number that varies per symbol is honestly uncertain; a
 		// calibrated number identical for every symbol is a market call wearing
 		// a forecast's clothes, and it costs 17pp the day the market turns.
-		slog.Warn("calibration: refusing a rank-collapsing map — publishing raw "+
-			"probabilities uncorrected rather than one market-wide call replicated "+
-			"across every symbol", "horizon", h)
+		// The refusal fires every prediction pass by design (3,113 lines between
+		// 10-27 and 11-12), so log it once an hour per horizon; the behaviour is
+		// unchanged.
+		if calRefusalLogDue(string(h), time.Now()) {
+			slog.Warn("calibration: refusing a rank-collapsing map — publishing raw "+
+				"probabilities uncorrected rather than one market-wide call replicated "+
+				"across every symbol (logged at most hourly per horizon)", "horizon", h)
+		}
 		return nil, false, nil
 	}
 	return mapFn, true, nil
+}
+
+// calRefusalLogged holds, per horizon, when the rank-collapsing refusal was
+// last logged.
+var calRefusalLogged sync.Map
+
+// calRefusalLogDue reports whether the refusal for horizon h may be logged now.
+func calRefusalLogDue(h string, now time.Time) bool {
+	if v, ok := calRefusalLogged.Load(h); ok && now.Sub(v.(time.Time)) < time.Hour {
+		return false
+	}
+	calRefusalLogged.Store(h, now)
+	return true
 }
 
 // predHorizons are the horizons the ensemble predicts (forecast + expectancy

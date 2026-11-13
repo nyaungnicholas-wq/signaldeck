@@ -117,11 +117,12 @@ lock_holder_dead() {
   if [ -n "$_pid" ]; then
     kill -0 "$_pid" 2>/dev/null && return 1
   fi
-  # No pid, or an owner that is gone. An unreadable start time means the holder
-  # died between mkdir and its first write, so epoch 0 makes it immediately
-  # breakable -- without that, such a lock is UNBREAKABLE and every later run
-  # declines forever, which looks exactly like a dead grader.
-  _started=${_started:-0}
+  # No pid, or an owner that is gone. An unreadable start time is a holder that
+  # died between mkdir and its first write OR one that is alive and has not
+  # written yet, so age the lock by its directory's mtime (the mkdir instant):
+  # debris still breaks past the grace, a lock taken a moment ago does not.
+  # Epoch 0 broke live locks (grade.sh, CI 2026-11-13: two runs both published).
+  _started=${_started:-$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo 0)}
   [ "$((_now - _started))" -gt "$LOCK_STALE_SECONDS" ]
 }
 

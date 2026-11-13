@@ -66,10 +66,15 @@ const expectancyMinPairs = 10
 //
 // Each row therefore stores the FLEET grade with NEval set to that symbol's own
 // contribution. Both numbers then mean exactly what they say downstream:
-// store.FleetLegAUC reads the fleet AUC and can veto the leg everywhere, while
 // clusterstat.RankEdge sees a thin per-symbol count, returns ok=false, and
-// leaves the leg on its historical gate rather than benching one symbol on
-// evidence that was never symbol-specific.
+// leaves the leg to the fleet gate (rankGate in predict.go: the day-clustered
+// cross-sectional veto, then the fleet edge) rather than benching one symbol on
+// evidence that was never symbol-specific. The fleet AUC printed here is NOT
+// that gate: no production code reads store.FleetLegAUC, and fleetveto.go
+// documents why an n-weighted mean of per-symbol time-series AUCs is the wrong
+// estimator (market direction dominates each symbol's own days). Measured
+// 2026-11-12: this number read 0.4685 at 1d while the day-clustered AUC that
+// actually admits the leg was 0.5387, lower bound 0.513.
 //
 // OPT-OUT like pressure: the row is written even when the grade is bad, because
 // a measured anti-predictive grade is the whole point — it is what lets the gate
@@ -202,9 +207,9 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 			}
 			written++
 		}
-		verdict := "passes the ranking gate"
+		verdict := "above 0.5"
 		if fleetAUC <= 0.5 {
-			verdict = "ANTI-PREDICTIVE — benched fleet-wide"
+			verdict = "AT OR BELOW 0.5 on per-symbol time series; the ranking gate reads the day-clustered cross-sectional AUC instead"
 			antiPredictive = append(antiPredictive, fmt.Sprintf("%s AUC %.4f", h, fleetAUC))
 		}
 		msg += fmt.Sprintf("%s: fleet AUC %.4f over %d symbols / %d symbol-days (%s); ",
@@ -213,14 +218,14 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 	if msg == "" {
 		return "expectancy leg: no resolved pairs yet — leg stays on its historical gate", nil
 	}
-	// A leg graded ANTI-PREDICTIVE and benched fleet-wide has delivered a
-	// measurement but no usable leg, and the run log said "ok" while fleet AUC
-	// sat at 0.4303 across 8,220 symbol-days. Surfacing it is the whole point:
-	// an anti-predictive leg is the strongest evidence available that the
-	// ensemble has nothing to blend.
+	// Degraded, not ok: a leg whose per-symbol time-series AUC sits at or below
+	// 0.5 is worth surfacing (the run log once said "ok" at 0.4303 across 8,220
+	// symbol-days). But say what was measured. This used to claim the leg was
+	// "benched fleet-wide", which nothing does on this number; the published
+	// blend admitted the leg on its cross-sectional edge the same night.
 	if len(antiPredictive) > 0 {
 		return "graded expectancy leg — " + msg,
-			fmt.Errorf("anti-predictive and benched fleet-wide (%s): %w",
+			fmt.Errorf("per-symbol time-series AUC at or below 0.5 (%s): not the ranking gate, which admits or benches this leg on the day-clustered cross-sectional AUC (see the fleet edge / fleet veto log lines): %w",
 				strings.Join(antiPredictive, ", "), workers.ErrDegraded)
 	}
 	return "graded expectancy leg — " + msg, nil

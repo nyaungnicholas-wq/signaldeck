@@ -68,6 +68,23 @@ AUTH=()
   # to the LaunchAgent so a broken publisher is visible without reading the log.
   fail=0
 
+  # A maintenance window (market-close backup, deploy, the daily refresh's
+  # prune) holds the database. 2026-11-12 19:30 this run fired inside the
+  # refresh's 11-minute prune and failed "database is locked", so the ledger
+  # head went untimestamped that day. Wait it out, bounded; then try anyway and
+  # report honestly if the database is still held.
+  maint="$SD/ops/.maintenance"
+  waited=0
+  while [ -e "$maint" ] && [ "$waited" -lt 2700 ]; do sleep 30; waited=$((waited + 30)); done
+  if [ "$waited" -gt 0 ]; then
+    echo "waited ${waited}s for the maintenance lock ($([ -e "$maint" ] && echo 'still held, trying anyway' || echo 'released'))"
+    # The window just closed, so the daemon is (re)booting; its boot can take
+    # 14 minutes. Give it 20 before falling back to the database.
+    up=0
+    while [ "$up" -lt 1200 ] && ! curl -sf --max-time 10 -o /dev/null "$API/api/version"; do sleep 30; up=$((up + 30)); done
+    echo "daemon $(curl -sf --max-time 10 -o /dev/null "$API/api/version" && echo answering || echo 'still not answering') after ${up}s"
+  fi
+
   if [ ! -d "$REPO/.git" ]; then
     echo "FAIL: no anchors clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of github.com/nyaungnicholas-wq/signaldeck-anchors"
     exit 1

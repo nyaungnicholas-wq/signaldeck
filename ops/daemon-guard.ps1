@@ -103,7 +103,7 @@ $cwd  = Join-Path $root 'daemon'
 # So: look for an actual holder. The lock is only honoured while a process that
 # takes it is running, with a short grace so we never race a holder that has
 # taken the lock but not yet appeared in the process table.
-$LOCK_HOLDERS = 'market-close', 'backup-offline', 'signaldeck-ctl'
+$LOCK_HOLDERS = 'market-close', 'backup-offline', 'signaldeck-ctl', 'signaldeck-refresh'
 if (Test-Path $lock) {
     $ageMin = [math]::Round(((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes, 1)
     $holder = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |

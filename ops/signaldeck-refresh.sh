@@ -117,6 +117,7 @@ on_interrupt(){
     log "exiting (rc=$rc) with the universe wide open — pruning on the way out"
     prune_now "interrupt rc=$rc"
   fi
+  declare -F release_maint >/dev/null && release_maint
   exit "$rc"
 }
 
@@ -253,6 +254,17 @@ log "processing window: $(($(date +%s)-react_ts))s elapsed"
 #      (the daemon holds the single SQLite writer while backfilling; pruning under
 #      that lock stalls — which is exactly how a past sweep got stuck. SIGKILL
 #      fallback guarantees it's down.) We restart it in step 8 only if it was up.
+#      The prune can hold the database for 10+ minutes (11 on 2026-11-12, after
+#      a sleep catch-up), so ANNOUNCE it with the maintenance lock: without it
+#      daemon-guard restarted the daemon into "database is locked" twice and
+#      Anchor-Publish (19:30) failed inside the window. Taken only when free and
+#      released only if still ours, so a market-close backup's lock is never
+#      cleared from under it. A killed sweep leaves it to daemon-guard, which
+#      clears a lock with no live holder.
+MAINT_LOCK="$SD/ops/.maintenance"
+own_maint=""
+if [ ! -e "$MAINT_LOCK" ]; then echo "refresh $$" > "$MAINT_LOCK"; own_maint="refresh $$"; fi
+release_maint(){ [ -n "$own_maint" ] && [ "$(cat "$MAINT_LOCK" 2>/dev/null)" = "$own_maint" ] && rm -f "$MAINT_LOCK"; own_maint=""; }
 sd_svc_stop com.signaldeck.daemon
 for i in $(seq 1 40); do sd_is_running signaldeckd || break; sleep 1; done
 if sd_is_running signaldeckd; then sd_kill_hard signaldeckd; sleep 1; fi
@@ -270,6 +282,7 @@ after=$(q 'SELECT count(*) FROM symbols WHERE active=1;')
 #      recovery paths share the prune but must not claim the day was swept,
 #      or a run killed at 13:16 would suppress the retry that repairs it.
 qw "INSERT INTO meta(k,v) VALUES('last_full_sweep','$target') ON CONFLICT(k) DO UPDATE SET v='$target';"
+release_maint
 
 # ── 7b. nightly storage budget report — sdmaint storage-report prints per-table
 #      dbstat MB + WAL/backup/log sizes vs declared budgets and exits non-zero

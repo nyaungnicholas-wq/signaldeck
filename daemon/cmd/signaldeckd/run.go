@@ -677,7 +677,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// A port held permanently will restart-loop rather than run headless. That
 	// is the intended trade: a visibly failing service gets fixed, a silently
 	// headless one does not.
+	apiDone := make(chan struct{})
 	go func() {
+		defer close(apiDone)
 		if err := api.Serve(ctx, deps); err != nil {
 			slog.Error("api server exited — the daemon cannot serve; shutting down the fleet",
 				"err", err, "addr", cfg.HTTPAddr)
@@ -709,6 +711,14 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// Start returns once the fleet has stopped; drain the bookkeeping queue so a
 	// clean exit leaves no run this process could have closed itself.
 	runner.CloseRunJournal(30 * time.Second)
+	// main() closes the store when run returns, so the API must have drained
+	// first (api.Serve waits for its handlers). Bounded: a wedged handler must
+	// not hold the process open past the supervisor's patience.
+	select {
+	case <-apiDone:
+	case <-time.After(15 * time.Second):
+		slog.Warn("api server still draining at exit; the store closes now")
+	}
 }
 
 // bootstrapUsers migrates a pre-multi-user database: when no accounts exist

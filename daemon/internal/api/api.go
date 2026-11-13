@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"path/filepath"
 	"runtime/debug"
@@ -92,17 +93,16 @@ func Serve(ctx context.Context, d Deps) error {
 	// get two budgets by using two doors.
 	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
 	srv := d.httpServerWith(d.routes(limiter), limiter)
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
-	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
 		return err
 	}
-	return nil
+	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
+	// serveUntil returns only once in-flight handlers have finished or been
+	// cancelled. Returning at ErrServerClosed let main() close the store under
+	// handlers still running past the 3s drain: `request failed: sql: database
+	// is closed` at slow shutdowns (10-28, 10-29, 11-03..05).
+	return serveUntil(ctx, srv, ln, 3*time.Second)
 }
 
 // routes registers every API route on a fresh mux: the production route set.

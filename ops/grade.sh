@@ -98,11 +98,14 @@ lock_holder_dead() {
   fi
 
   # No pid, or an owner that is gone. Now age decides. An unreadable start time
-  # here means the holder died between mkdir and its first write, so epoch 0
-  # makes it immediately breakable -- without this, such a lock is UNBREAKABLE
-  # and every later run declines forever, a wedge indistinguishable from a dead
-  # grader, which is the failure this whole file exists to end.
-  _started=${_started:-0}
+  # is either a holder that died between mkdir and its first write, or a holder
+  # that is alive and has not written yet. The lock directory's own mtime is the
+  # instant of that mkdir, so it ages both correctly: debris still breaks once
+  # it is past the grace (never UNBREAKABLE), while a lock taken a moment ago is
+  # left alone. Epoch 0 here broke live locks: CI 2026-11-13 ran two overlapping
+  # graders and BOTH published, because the second read the first's fresh,
+  # still-empty lock as infinitely old.
+  _started=${_started:-$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo 0)}
   [ "$((_now - _started))" -gt "$LOCK_STALE_SECONDS" ]
 }
 

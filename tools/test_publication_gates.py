@@ -829,11 +829,25 @@ class StagingLockTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, combined)
 
     def test_a_lock_with_neither_pid_nor_start_time_is_breakable(self):
+        """Debris from a run killed between mkdir and its first write. It is
+        aged by the directory's own mtime, so it is backdated here: a FRESH
+        empty lock is a live run that has not written its pid yet (next test)."""
         lock = self.lockdir()
         lock.mkdir()
+        old = time.time() - 86400
+        os.utime(lock, (old, old))
         proc = self.sb.run()
         self.assertIn("breaking a stale grade lock", proc.stdout + proc.stderr)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_a_fresh_empty_lock_is_left_alone(self):
+        """THE RACE in miniature: a run has done its mkdir and not yet written
+        pid or start time. Reading that as epoch 0 broke a live lock and let two
+        graders publish (CI 2026-11-13)."""
+        self.lockdir().mkdir()
+        proc = self.sb.run()
+        self.assertIn("grade SKIPPED", proc.stdout + proc.stderr)
+        self.assertTrue(self.sb.still_previous())
 
     def test_a_fresh_pidless_lock_is_left_alone(self):
         """...but only once it is past the grace period. A lock created a

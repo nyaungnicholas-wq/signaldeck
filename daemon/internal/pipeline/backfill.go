@@ -136,8 +136,20 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	requeued := 0
+	// A delisted stock never prints the minute bars that would clear its
+	// floor, so it was re-enqueued every pass forever (CRNX, SOBR, VTAK, MVO on
+	// 2026-11-12), spending vendor calls on dead names. Survivorship keeps them
+	// active for their history; backfill has nothing left to fetch.
+	delisted, err := r.St.DelistedSymbolIDs(ctx)
+	if err != nil {
+		return "", err
+	}
+	requeued, skipped := 0, 0
 	for _, s := range syms {
+		if delisted[s.ID] {
+			skipped++
+			continue
+		}
 		nDaily, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return "", err
@@ -167,7 +179,7 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 		budgetOK, why = r.gapFillBudgetOK(ctx)
 		retention := retention1mDays()
 		for _, s := range syms {
-			if s.Market == md.Stocks && s.Stream {
+			if s.Market == md.Stocks && s.Stream && !delisted[s.ID] {
 				counts, err := r.St.SessionBarCounts(ctx, s.ID, md.TF1m, now.Add(-time.Duration(retention)*24*time.Hour).Unix())
 				if err != nil {
 					return "", err
@@ -199,7 +211,7 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 			note = fmt.Sprintf("gap-fill paused: %s; %d streamed with a session gap", why, withGaps)
 		}
 	}
-	detail := fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered, gap-filled %d streamed (%s)", len(syms), requeued, gapFilled, note)
+	detail := fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered, skipped %d delisted, gap-filled %d streamed (%s)", len(syms), requeued, skipped, gapFilled, note)
 	if enabled && !budgetOK && withGaps > 0 {
 		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
 	}
