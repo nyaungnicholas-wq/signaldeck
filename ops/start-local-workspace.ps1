@@ -14,6 +14,32 @@ if (Test-Path -LiteralPath $envFile) {
     $line = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^SIGNALDECK_LOCAL_PROXY_KEY=' } | Select-Object -First 1
     if ($line) { $env:SIGNALDECK_LOCAL_PROXY_KEY = $line.Substring('SIGNALDECK_LOCAL_PROXY_KEY='.Length).Trim() }
 }
+
+# PUBLIC INSTANCE SWITCH (12 Nov 2026). The web on port 8323 is what the tunnel
+# serves to the public. When <parent>\signaldeck-public\public-web.conf exists
+# and names both a daemon and a price source, THAT port serves the public
+# (IEX-fed) instance: it talks to the public daemon and is told which instance
+# it is. Port 3000 never reads the file, so the operator's local workspace keeps
+# talking to the main daemon. The main daemon's local-proxy key is not sent to
+# another daemon. Delete the file and restart 'SignalDeck Web' to switch back.
+if ($Port -eq 8323) {
+    $pubConf = Join-Path (Split-Path -Parent $sdRepo) 'signaldeck-public\public-web.conf'
+    if (Test-Path -LiteralPath $pubConf) {
+        $kv = @{}
+        foreach ($l in (Get-Content -LiteralPath $pubConf)) {
+            if ($l -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$') { $kv[$Matches[1]] = $Matches[2] }
+        }
+        if ($kv['SIGNALDECK_DAEMON'] -and $kv['SIGNALDECK_WEB_PRICE_SOURCE']) {
+            $env:SIGNALDECK_DAEMON = $kv['SIGNALDECK_DAEMON']
+            $env:SIGNALDECK_WEB_PRICE_SOURCE = $kv['SIGNALDECK_WEB_PRICE_SOURCE']
+            Remove-Item Env:SIGNALDECK_LOCAL_PROXY_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:SIGNALDECK_LOCAL_ONLY_PROXY -ErrorAction SilentlyContinue
+            Write-Host ("public instance: port {0} -> {1} ({2})" -f $Port, $env:SIGNALDECK_DAEMON, $env:SIGNALDECK_WEB_PRICE_SOURCE)
+        } else {
+            Write-Host "public-web.conf is incomplete; serving the main instance"
+        }
+    }
+}
 # Task Scheduler ends only this powershell, never its node child, so a restart of
 # the task must first retire the previous listener it started (same user session,
 # no elevation needed).

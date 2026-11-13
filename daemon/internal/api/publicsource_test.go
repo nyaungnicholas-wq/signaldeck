@@ -33,9 +33,10 @@ func TestPublicPriceSourceOpensOnlyPriceDerivedRoutes(t *testing.T) {
 		}
 		for _, p := range []string{"/api/accuracy", "/api/evidence", "/api/track-record", "/api/model-health"} {
 			code, ctype, body := call(t, cl, srv, http.MethodGet, p)
-			if code == 200 {
+			switch code {
+			case http.StatusOK:
 				t.Errorf("%s on an IEX-fed instance reached %s: it carries Alpaca-measured content", who, p)
-			} else if code == http.StatusUnavailableForLegalReasons {
+			case http.StatusUnavailableForLegalReasons:
 				checkWithheld(t, who, p+" on an IEX-fed instance", code, ctype, body, "alpaca")
 			}
 		}

@@ -47,7 +47,7 @@ func main() {
 	default:
 		fail(fmt.Errorf("give -url or -file"))
 	}
-	defer src.Close()
+	defer src.Close() //nolint:errcheck
 
 	zr, err := gzip.NewReader(bufio.NewReaderSize(src, 4<<20))
 	if err != nil {
@@ -62,11 +62,11 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
-		defer f.Close()
+		defer f.Close() //nolint:errcheck
 		w = f
 	}
 	bw := bufio.NewWriter(w)
-	fmt.Fprintln(bw, "symbol,open,high,low,close,volume,trades,official_close")
+	_, _ = fmt.Fprintln(bw, "symbol,open,high,low,close,volume,trades,official_close")
 	syms := make([]string, 0, len(bars))
 	for s := range bars {
 		syms = append(syms, s)
@@ -74,7 +74,7 @@ func main() {
 	sort.Strings(syms)
 	for _, s := range syms {
 		b := bars[s]
-		fmt.Fprintf(bw, "%s,%.4f,%.4f,%.4f,%.4f,%d,%d,%t\n", s, b.Open, b.High, b.Low, b.Close, b.Volume, b.Trades, b.OfficialClose)
+		_, _ = fmt.Fprintf(bw, "%s,%.4f,%.4f,%.4f,%.4f,%d,%d,%t\n", s, b.Open, b.High, b.Low, b.Close, b.Volume, b.Trades, b.OfficialClose)
 	}
 	if err := bw.Flush(); err != nil {
 		fail(err)

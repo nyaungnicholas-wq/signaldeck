@@ -112,7 +112,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	defer st.Close()
+	defer st.Close() //nolint:errcheck
 	ctx := context.Background()
 
 	// One price source per database, enforced where the bars are written.
@@ -180,7 +180,7 @@ func readDay(path, date string, series map[string][]iexhist.Day) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	rows, err := csv.NewReader(f).ReadAll()
 	if err != nil {
 		return 0, err

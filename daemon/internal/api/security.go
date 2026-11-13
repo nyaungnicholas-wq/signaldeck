@@ -170,7 +170,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// health), so they stay withheld there. Kadoa is never cleared.
 		if d.published() && !d.isOperator(r) {
 			if src, cleared := datalicense.NonOperatorSource(r.URL.Path); !cleared &&
-				!(src == "alpaca" && d.priceRouteCleared(r.URL.Path)) {
+				(src != "alpaca" || !d.priceRouteCleared(r.URL.Path)) {
 				writeWithheld(w, src)
 				return
 			}
