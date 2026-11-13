@@ -68,6 +68,7 @@ func (w *VolRegimeRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("bars %s: %w", s.Symbol, err)
 		}
+		bars = structSettledBars(s.Market, bars, now.Unix())
 		rets := barReturns(bars)
 		f, ok := volregime.Predict(rets)
 		if ok {

@@ -27,6 +27,7 @@ func (w *VolRegimeRunner) runCryptoSymbol(ctx context.Context, s md.Symbol, from
 	if err != nil {
 		return 0, fmt.Errorf("bars %s: %w", s.Symbol, err)
 	}
+	bars = structSettledBars(s.Market, bars, now.Unix())
 	closes := make([]float64, 0, len(bars))
 	vols := make([]float64, 0, len(bars))
 	for _, b := range bars {
