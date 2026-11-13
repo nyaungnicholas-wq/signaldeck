@@ -97,6 +97,25 @@ class MaintenanceLockContract(unittest.TestCase):
             self.assertIn("KEPT", output, msg=f"Expected KEPT in output:\n{output}")
             self.assertIn("REMOVED", output, msg=f"Expected REMOVED in output:\n{output}")
 
+    def test_refresh_waits_for_a_held_lock_before_taking_it(self):
+        text = self._read("ops/signaldeck-refresh.sh")
+        wait = text.index('while [ -e "$MAINT_LOCK" ]')
+        self.assertLess(wait, text.index('echo "refresh $$" > "$MAINT_LOCK"'))
+
+    def test_market_close_never_clobbers_or_drops_a_refresh_lock(self):
+        """Market-Close and Daily-Refresh catch up together after a sleep
+        (11-12). The backup's lock is empty; the refresh's is "refresh <pid>"."""
+        mc = self._read("ops/market-close.sh")
+        self.assertIn('release_lock() { [ -s "$LOCK" ] || rm -f "$LOCK"; }', mc)
+        self.assertLess(mc.index("grep -q '^refresh ' \"$LOCK\""), mc.index(': > "$LOCK"'))
+        restart = self._read("ops/market-close-restart.sh")
+        self.assertIn('[ -s "$SD/ops/.maintenance" ] || rm -f "$SD/ops/.maintenance"', restart)
+
+    def test_guard_counts_the_refresh_only_for_its_own_lock(self):
+        text = self._read("ops/daemon-guard.ps1")
+        self.assertIn("$lockText -like 'refresh *'", text)
+        self.assertIn("$_ -ne 'signaldeck-refresh'", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

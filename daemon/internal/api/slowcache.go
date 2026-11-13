@@ -90,8 +90,13 @@ var detachedBuildTimeout = 10 * time.Minute
 // the cancel — the timeout bounds a wedged build, the cancel releases the timer
 // for the overwhelming majority that finish normally.
 func detachedCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), detachedBuildTimeout)
+	return context.WithTimeout(apiLife, detachedBuildTimeout)
 }
+
+// apiLife ends when the API stops (Serve cancels it at shutdown), so a detached
+// build stops with the server instead of running on into a store main() has
+// already closed (`sql: database is closed`, 2026-10-28..11-05).
+var apiLife, stopAPILife = context.WithCancel(context.Background())
 
 // noteRebuildFailure logs a background rebuild that did not produce a payload.
 // Silence is how the wedge above stayed invisible: the stale copy kept serving,
@@ -230,7 +235,9 @@ func httpCacheErr(w http.ResponseWriter, err error) {
 // keeps the caller's context VALUES (who is asking, as the inline build saw
 // them) but not its cancellation, and gets the detached ceiling.
 func detachedFrom(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), detachedBuildTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), detachedBuildTimeout)
+	stop := context.AfterFunc(apiLife, cancel) // outlives the request, not the server
+	return ctx, func() { stop(); cancel() }
 }
 
 // recoverBuild turns a panicking detached build into an error. Inline, a panic

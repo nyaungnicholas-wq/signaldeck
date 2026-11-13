@@ -47,7 +47,9 @@ func openReads(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sql.OpenDB(gatedReadConnector{drv: base.Driver(), dsn: dsn}), nil
+	drv := base.Driver()
+	_ = base.Close() // only its driver was wanted; it has opened no connection
+	return sql.OpenDB(gatedReadConnector{drv: drv, dsn: dsn}), nil
 }
 
 type gatedReadConnector struct {
@@ -95,7 +97,12 @@ func (c *gatedReadConn) QueryContext(ctx context.Context, query string, args []d
 
 func (c *gatedReadConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if ex, ok := c.Conn.(driver.ExecerContext); ok {
-		return ex.ExecContext(ctx, query, args)
+		// Timed too: the nightly backup's VACUUM INTO runs on this pool and holds
+		// one snapshot for the whole copy (22:47-03:27 on 2026-11-12).
+		from, start := readCallerPCs(), time.Now()
+		res, err := ex.ExecContext(ctx, query, args)
+		noteReadHold("statement", from, start)
+		return res, err
 	}
 	return nil, driver.ErrSkip
 }

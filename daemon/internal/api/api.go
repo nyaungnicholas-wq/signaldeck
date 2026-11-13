@@ -102,7 +102,19 @@ func Serve(ctx context.Context, d Deps) error {
 	// cancelled. Returning at ErrServerClosed let main() close the store under
 	// handlers still running past the 3s drain: `request failed: sql: database
 	// is closed` at slow shutdowns (10-28, 10-29, 11-03..05).
-	return serveUntil(ctx, srv, ln, 3*time.Second)
+	stopLife := context.AfterFunc(ctx, stopAPILife) // detached builds end with the server
+	defer stopLife()
+	err = serveUntil(ctx, srv, ln, 3*time.Second)
+	// Account mail runs after its response (mailInBackground); let it finish,
+	// bounded, before main() closes the store.
+	mailDone := make(chan struct{})
+	go func() { mailWG.Wait(); close(mailDone) }()
+	select {
+	case <-mailDone:
+	case <-time.After(10 * time.Second):
+		slog.Warn("api: account mail still sending at shutdown")
+	}
+	return err
 }
 
 // routes registers every API route on a fresh mux: the production route set.
@@ -958,7 +970,7 @@ func (d Deps) screener(w http.ResponseWriter, r *http.Request) {
 	// build runs on a detached context so a client disconnect can't abort the
 	// shared rebuild that other waiters depend on.
 	rows, err := screenerCacheG.get(func() ([]watchRow, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(apiLife, 60*time.Second)
 		defer cancel()
 		syms, err := d.St.ListSymbols(ctx, true)
 		if err != nil {

@@ -1172,7 +1172,10 @@ class DevBoxStagingLockTests(unittest.TestCase):
             body = path.read_text(encoding="utf-8")
             with self.subTest(script=path.name):
                 self.assertIn("lock_holder_dead", body)
-                self.assertIn('mkdir "$LOCK"', body)
+                # the exclusive mkdir(2), not the mkdir command (uutils races)
+                self.assertIn("take_lock()", body)
+                self.assertIn("os.mkdir(sys.argv[1])", body)
+                self.assertNotIn('mkdir "$LOCK"', body)
                 self.assertIn("LOCK_STALE_SECONDS", body)
                 self.assertIn('rm -rf "$LOCK"', body)
                 # the liveness probe must be asked before age

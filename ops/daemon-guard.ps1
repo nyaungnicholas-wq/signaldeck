@@ -106,8 +106,14 @@ $cwd  = Join-Path $root 'daemon'
 $LOCK_HOLDERS = 'market-close', 'backup-offline', 'signaldeck-ctl', 'signaldeck-refresh'
 if (Test-Path $lock) {
     $ageMin = [math]::Round(((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes, 1)
+    # The daily refresh runs for an hour or more but holds the lock only for its
+    # stop+prune, and marks it "refresh <pid>". Count it as the holder only for
+    # a lock it wrote, or a leftover market-close lock (empty) would keep the
+    # daemon down for up to 90 min whenever a sweep happens to be running.
+    $lockText = "$(Get-Content -LiteralPath $lock -Raw -ErrorAction SilentlyContinue)"
+    $holders = if ($lockText -like 'refresh *') { $LOCK_HOLDERS } else { $LOCK_HOLDERS | Where-Object { $_ -ne 'signaldeck-refresh' } }
     $holder = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $c = $_.CommandLine; $c -and ($LOCK_HOLDERS | Where-Object { $c -like "*$_*" }) } |
+        Where-Object { $c = $_.CommandLine; $c -and ($holders | Where-Object { $c -like "*$_*" }) } |
         Select-Object -First 1
 
     if ($ageMin -lt 2) {

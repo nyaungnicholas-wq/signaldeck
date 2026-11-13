@@ -139,17 +139,14 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 	// A delisted stock never prints the minute bars that would clear its
 	// floor, so it was re-enqueued every pass forever (CRNX, SOBR, VTAK, MVO on
 	// 2026-11-12), spending vendor calls on dead names. Survivorship keeps them
-	// active for their history; backfill has nothing left to fetch.
+	// active for their history. Only the MINUTE floor is waived: a name stamped
+	// delisted before its daily history landed can still fetch that history.
 	delisted, err := r.St.DelistedSymbolIDs(ctx)
 	if err != nil {
 		return "", err
 	}
 	requeued, skipped := 0, 0
 	for _, s := range syms {
-		if delisted[s.ID] {
-			skipped++
-			continue
-		}
 		nDaily, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return "", err
@@ -160,7 +157,13 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			need = need || nMin < minCoverage
+			if short := nMin < minCoverage; short && delisted[s.ID] {
+				if !need {
+					skipped++ // the minute floor was all it lacked
+				}
+			} else {
+				need = need || short
+			}
 		}
 		if need {
 			if err := r.BF.Enqueue(s); err == nil {

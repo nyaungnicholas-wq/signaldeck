@@ -22,8 +22,12 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # lock and keep the daemon down until someone noticed. daemon-guard.ps1 also
 # expires the lock after 90m as a second net.
 LOCK="$SD/ops/.maintenance"
-release_lock() { rm -f "$LOCK"; }
+# Ours is EMPTY; the daily refresh's says "refresh <pid>". Never clobber or
+# remove the refresh's: wait (bounded) for its prune, release only our own.
+release_lock() { [ -s "$LOCK" ] || rm -f "$LOCK"; }
 trap release_lock EXIT INT TERM
+lw=0
+while grep -q '^refresh ' "$LOCK" 2>/dev/null && [ "$lw" -lt 2700 ]; do sleep 30; lw=$((lw + 30)); done
 : > "$LOCK"
 
 # Daemon and ngrok tunnel only, NOT `signaldeck-ctl.sh stop`: that also stopped

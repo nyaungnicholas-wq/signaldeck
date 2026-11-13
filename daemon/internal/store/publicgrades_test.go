@@ -45,7 +45,7 @@ func TestRegimeKindTallies(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("tallies = %+v err=%v", got, err)
 	}
-	want := RegimeKindTally{Kind: "vol21", Open: 1, Graded: 3, Days: 3, Correct: 2, BaselineN: 2, BaselineCorrect: 1}
+	want := RegimeKindTally{Kind: "vol21", Open: 1, Graded: 3, Days: 3, Correct: 2, BaselineN: 2, BaselineCorrect: 1, CorrectOnBaseline: 1}
 	if got[0] != want {
 		t.Fatalf("tally = %+v, want %+v", got[0], want)
 	}

@@ -295,6 +295,18 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 	if err := st.MarkDelisted(ctx, dead.ID, time.Now().AddDate(0, 0, -60).Unix()); err != nil {
 		t.Fatal(err)
 	}
+	// DEAD has its daily history (only the minute floor is unmet); THIN is
+	// delisted too but its daily history never landed, which is still fetchable.
+	if err := st.UpsertBars(ctx, dailyBars(dead.ID, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	thin, err := st.UpsertSymbol(ctx, "THIN", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkDelisted(ctx, thin.ID, time.Now().AddDate(0, 0, -60).Unix()); err != nil {
+		t.Fatal(err)
+	}
 	bf := NewBackfiller(st, nil, nil)
 	r := &BackfillReconciler{St: st, BF: bf}
 	detail, err := r.Run(ctx)
@@ -302,10 +314,14 @@ func TestBackfillReconcilerSkipsDelistedSymbols(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := drain(bf)
-	if len(got) != 1 || got[0].ID != live.ID {
-		t.Fatalf("got %v, want [live]; detail: %s", got, detail)
+	ids := map[int64]bool{}
+	for _, s := range got {
+		ids[s.ID] = true
 	}
-	if !strings.Contains(detail, "re-enqueued 1 under-covered") || !strings.Contains(detail, "skipped 1 delisted") {
+	if len(got) != 2 || !ids[live.ID] || !ids[thin.ID] {
+		t.Fatalf("got %v, want LIVE and THIN (not DEAD); detail: %s", got, detail)
+	}
+	if !strings.Contains(detail, "re-enqueued 2 under-covered") || !strings.Contains(detail, "skipped 1 delisted") {
 		t.Errorf("detail missing expected content: %s", detail)
 	}
 }

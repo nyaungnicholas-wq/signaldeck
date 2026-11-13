@@ -21,6 +21,7 @@ type publicGrade struct {
 	Days     int      `json:"days"`
 	Accuracy *float64 `json:"accuracy,omitempty"`
 	Baseline *float64 `json:"baseline,omitempty"`
+	Compared int      `json:"compared,omitempty"` // rows both rates are measured on
 	Status   string   `json:"status"`
 }
 
@@ -52,12 +53,16 @@ func (d Deps) publicGrades(w http.ResponseWriter, r *http.Request) {
 		case t.Days < publicGradeMinDays:
 			g.Status = "too few graded days to show a rate"
 		default:
+			// With a baseline, both rates come from the SAME rows (the ones
+			// that froze a baseline): the page says "on the same forecasts".
 			acc := float64(t.Correct) / float64(t.Graded)
-			g.Accuracy = &acc
 			if t.BaselineN > 0 {
+				acc = float64(t.CorrectOnBaseline) / float64(t.BaselineN)
 				base := float64(t.BaselineCorrect) / float64(t.BaselineN)
 				g.Baseline = &base
+				g.Compared = t.BaselineN
 			}
+			g.Accuracy = &acc
 			g.Status = "graded"
 		}
 		out = append(out, g)

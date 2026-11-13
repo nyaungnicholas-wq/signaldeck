@@ -16,7 +16,9 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # native Windows paths, avoiding Git Bash path mangling). If schtasks is
 # unavailable or fails, the 5-minute keepalive still recovers it — this only
 # shortens the gap from minutes to seconds.
-rm -f "$SD/ops/.maintenance" # the market-close lock: guards may act again
+# the market-close lock (empty): guards may act again. A refresh's lock
+# ("refresh <pid>") is not ours to drop.
+[ -s "$SD/ops/.maintenance" ] || rm -f "$SD/ops/.maintenance"
 
 # RUN THE PROVENANCE PREFLIGHT ON THIS PATH TOO.
 #

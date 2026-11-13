@@ -109,11 +109,20 @@ lock_holder_dead() {
   [ "$((_now - _started))" -gt "$LOCK_STALE_SECONDS" ]
 }
 
-if ! mkdir "$LOCK" 2>/dev/null; then
+# take_lock: the test-and-set. NOT the mkdir COMMAND: uutils coreutils (the
+# mkdir of Ubuntu 25.10+, and of the CI image ubuntu-26.04) let two racing
+# `mkdir`s BOTH succeed in 59 of 200 trials (2026-11-13), and two graders then
+# held the lock and published at once. os.mkdir is the mkdir(2) syscall, which
+# is exclusive by POSIX (0 of 200). cygpath gives Windows Python a native path.
+take_lock() {
+  "$PY" -c 'import os,sys; os.mkdir(sys.argv[1])' "$(cygpath -m "$LOCK" 2>/dev/null || printf '%s' "$LOCK")" 2>/dev/null
+}
+
+if ! take_lock; then
   if lock_holder_dead; then
     log "breaking a stale grade lock (owner $(cat "$LOCK/pid" 2>/dev/null) is gone, held >${LOCK_STALE_SECONDS}s)"
     rm -rf "$LOCK"
-    mkdir "$LOCK" 2>/dev/null || {
+    take_lock || {
       log "grade SKIPPED: another grader took the lock while this one was breaking it"
       exit 0
     }

@@ -57,6 +57,8 @@ question. Unresolved — see R2.
 (1d AUC 0.4482, 1w AUC 0.4775)`. `gbm-trainer` (degraded): `no model leg cleared
 its OOS edge bar`.
 
+Correction (fix loop L6, 2026-11-12): the quoted "benched fleet-wide" was the trainer's own wording and was false. No production code reads that fleet AUC; the ranking gate admits or benches the expectancy leg on the day-clustered cross-sectional AUC. The quote above is kept verbatim as what the system said.
+
 This is the system refusing to trade models that fail their own bar. Correct
 behaviour, and a likely honest contributor to E1/E2.
 

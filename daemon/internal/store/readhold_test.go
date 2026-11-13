@@ -54,6 +54,13 @@ func TestReadPoolNamesALongReadHold(t *testing.T) {
 		t.Fatalf("the read pool did not name a held read and its caller: %q", out)
 	}
 
+	if _, err := st.DB().ExecContext(ctx, "SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "kind=statement") {
+		t.Fatalf("a statement on the read pool (VACUUM INTO runs there) was not timed: %q", buf.String())
+	}
+
 	tx, err := st.DB().BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)

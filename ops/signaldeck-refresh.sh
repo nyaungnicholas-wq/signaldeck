@@ -263,6 +263,11 @@ log "processing window: $(($(date +%s)-react_ts))s elapsed"
 #      clears a lock with no live holder.
 MAINT_LOCK="$SD/ops/.maintenance"
 own_maint=""
+# Another window (a market-close backup catching up after a sleep, as 11-12)
+# holds it: wait, bounded, rather than prune under it and be restarted into.
+lw=0
+while [ -e "$MAINT_LOCK" ] && [ "$lw" -lt 3600 ]; do sleep 30; lw=$((lw + 30)); done
+[ "$lw" -gt 0 ] && log "waited ${lw}s for the maintenance lock before the prune"
 if [ ! -e "$MAINT_LOCK" ]; then echo "refresh $$" > "$MAINT_LOCK"; own_maint="refresh $$"; fi
 release_maint(){ [ -n "$own_maint" ] && [ "$(cat "$MAINT_LOCK" 2>/dev/null)" = "$own_maint" ] && rm -f "$MAINT_LOCK"; own_maint=""; }
 sd_svc_stop com.signaldeck.daemon
