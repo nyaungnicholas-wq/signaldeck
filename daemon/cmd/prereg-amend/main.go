@@ -45,8 +45,8 @@ func main() {
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
 				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
-				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+", "+GradingWindow2Kind+" or "+
-				LabelWindowKind)
+				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+", "+GradingWindow2Kind+", "+
+				LabelWindowKind+" or "+StructSettledKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
@@ -55,12 +55,12 @@ func main() {
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
 		*kind != BookExtremeKind && *kind != RVForecastKind &&
 		*kind != GradingWindowKind && *kind != GradingWindow2Kind &&
-		*kind != LabelWindowKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != LabelWindowKind && *kind != StructSettledKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
 			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind, GradingWindow2Kind,
-			LabelWindowKind)
+			LabelWindowKind, StructSettledKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -196,6 +196,21 @@ func main() {
 				"epoch to a day with none resolved.", n, m.Resolved)
 		}
 		spec, note = labelWindowSpec(m), labelWindowNote
+
+	case StructSettledKind:
+		m, err := measureStructSettled(ctx, db)
+		if err != nil {
+			die("measure structural settled-bar state: %v", err)
+		}
+		// The rule is registered as forward-only. If a call at or after the
+		// cut-over already exists, it was frozen under the old rule and this
+		// record would be describing rows it does not govern.
+		if m.CallsFromEpoch != 0 {
+			die("REFUSING to file: %d structural call(s) already exist at or after the cut-over. "+
+				"A rule registered after the calls it governs is not forward-only; move the "+
+				"cut-over to a time with none.", m.CallsFromEpoch)
+		}
+		spec, note = structSettledSpec(m), structSettledNote
 
 	case RVForecastKind:
 		m, err := measureRVForecast(ctx, db)

@@ -133,6 +133,11 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 
 	// Per-symbol daily series, loaded at most once per tick and shared by the
 	// freeze (naive baseline) and resolve (grading) phases.
+	// Each symbol's market decides when its daily bar settles (structSettled*).
+	markets, err := symbolMarkets(ctx, w.St)
+	if err != nil {
+		return "", fmt.Errorf("symbol markets: %w", err)
+	}
 	cache := map[int64]*series{}
 	load := func(symbolID, from int64) *series {
 		if sr, ok := cache[symbolID]; ok {
@@ -144,7 +149,7 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 				Detail: fmt.Sprintf("bars sym %d: %v", symbolID, err)})
 			return nil
 		}
-		sr := &series{}
+		sr := &series{market: markets[symbolID]}
 		for _, b := range bars {
 			if b.Close > 0 {
 				sr.ts = append(sr.ts, b.Ts)
@@ -271,11 +276,17 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			abandon(o, "no bars available for the symbol")
 			continue
 		}
-		// call bar = last bar at or before the frozen call ts
-		t := barIndexAt(sr.ts, o.Ts)
+		// call bar = last bar at or before the frozen call ts (from the settled-
+		// bar cut-over on: the last bar SETTLED as of the call).
+		t := structCallIndex(sr.market, sr.ts, o.Ts)
+		// From the cut-over on, a forward bar that is still forming is not a
+		// bar yet: the row waits for it to settle instead of being graded
+		// against a close that has not happened.
+		usable := structUsableLen(sr.market, sr.ts, o.Ts, nowUnix)
+		closes, vols := sr.closes[:usable], sr.vols[:usable]
 		// require enough NEWER daily bars: the calendar-day approximation alone
 		// must never grade against a window that hasn't printed yet.
-		if t < 0 || len(sr.closes)-1-t < o.HorizonDays {
+		if t < 0 || len(closes)-1-t < o.HorizonDays {
 			// "retried later" is TRUE only while later can still arrive. For a
 			// symbol the universe sweep pruned it cannot: an inactive symbol
 			// stops receiving daily bars, so the row is short of its horizon
@@ -294,12 +305,12 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 		// The crypto kinds share the stock resolvers by design — the predictor
 		// arithmetic is identical, only the accuracy tables differ.
 		case structregime.KindTrend21, structregime.KindTrend63, structregime.KindTrendCrypto21:
-			res, rok = structregime.ResolveTrendAt(sr.closes, t, o.HorizonDays)
+			res, rok = structregime.ResolveTrendAt(closes, t, o.HorizonDays)
 		case structregime.KindLiquidity21, structregime.KindLiquidityCrypto21:
-			res, rok = structregime.ResolveLiquidityAt(sr.closes, sr.vols, t)
+			res, rok = structregime.ResolveLiquidityAt(closes, vols, t)
 		case structregime.KindVol21:
 			// return index t-1 aligns to bar index t (ret i resolves at bar i+1)
-			res, rok = structregime.ResolveVol21At(barReturns2(sr.closes), t-1)
+			res, rok = structregime.ResolveVol21At(barReturns2(closes), t-1)
 		default:
 			// An unknown kind is a kind the ENGINE no longer has (retired gapfill
 			// rows). No future bar teaches it one, so this row is as permanently
@@ -364,6 +375,7 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 
 // series is one symbol's positive-close daily history for this tick.
 type series struct {
+	market md.Market
 	ts     []int64
 	closes []float64
 	vols   []float64
@@ -402,7 +414,7 @@ func (w *RegimeOutcomeWorker) naiveLabel(sr *series, c store.RegimeCall) (string
 	if sr == nil {
 		return "", false
 	}
-	t := barIndexAt(sr.ts, c.Ts)
+	t := structCallIndex(sr.market, sr.ts, c.Ts)
 	if t < 0 {
 		return "", false
 	}
