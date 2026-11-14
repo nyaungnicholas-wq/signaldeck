@@ -1,9 +1,8 @@
 package pipeline
 
 import (
-	"math"
-
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // structSettledSinceTs is the cut-over for the structural family's settled-bar
@@ -19,12 +18,12 @@ import (
 // existed, not that the last one had closed. Three places read the same
 // unfinished bar three different ways.
 //
-// IT IS DORMANT. math.MaxInt64 means no call is ever at or after it, and every
-// function below then returns exactly what the old code computed. Switching it
-// on changes the input of a pre-registered record, so it is the owner's
-// decision and goes through the amendment path (daemon/cmd/prereg-amend): set
-// this to the agreed cut-over in the same commit that registers the amendment.
-var structSettledSinceTs int64 = math.MaxInt64
+// THE CUT-OVER IS store.StructSettledEpochTS (start of Monday 16 Nov 2026, New
+// York), the owner's decision of 13 Nov 2026, registered on the chain as
+// "structural-settled-bar" before any call it governs existed. Before that
+// instant every function below returns exactly what the old code computed. It
+// is a variable only so tests can move it.
+var structSettledSinceTs = store.StructSettledEpochTS
 
 // structSettledBars drops a still-forming newest bar from a predictor's input
 // once the cut-over has passed.

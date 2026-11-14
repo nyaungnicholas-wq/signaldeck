@@ -3,8 +3,10 @@ package pipeline
 import (
 	"math"
 	"testing"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // Three daily stock bars at 05:00Z on consecutive days. A stock daily bar
@@ -22,11 +24,19 @@ func withCutover(t *testing.T, v int64) {
 	t.Cleanup(func() { structSettledSinceTs = old })
 }
 
-// Dormant: every helper returns what the old code computed, whatever the clock.
-func TestStructSettled_DormantChangesNothing(t *testing.T) {
-	if structSettledSinceTs != math.MaxInt64 {
-		t.Fatal("the cut-over must ship dormant; switching it on is an amendment")
+// The shipped cut-over is the registered one, and nothing else.
+func TestStructSettled_CutoverIsTheRegisteredEpoch(t *testing.T) {
+	if structSettledSinceTs != store.StructSettledEpochTS {
+		t.Fatalf("cut-over %d is not the registered epoch %d", structSettledSinceTs, store.StructSettledEpochTS)
 	}
+	if got := time.Unix(store.StructSettledEpochTS, 0).UTC().Format(time.RFC3339); got != "2026-11-16T05:00:00Z" {
+		t.Fatalf("registered epoch is %s, want 2026-11-16T05:00:00Z (Monday 00:00 New York)", got)
+	}
+}
+
+// Before the cut-over every helper returns what the old code computed.
+func TestStructSettled_BeforeCutoverChangesNothing(t *testing.T) {
+	withCutover(t, math.MaxInt64)
 	ts, _, _, d2 := settledFixture()
 	mid := d2 + 10*3600 // ten hours into the newest bar: still forming
 	if got := structCallIndex(md.Stocks, ts, mid); got != 2 {
