@@ -17,6 +17,8 @@ export type PublicForecasts = {
   citation?: string;
   coverage?: string;
   computedAt?: string;
+  /** Trading date (YYYY-MM-DD) of the newest data the readings were built from. */
+  dataThrough?: string;
 };
 
 // Column order and plain-English headings. A kind the daemon sends that is not
@@ -51,6 +53,17 @@ export function pivotForecasts(rows: PublicForecastRow[]): { kinds: string[]; li
   const lines = [...bySymbol.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
   return { kinds: [...known, ...extra], lines };
 }
+
+/** Whole days between a YYYY-MM-DD trading date and now; null if unparseable. */
+export function daysSince(date: string | undefined, now: number = Date.now()): number | null {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const t = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((now - t) / 86_400_000);
+}
+
+/** Past this many days the data is not just a weekend old: updates have stopped. */
+export const STALE_AFTER_DAYS = 4;
 
 /** Conviction is a 0..1 distance from the threshold. Shown as a whole percent;
  *  a missing or non-finite value shows nothing rather than 0%. */

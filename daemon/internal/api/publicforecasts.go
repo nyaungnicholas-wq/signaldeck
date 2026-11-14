@@ -94,10 +94,17 @@ func (d Deps) publicForecasts(w http.ResponseWriter, r *http.Request) {
 	}
 	if src == "iexhist" {
 		out["citation"] = datalicense.IEXCitation
-		out["coverage"] = "Prices and volumes are trades on the IEX exchange only, from the previous trading day."
+		out["coverage"] = "Prices and volumes are trades on the IEX exchange only, not the whole market."
 	}
 	if newest > 0 {
 		out["computedAt"] = time.Unix(newest, 0).UTC().Format(time.RFC3339)
+	}
+	// The trading date of the newest bar these readings were built from. Daily
+	// bars are stamped at New York midnight, so the UTC date of the stamp is
+	// that trading date. Readings are recomputed on a clock; without this a
+	// visitor cannot tell fresh readings from ones whose data stopped arriving.
+	if barTs, err := d.St.NewestDailyBarTs(r.Context()); err == nil && barTs > 0 {
+		out["dataThrough"] = time.Unix(barTs, 0).UTC().Format("2006-01-02")
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, out)

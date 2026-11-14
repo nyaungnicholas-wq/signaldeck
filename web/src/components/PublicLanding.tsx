@@ -11,7 +11,7 @@ const POINTS: { title: string; body: string }[] = [
   },
   {
     title: "Where the data comes from",
-    body: "IEX, a US stock exchange that publishes its own trading data for free. That means prices and volumes here are trades on IEX only, a small share of the whole market, and they are from the previous trading day, not live.",
+    body: "IEX, a US stock exchange that publishes its own trading data for free. That means prices and volumes here are trades on IEX only, a small share of the whole market, and they are at least a day old, not live. The Forecasts page shows the date of the newest data.",
   },
   {
     title: "What has not been measured",

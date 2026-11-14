@@ -27,8 +27,9 @@ export default async function PublicInstanceNote({ page }: { page: "terms" | "pr
             >
               Data provided for free by IEX.
             </a>{" "}
-            Prices and volumes are trades on IEX only, not the whole market, and are from the
-            previous trading day. IEX does not endorse this site or its forecasts.
+            Prices and volumes are trades on IEX only, not the whole market, and are at least a day
+            old; the Forecasts page shows the date of the newest data. IEX does not endorse this
+            site or its forecasts.
           </p>
           <p className="mt-2" style={{ color: "var(--dim)" }}>
             No Alpaca market data, and nothing derived from it, is shown on this site. The sections

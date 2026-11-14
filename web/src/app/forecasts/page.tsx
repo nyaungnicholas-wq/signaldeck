@@ -13,6 +13,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   KIND_LABEL,
+  STALE_AFTER_DAYS,
+  daysSince,
   pivotForecasts,
   strengthText,
   type PublicForecasts,
@@ -115,9 +117,20 @@ export default function ForecastsPage() {
             <p className="mt-1" style={{ color: "var(--dim)" }}>
               {state.data.note}
             </p>
+            {state.data.dataThrough && (
+              <p className="mt-1 font-semibold" data-testid="forecasts-data-through">
+                Built from trading data through {state.data.dataThrough}.
+              </p>
+            )}
+            {(daysSince(state.data.dataThrough) ?? 0) > STALE_AFTER_DAYS && (
+              <p className="mt-1" style={{ color: "var(--warn)" }} data-testid="forecasts-stale">
+                No newer data has arrived since then, so these readings are not up to date. IEX has
+                paused downloads of its historical data; the readings will update again when it
+                resumes.
+              </p>
+            )}
             <p className="mt-1" style={{ color: "var(--faint)" }}>
               {table.lines.length.toLocaleString("en-US")} stocks
-              {state.data.computedAt ? ` · computed ${state.data.computedAt.replace("T", " ").replace("Z", " UTC")}` : ""}
               {" · "}the percentage is how far the reading sits from its threshold, not a probability.
             </p>
           </section>

@@ -1,7 +1,7 @@
 // node --test src/lib/publicForecasts.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pivotForecasts, strengthText } from "./publicForecasts.ts";
+import { pivotForecasts, strengthText, daysSince, STALE_AFTER_DAYS } from "./publicForecasts.ts";
 
 test("rows pivot to one line per symbol with kinds in reading order", () => {
   const { kinds, lines } = pivotForecasts([
@@ -22,4 +22,13 @@ test("strength is a whole percent and never a fake zero", () => {
   assert.equal(strengthText(1.2), "100%");
   assert.equal(strengthText(NaN), "");
   assert.equal(strengthText(undefined), "");
+});
+
+test("data age is counted from the trading date, and a long weekend is not stale", () => {
+  const now = Date.parse("2026-11-16T12:00:00Z"); // a Monday
+  assert.equal(daysSince("2026-11-13", now), 3); // Friday's data on Monday
+  assert.ok(daysSince("2026-11-13", now) <= STALE_AFTER_DAYS);
+  assert.ok(daysSince("2026-11-11", now) > STALE_AFTER_DAYS);
+  assert.equal(daysSince(undefined, now), null);
+  assert.equal(daysSince("11/13/2026", now), null);
 });

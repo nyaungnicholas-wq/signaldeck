@@ -414,8 +414,8 @@ function SourceCitation({ source }: { source: string }) {
       <a href="https://www.iex.io/legal/hist-data-terms" target="_blank" rel="noreferrer" className="hover:underline">
         Data provided for free by IEX.
       </a>{" "}
-      Prices and volumes are trades on the IEX exchange only, not the whole market, and are from
-      the previous trading day.
+      Prices and volumes are trades on the IEX exchange only, not the whole market, and are at
+      least a day old; the Forecasts page shows the date.
     </span>
   );
 }
