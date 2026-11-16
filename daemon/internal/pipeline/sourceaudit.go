@@ -22,6 +22,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/srchealth"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // SourceAuditor is the freshness worker (implements workers.Worker).
@@ -60,7 +61,9 @@ func (w *SourceAuditor) Run(ctx context.Context) (string, error) {
 	if stale == 0 {
 		return fmt.Sprintf("all %d sources fresh", len(reports)), nil
 	}
-	return fmt.Sprintf("%d/%d sources STALE", stale, len(reports)), nil
+	// Degraded, not ok: the fleet board showed source-audit green while a source
+	// was 13 days stale (audit 11-10).
+	return "", fmt.Errorf("%d/%d sources STALE: %w", stale, len(reports), workers.ErrDegraded)
 }
 
 // recordDQ inserts a "source_stale" dq_event unless one for the same source

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // TestSourceAuditorFlagsStaleAndDedups uses wiki_views — an ungated source, so
@@ -38,12 +40,9 @@ func TestSourceAuditorFlagsStaleAndDedups(t *testing.T) {
 	}
 
 	w := &SourceAuditor{St: st}
-	detail, err := w.Run(ctx)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !strings.Contains(detail, "STALE") {
-		t.Errorf("detail = %q; want a STALE count", detail)
+	_, err = w.Run(ctx)
+	if !errors.Is(err, workers.ErrDegraded) || !strings.Contains(err.Error(), "STALE") {
+		t.Fatalf("Run err = %v; want a degraded STALE count", err)
 	}
 	if n := countStale(t, st, "wiki_views"); n != 1 {
 		t.Fatalf("want 1 wiki_views source_stale event, got %d", n)
@@ -53,7 +52,7 @@ func TestSourceAuditorFlagsStaleAndDedups(t *testing.T) {
 	}
 
 	// Second run the same day must dedup.
-	if _, err := w.Run(ctx); err != nil {
+	if _, err := w.Run(ctx); !errors.Is(err, workers.ErrDegraded) {
 		t.Fatal(err)
 	}
 	if n := countStale(t, st, "wiki_views"); n != 1 {

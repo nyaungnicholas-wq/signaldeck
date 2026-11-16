@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/httpretry"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -91,13 +92,13 @@ func (c *Client) Fetch(ctx context.Context, symbol string) ([]store.NewsItem, er
 	q.Set("limit", fmt.Sprint(fetchLimit))
 	u := fmt.Sprintf("%s/news?%s", c.base(), q.Encode())
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	c.auth(req)
-
-	resp, err := c.httpClient().Do(req)
+	resp, err := httpretry.Do(ctx, c.httpClient(), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err == nil {
+			c.auth(req)
+		}
+		return req, err
+	})
 	if err != nil {
 		return nil, err
 	}

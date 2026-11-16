@@ -252,7 +252,13 @@ func (c *Client) CIKMap(ctx context.Context) (map[string]int64, error) {
 		if row.Ticker == "" || row.CIK == 0 {
 			continue
 		}
-		out[strings.ToUpper(row.Ticker)] = row.CIK
+		t := strings.ToUpper(row.Ticker)
+		out[t] = row.CIK
+		// SEC writes share classes with a dash (BRK-B); the universe uses a dot
+		// (BRK.B). Without this, class-suffixed tickers never matched SEC data.
+		if strings.Contains(t, "-") {
+			out[strings.ReplaceAll(t, "-", ".")] = row.CIK
+		}
 	}
 	return out, nil
 }

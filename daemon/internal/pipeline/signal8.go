@@ -606,10 +606,26 @@ func (w *ThirteenFPoller) Run(ctx context.Context) (string, error) {
 			})
 			continue
 		}
+		// Several lines can share a CUSIP (one per sub-manager or voting
+		// split). The store keys on (cik, period, cusip), so sum them here;
+		// upserting each line let the last one overwrite the rest (audit 11-10).
+		agg := map[string]*edgar.Holding13F{}
+		var order []string
 		for _, h := range holdings {
 			if h.PutCall != "" {
 				continue // an option line is not shares held
 			}
+			if a, ok := agg[h.CUSIP]; ok {
+				a.Value += h.Value
+				a.Shares += h.Shares
+				continue
+			}
+			hc := h
+			agg[h.CUSIP] = &hc
+			order = append(order, h.CUSIP)
+		}
+		for _, cusip := range order {
+			h := agg[cusip]
 			row := store.InstHoldingRow{
 				CIK: fmt.Sprint(m.CIK), Manager: m.Name, Period: period,
 				CUSIP: h.CUSIP, Name: h.Issuer, Value: h.Value, Shares: h.Shares,

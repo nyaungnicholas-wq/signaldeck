@@ -17,7 +17,8 @@ import (
 // tickersJSON is a realistic company_tickers.json (object keyed by row index).
 const tickersJSON = `{
   "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
-  "1": {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"}
+  "1": {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"},
+  "2": {"cik_str": 1067983, "ticker": "BRK-B", "title": "BERKSHIRE HATHAWAY INC"}
 }`
 
 // aaplFactsJSON is a trimmed but realistic companyfacts response with revenue,
@@ -123,7 +124,7 @@ func TestCIKMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cikmap: %v", err)
 	}
-	if cm["AAPL"] != 320193 || cm["MSFT"] != 789019 {
+	if cm["AAPL"] != 320193 || cm["MSFT"] != 789019 || cm["BRK.B"] != 1067983 || cm["BRK-B"] != 1067983 {
 		t.Fatalf("bad cik map: %+v", cm)
 	}
 }

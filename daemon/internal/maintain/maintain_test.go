@@ -1014,3 +1014,45 @@ func TestWALTruncateRetrySecAcceptsZero(t *testing.T) {
 		}
 	}
 }
+
+// A provider 1h bar inside the 72h window must not be overwritten by the minute
+// rollup (audit 11-10); a missing hour is still filled, and the current hour is
+// still re-rolled.
+func TestDownsamplerKeepsProviderHourlyBarsInWindow(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := time.Now().Unix() / 3600 * 3600
+	provHour, gapHour := cur-10*3600, cur-5*3600
+	var bars []md.Bar
+	for _, h := range []int64{provHour, gapHour, cur} {
+		bars = append(bars, md.Bar{SymbolID: sym.ID, TF: md.TF1m, Ts: h, Open: 1, High: 2, Low: 1, Close: 2, Volume: 3})
+	}
+	bars = append(bars, md.Bar{SymbolID: sym.ID, TF: md.TF1h, Ts: provHour, Open: 50, High: 60, Low: 40, Close: 55, Volume: 999})
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Downsampler{St: st, Arc: archive.New(t.TempDir())}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hours, err := st.Bars(ctx, sym.ID, md.TF1h, provHour, cur+3600, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]md.Bar{}
+	for _, b := range hours {
+		got[b.Ts] = b
+	}
+	if b := got[provHour]; b.Volume != 999 || b.Close != 55 {
+		t.Fatalf("provider hour overwritten: %+v", b)
+	}
+	if b, ok := got[gapHour]; !ok || b.Volume != 3 {
+		t.Fatalf("missing hour not filled: %+v ok=%v", b, ok)
+	}
+	if b, ok := got[cur]; !ok || b.Volume != 3 {
+		t.Fatalf("current hour not rolled: %+v ok=%v", b, ok)
+	}
+}

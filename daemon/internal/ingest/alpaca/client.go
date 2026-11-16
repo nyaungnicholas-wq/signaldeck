@@ -600,16 +600,17 @@ func jitter(d time.Duration) time.Duration {
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
-// getRetrying performs an authenticated GET, retrying ONLY on HTTP 429 —
-// honouring Retry-After when the server sends one and using jittered
-// exponential back-off (backoff429, doubling) when it does not — bounded by
-// maxBackfillRetries. Every sleep is ctx-aware, so shutdown is never delayed
-// by a back-off. Each throttle is logged at WARN and exhaustion returns an
-// error logged at ERROR: throttling is never silent and the final failure is
-// never swallowed.
+// getRetrying performs an authenticated GET, retrying on HTTP 429, on 5xx and
+// on network errors (audit 11-10: a single 502 or connection reset used to fail
+// the whole page). Retry-After is honoured on 429 and 503 when the server sends
+// it; otherwise the wait is jittered exponential back-off (backoff429,
+// doubling). Retries are bounded by maxBackfillRetries. Every sleep is
+// ctx-aware, so shutdown is never delayed by a back-off. Each retry is logged
+// at WARN and exhaustion returns an error logged at ERROR: nothing is silent
+// and the final failure is never swallowed.
 //
-// On a nil error the caller owns resp.Body and must close it. Non-429 statuses
-// (including other non-200s) are returned as-is for the caller to interpret.
+// On a nil error the caller owns resp.Body and must close it. Any other status
+// (2xx, 3xx, 4xx other than 429) is returned as-is for the caller to interpret.
 func (c *Client) getRetrying(ctx context.Context, u, what string) (*http.Response, error) {
 	wait := backoff429
 	for attempt := 0; ; attempt++ {
@@ -619,25 +620,40 @@ func (c *Client) getRetrying(ctx context.Context, u, what string) (*http.Respons
 		}
 		c.auth(req)
 		resp, err := c.httpClient().Do(req)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusTooManyRequests {
+		var hdr, why string
+		switch {
+		case err != nil:
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			why = err.Error()
+		case resp.StatusCode == http.StatusTooManyRequests:
+			hdr, why = resp.Header.Get("Retry-After"), "rate limited"
+		case resp.StatusCode >= 500:
+			if resp.StatusCode == http.StatusServiceUnavailable {
+				hdr = resp.Header.Get("Retry-After")
+			}
+			why = fmt.Sprintf("status %d", resp.StatusCode)
+		default:
 			return resp, nil
 		}
-		hdr := resp.Header.Get("Retry-After")
-		resp.Body.Close() //nolint:errcheck
+		if resp != nil {
+			resp.Body.Close() //nolint:errcheck
+		}
 		if attempt >= maxBackfillRetries {
-			slog.Error("alpaca rate limited, giving up",
-				"what", what, "requests", attempt+1, "retries", attempt)
-			return nil, fmt.Errorf("alpaca: %s: rate limited after %d retries", what, attempt)
+			slog.Error("alpaca request failed, giving up",
+				"what", what, "requests", attempt+1, "retries", attempt, "why", why)
+			if err != nil {
+				return nil, fmt.Errorf("alpaca: %s: failed after %d retries: %w", what, attempt, err)
+			}
+			return nil, fmt.Errorf("alpaca: %s: %s after %d retries", what, why, attempt)
 		}
 		d, fromHeader := parseRetryAfter(hdr, time.Now())
 		if !fromHeader {
 			d = jitter(wait)
 		}
-		slog.Warn("alpaca rate limited, backing off",
-			"what", what, "attempt", attempt+1, "wait", d.String(), "retry_after_honoured", fromHeader)
+		slog.Warn("alpaca request failed, backing off",
+			"what", what, "attempt", attempt+1, "wait", d.String(), "why", why, "retry_after_honoured", fromHeader)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

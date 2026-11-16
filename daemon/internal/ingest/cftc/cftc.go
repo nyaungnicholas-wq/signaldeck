@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/httpretry"
 )
 
 // legacyURL is the Socrata resource for the legacy futures-only COT report.
@@ -116,13 +117,14 @@ func (c *Client) FetchWindow(ctx context.Context, since, until time.Time) (rows 
 	q.Set("$order", "report_date_as_yyyy_mm_dd")
 	u := c.base() + "?" + q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("User-Agent", c.ua())
-	req.Header.Set("Accept", "application/json")
-	res, err := c.httpClient().Do(req)
+	res, err := httpretry.Do(ctx, c.httpClient(), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", c.ua())
+			req.Header.Set("Accept", "application/json")
+		}
+		return req, err
+	})
 	if err != nil {
 		return nil, 0, err
 	}

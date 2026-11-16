@@ -132,7 +132,8 @@ func (w *COTPoller) Run(ctx context.Context) (string, error) {
 				Ts: now.Unix(), Kind: "cot_error",
 				Detail: fmt.Sprintf("window from %s: %v", win.since.Format("2006-01-02"), err),
 			})
-			return fmt.Sprintf("fetch failed after %d stored row(s) (dq recorded; will retry next tick): %v", stored, err), nil
+			// Degraded, not ok: an ok status hid a 13-day COT outage (audit 11-10).
+			return "", fmt.Errorf("fetch failed after %d stored row(s) (dq recorded; will retry next tick): %v: %w", stored, err, workers.ErrDegraded)
 		}
 		skippedRows += skipped
 		fetched += len(rows)

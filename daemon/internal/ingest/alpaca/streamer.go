@@ -57,6 +57,13 @@ func NewStreamer(client *Client, st *store.Store, resolve func(symbol string) (i
 	}
 }
 
+// pingEvery / pingTimeout: an unanswered ping means the connection is dead.
+// Vars so tests shrink them.
+var (
+	pingEvery   = 90 * time.Second
+	pingTimeout = 60 * time.Second // generous: the pong waits while a frame's bars are written
+)
+
 // SetSymbols replaces the desired subscription set. Safe to call from any
 // goroutine at any time; a live session applies the diff on its next loop
 // iteration, and a future session subscribes to the new set on connect.
@@ -163,6 +170,17 @@ func (s *Streamer) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Keepalive: conn.Read on the run context has no deadline, so a half-open
+	// TCP connection blocked Run forever (audit 11-10). Data frames stop for
+	// hours when the market is closed, so a ping, not an idle timeout, is the
+	// liveness test. The ping runs in its own goroutine: it needs the reader to
+	// take the pong, and the reader blocks while this loop is busy. coder/websocket
+	// allows Ping concurrently with the loop's writes; pingEvery > pingTimeout,
+	// so pings never overlap.
+	ping := time.NewTicker(pingEvery)
+	defer ping.Stop()
+	pingErr := make(chan error, 1)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -171,6 +189,24 @@ func (s *Streamer) Run(ctx context.Context) error {
 			if err := s.resync(ctx, conn, subscribed); err != nil {
 				return err
 			}
+		case <-ping.C:
+			go func() {
+				pctx, cancel := context.WithTimeout(ctx, pingTimeout)
+				defer cancel()
+				if err := conn.Ping(pctx); err != nil && ctx.Err() == nil {
+					select {
+					case pingErr <- err:
+					default:
+					}
+				}
+			}()
+		case err := <-pingErr:
+			// A dead connection is a routine disconnect, like a reset during a
+			// read: return nil so the supervisor redials without filing an
+			// error, which would hold /api/ready at 503 for as long as the
+			// failed run had lasted.
+			log.Printf("alpaca stream: ping unanswered, redialing: %v", err)
+			return nil
 		case r := <-reads:
 			if r.err != nil {
 				if isExpectedDisconnect(r.err) {

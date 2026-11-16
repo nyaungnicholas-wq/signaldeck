@@ -231,6 +231,11 @@ const mgrSubmissions = `{
 
 func new13FServer(t *testing.T) *edgar.FilingsClient {
 	t.Helper()
+	return new13FServerWith(t, edgarFixture(t, "13f_infotable.xml"))
+}
+
+func new13FServerWith(t *testing.T, infotable []byte) *edgar.FilingsClient {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/submissions/CIK0001067983"):
@@ -238,7 +243,7 @@ func new13FServer(t *testing.T) *edgar.FilingsClient {
 		case strings.HasSuffix(r.URL.Path, "/000106798326000012/index.json"):
 			_, _ = w.Write(edgarFixture(t, "13f_index.json"))
 		case strings.HasSuffix(r.URL.Path, "form13fInfoTable.xml"):
-			_, _ = w.Write(edgarFixture(t, "13f_infotable.xml"))
+			_, _ = w.Write(infotable)
 		default:
 			w.WriteHeader(404)
 		}
@@ -590,5 +595,32 @@ func TestFilingsPoller_SkipsFilingsPastRetention(t *testing.T) {
 	filings, err := st.Filings(ctx, aapl.ID, "", 10)
 	if err != nil || len(filings) != 0 {
 		t.Fatalf("stale filings ingested: %+v err=%v", filings, err)
+	}
+}
+
+// Two information-table lines with one CUSIP (e.g. one per sub-manager) must be
+// summed; the store keys on (cik, period, cusip), so before the fix the last
+// line overwrote the first (audit 11-10).
+func TestThirteenFPoller_SumsDuplicateCUSIP(t *testing.T) {
+	line := func(shares, value string) string {
+		return `<infoTable><nameOfIssuer>APPLE INC</nameOfIssuer><titleOfClass>COM</titleOfClass>` +
+			`<cusip>037833100</cusip><value>` + value + `</value><shrsOrPrnAmt><sshPrnamt>` + shares +
+			`</sshPrnamt><sshPrnamtType>SH</sshPrnamtType></shrsOrPrnAmt></infoTable>`
+	}
+	xml := `<?xml version="1.0" encoding="UTF-8"?><informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">` +
+		line("200", "2000") + line("100", "1000") + `</informationTable>`
+	st := openS8Store(t)
+	ctx := context.Background()
+	w := &ThirteenFPoller{St: st, Client: new13FServerWith(t, []byte(xml)),
+		Managers: []edgar.Manager{{CIK: 1067983, Name: "Berkshire Hathaway"}}}
+	if detail, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v (%s)", err, detail)
+	}
+	rows, err := st.InstHoldingsByManager(ctx, "1067983", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("holdings = %+v err=%v", rows, err)
+	}
+	if rows[0].Shares != 300 || rows[0].Value != 3000 {
+		t.Fatalf("duplicate CUSIP lines not summed: %+v", rows[0])
 	}
 }

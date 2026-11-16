@@ -84,10 +84,19 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	// high/low/volume — and INSERT OR REPLACE would overwrite the previously
 	// correct 1h bar with corrupt aggregates. A boundary-aligned `from` means
 	// every historical bucket is fully covered; only the current in-progress
-	// hour is partial, which is correct (it is re-rolled every pass).
+	// hour is partial, which is correct (the last two hours are re-rolled every
+	// pass; see below).
 	from := (now.Add(-72*time.Hour).Unix() / 3600) * 3600
+	// Only the current and previous hour are re-rolled over what is stored.
+	// Older buckets are filled only where missing: the universe poller writes
+	// Alpaca's own 1h bars for the last 10 days, and re-rolling all 72h every
+	// pass overwrote them with minute aggregates (audit 11-10).
+	recent := (now.Unix()/3600 - 1) * 3600
 	for _, s := range syms {
-		if err := d.St.Rollup(ctx, s.ID, md.TF1m, md.TF1h, 3600, from, now.Unix()); err != nil {
+		if err := d.St.RollupMissing(ctx, s.ID, md.TF1m, md.TF1h, 3600, from, recent); err != nil {
+			return "", fmt.Errorf("rollup %s: %w", s.Symbol, err)
+		}
+		if err := d.St.Rollup(ctx, s.ID, md.TF1m, md.TF1h, 3600, recent, now.Unix()); err != nil {
 			return "", fmt.Errorf("rollup %s: %w", s.Symbol, err)
 		}
 	}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,12 +15,14 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cboe"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/httpretry"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/hyperliquid"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/stocktwits"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 func openDataExpStore(t *testing.T) *store.Store {
@@ -508,5 +511,23 @@ func TestTVQuotesPollerMarketHoursAndPrune(t *testing.T) {
 	}
 	if q, ok, _ := st.LatestTVQuote(ctx, btc.ID); !ok || q.Ts != night.Unix() {
 		t.Errorf("fresh crypto quote missing after prune: %+v ok=%v", q, ok)
+	}
+}
+
+// A CFTC outage files the run as degraded, not ok: an ok status hid a 13-day
+// COT outage (audit 11-10).
+func TestCOTPollerFetchErrorIsDegraded(t *testing.T) {
+	old := httpretry.Wait
+	httpretry.Wait = time.Millisecond
+	t.Cleanup(func() { httpretry.Wait = old })
+	st := openDataExpStore(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	w := &COTPoller{St: st, Client: &cftc.Client{BaseURL: srv.URL}, Now: func() time.Time { return now }}
+	if _, err := w.Run(context.Background()); !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("Run err = %v; want ErrDegraded", err)
 	}
 }
