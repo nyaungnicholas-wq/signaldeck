@@ -34,8 +34,8 @@ function fmtCount(v: number): string {
 
 /** Display config per metric: label + formatter. */
 const METRICS: { key: string; label: string; fmt: (v: number) => string }[] = [
-  { key: "Revenues", label: "REVENUE (period)", fmt: fmtUSDish },
-  { key: "EPS", label: "EPS (diluted)", fmt: (v) => `$${v.toFixed(2)}` },
+  { key: "Revenues", label: "REVENUE (trailing 12 mo)", fmt: fmtUSDish },
+  { key: "EPS", label: "EPS (diluted, trailing 12 mo)", fmt: (v) => `$${v.toFixed(2)}` },
   { key: "SharesOutstanding", label: "SHARES OUT", fmt: fmtCount },
   { key: "EntityPublicFloat", label: "PUBLIC FLOAT", fmt: fmtUSDish },
 ];

@@ -635,6 +635,10 @@ func migrate(w *sql.DB) error {
 	if err := migrateRegimeOutcomesToSettleDay(w); err != nil {
 		return err
 	}
+	// Form 4/A: insider_trades.amends_day + superseded_by (amend.go).
+	if err := migrateAmendments(w); err != nil {
+		return err
+	}
 	// Public accounts: users.email / email_verified and auth_tokens (accounts.go).
 	return migrateAccounts(w)
 }

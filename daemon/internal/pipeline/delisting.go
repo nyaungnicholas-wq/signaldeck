@@ -72,6 +72,9 @@ const (
 	// sessionsPerCalendarDay converts trading sessions to calendar days (5
 	// trading days per 7 calendar days), plus slack for holidays.
 	calendarDaysFor25Sessions = 25*7/5 + 7
+	// maxResumeGapDays bounds a halt: a symbol silent longer than this that
+	// prints again keeps its marker, because a reissued ticker looks the same.
+	maxResumeGapDays = 120
 )
 
 // DelistingDetector marks stocks that have stopped trading, so a point-in-time
@@ -110,9 +113,14 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 	// fault inverts the question: importing 1,869 delisted symbols dropped
 	// liveness from 98% to 36% and froze the worker on a fleet that was fine.
 	// They stay in rows — the clear-on-resume path below still needs them.
+	//
+	// Only ACTIVE symbols testify, and only active symbols are marked. An
+	// inactive symbol is one we stopped fetching, so its silence is about our
+	// subscription, not the market: EQR, a live REIT, was stamped delisted that
+	// way (audit 11-10).
 	live, judged := 0, 0
 	for _, r := range rows {
-		if r.DelistedAt != 0 {
+		if r.DelistedAt != 0 || !r.Active {
 			continue
 		}
 		judged++
@@ -137,7 +145,7 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 			frac*100, fleetLiveFraction*100), nil
 	}
 
-	var marked, cleared int
+	var marked, cleared, held int
 	for _, r := range rows {
 		switch {
 		case r.LastTs == 0:
@@ -146,7 +154,7 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 			// failed its first fetch. Refuse to guess.
 			continue
 
-		case r.LastTs < cutoff && r.DelistedAt == 0:
+		case r.LastTs < cutoff && r.DelistedAt == 0 && r.Active:
 			// Stopped printing while the fleet kept printing. Date the fact at
 			// the last bar, not today.
 			if err := w.St.MarkDelisted(ctx, r.SymbolID, r.LastTs); err != nil {
@@ -156,7 +164,29 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 
 		case r.LastTs >= cutoff && r.DelistedAt != 0:
 			// It came back. It was halted or our fetch was failing; either way
-			// the marker was wrong and must not persist.
+			// the marker was wrong and must not persist. Unless the silence was
+			// long: exchanges reissue a dead ticker to a new company, and
+			// clearing then would splice two issuers into one history. A long
+			// gap is recorded for a person to look at instead.
+			first, ferr := w.St.FirstDailyBarAfter(ctx, r.SymbolID, r.DelistedAt)
+			if ferr != nil {
+				return "", ferr
+			}
+			if first-r.DelistedAt > maxResumeGapDays*86400 {
+				// One dq event per symbol and stamp, not one a day forever.
+				key := fmt.Sprintf("delisted_resumed_dq:%d:%d", r.SymbolID, r.DelistedAt)
+				if v, _ := w.St.GetMeta(ctx, key); v == "" {
+					id := r.SymbolID
+					_ = w.St.InsertDQ(ctx, md.DQEvent{
+						SymbolID: &id, Ts: now.Unix(), Kind: "delisted_symbol_resumed",
+						Detail: fmt.Sprintf("%s printed again %d days after its last bar; possibly a reused ticker, marker kept",
+							r.Symbol, (first-r.DelistedAt)/86400),
+					})
+					_ = w.St.SetMeta(ctx, key, "1")
+				}
+				held++
+				continue
+			}
 			if err := w.St.ClearDelisted(ctx, r.SymbolID); err != nil {
 				return "", err
 			}
@@ -164,6 +194,6 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("fleet %.0f%% live (%d unmarked); marked %d delisted, cleared %d resumed (of %d stocks)",
-		frac*100, judged, marked, cleared, len(rows)), nil
+	return fmt.Sprintf("fleet %.0f%% live (%d active unmarked); marked %d delisted, cleared %d resumed, held %d long-gap (of %d stocks)",
+		frac*100, judged, marked, cleared, held, len(rows)), nil
 }

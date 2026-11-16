@@ -33,6 +33,29 @@ export function fmtScore(v: number): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 }
 
+/** A unix timestamp as New York wall-clock time, labelled "ET". Pages mixed
+ * New York time with the browser's own zone and with raw ISO strings (audit
+ * 2026-11-10); every market time is shown on this one clock. */
+export function fmtET(ts: number): string {
+  if (!ts || !isFinite(ts)) return "—";
+  return (
+    new Date(ts * 1000).toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+    }) + " ET"
+  );
+}
+
+/** An ISO-8601 instant in New York time. A string with no zone (the grader
+ * writes graded_at as the grading machine's local time) is shown as written:
+ * converting it would read it in the VIEWER's zone and print a wrong ET time. */
+export function fmtETIso(iso: string | null | undefined): string {
+  if (!iso) return "";
+  if (!/([zZ]|[+-]\d\d:?\d\d)$/.test(iso.trim())) return iso.replace("T", " ");
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? fmtET(ms / 1000) : iso;
+}
+
 export function fmtTs(ts: number): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleString("en-US", {

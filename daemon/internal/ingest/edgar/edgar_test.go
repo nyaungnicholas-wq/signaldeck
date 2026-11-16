@@ -2,6 +2,7 @@ package edgar
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -42,16 +43,20 @@ const aaplFactsJSON = `{
       "RevenueFromContractWithCustomerExcludingAssessedTax": {
         "units": {
           "USD": [
-            {"end":"2025-09-30","val":383000000000,"form":"10-K","filed":"2025-11-01","fp":"FY"},
-            {"end":"2026-03-31","val":90000000000,"form":"10-Q","filed":"2026-05-02","fp":"Q2"}
+            {"start":"2024-10-01","end":"2025-09-30","val":383000000000,"form":"10-K","filed":"2025-11-01","fp":"FY"},
+            {"start":"2024-10-01","end":"2025-03-31","val":200000000000,"form":"10-Q","filed":"2025-05-02","fp":"Q2"},
+            {"start":"2025-10-01","end":"2026-03-31","val":210000000000,"form":"10-Q","filed":"2026-05-02","fp":"Q2"},
+            {"start":"2026-01-01","end":"2026-03-31","val":90000000000,"form":"10-Q","filed":"2026-05-02","fp":"Q2"}
           ]
         }
       },
       "EarningsPerShareDiluted": {
         "units": {
           "USD/shares": [
-            {"end":"2025-09-30","val":6.13,"form":"10-K","filed":"2025-11-01"},
-            {"end":"2026-03-31","val":1.53,"form":"10-Q","filed":"2026-05-02"}
+            {"start":"2024-10-01","end":"2025-09-30","val":6.13,"form":"10-K","filed":"2025-11-01"},
+            {"start":"2024-10-01","end":"2025-03-31","val":3.00,"form":"10-Q","filed":"2025-05-02"},
+            {"start":"2025-10-01","end":"2026-03-31","val":3.20,"form":"10-Q","filed":"2026-05-02"},
+            {"start":"2026-01-01","end":"2026-03-31","val":1.53,"form":"10-Q","filed":"2026-05-02"}
           ]
         }
       }
@@ -138,11 +143,16 @@ func TestCompanyFacts_ExtractsLatest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("facts: %v", err)
 	}
-	if f.Revenues == nil || f.Revenues.Value != 90000000000 { // latest = Q2 2026-03-31
-		t.Fatalf("revenue = %+v, want latest 90e9", f.Revenues)
+	// Trailing twelve months at 2026-03-31 = FY2025 + 6M FY2026 - 6M FY2025.
+	// The old code returned the 3-month 90e9 (or the 6-month YTD) as "revenue".
+	if f.Revenues == nil || f.Revenues.Value != 393000000000 {
+		t.Fatalf("revenue = %+v, want TTM 393e9", f.Revenues)
 	}
-	if f.EPS == nil || f.EPS.Value != 1.53 {
-		t.Fatalf("eps = %+v, want latest 1.53", f.EPS)
+	if f.EPS == nil || math.Abs(f.EPS.Value-6.33) > 1e-9 {
+		t.Fatalf("eps = %+v, want TTM 6.33", f.EPS)
+	}
+	if len(f.RevenuesTTM) != 2 {
+		t.Fatalf("revenue series = %+v, want FY2025 + TTM 2026-03-31", f.RevenuesTTM)
 	}
 	if f.SharesOutstanding == nil || f.SharesOutstanding.Value != 14900000000 {
 		t.Fatalf("shares = %+v, want latest 14.9e9", f.SharesOutstanding)
@@ -176,9 +186,10 @@ func TestIngest_PersistsRowsAndSpacesRequests(t *testing.T) {
 	if missing != 0 {
 		t.Fatalf("missing = %d, want 0", missing)
 	}
-	// Each symbol yields 5 rows: Revenues, EPS, SharesOutstanding, CIK, LatestFilingDate.
-	if written != 10 {
-		t.Fatalf("written = %d, want 10", written)
+	// Each symbol yields 7 rows: two TTM points each for Revenues and EPS,
+	// plus SharesOutstanding, CIK, LatestFilingDate.
+	if written != 14 {
+		t.Fatalf("written = %d, want 14", written)
 	}
 	// Latest fundamentals for AAPL must be readable.
 	rows, err := st.LatestFundamentals(context.Background(), aapl.ID)
@@ -189,7 +200,7 @@ func TestIngest_PersistsRowsAndSpacesRequests(t *testing.T) {
 	for _, r := range rows {
 		got[r.Metric] = r.Value
 	}
-	if got["Revenues"] != 90000000000 || got["EPS"] != 1.53 {
+	if got["Revenues"] != 393000000000 || math.Abs(got["EPS"]-6.33) > 1e-9 {
 		t.Fatalf("stored fundamentals wrong: %+v", got)
 	}
 	_ = msft

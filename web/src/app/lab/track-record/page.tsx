@@ -660,7 +660,7 @@ export default function TrackRecordPage() {
               <div className="p-4 text-[0.75rem]">
                 {current.paper?.available ? (
                   <div className="grid grid-cols-2 gap-3">
-                    <Mini label="total return" value={fmtPct((current.paper.totalReturn ?? 0) * 100)} good={(current.paper.totalReturn ?? 0) >= 0} />
+                    <Mini label="total return" value={current.paper.totalReturn == null ? "—" : fmtPct(current.paper.totalReturn * 100)} good={current.paper.totalReturn == null ? undefined : current.paper.totalReturn >= 0} />
                     <Mini label="max drawdown" value={pct(current.paper.maxDrawdown)} good={false} />
                     <Mini
                       label="turnover"

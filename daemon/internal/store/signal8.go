@@ -37,6 +37,8 @@ type InsiderTradeRow struct {
 	Value     float64 `json:"value"`
 	TxTs      int64   `json:"txTs"`
 	FiledTs   int64   `json:"filedTs"`
+	// AmendsDay is set on a Form 4/A: the original's filing date (YYYY-MM-DD).
+	AmendsDay string `json:"amendsDay,omitempty"`
 }
 
 // InstHoldingRow is one 13F information-table position.
@@ -160,7 +162,7 @@ func (s *Store) UnparsedForm4s(ctx context.Context, limit int) ([]FilingRow, err
 		SELECT f.id, f.symbol_id, f.form, f.filed_ts, f.title, f.url, f.label
 		FROM filings f
 		LEFT JOIN insider_trades t ON t.accession = f.id
-		WHERE f.form = '4' AND t.accession IS NULL
+		WHERE f.form IN ('4', '4/A') AND t.accession IS NULL
 		ORDER BY f.filed_ts DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -184,9 +186,9 @@ func (s *Store) UnparsedForm4s(ctx context.Context, limit int) ([]FilingRow, err
 func (s *Store) InsertInsiderTrade(ctx context.Context, t InsiderTradeRow) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO insider_trades
-		  (accession, symbol_id, insider, title, code, shares, price, value, tx_ts, filed_ts)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		t.Accession, t.SymbolID, t.Insider, t.Title, t.Code, t.Shares, t.Price, t.Value, t.TxTs, t.FiledTs)
+		  (accession, symbol_id, insider, title, code, shares, price, value, tx_ts, filed_ts, amends_day)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		t.Accession, t.SymbolID, t.Insider, t.Title, t.Code, t.Shares, t.Price, t.Value, t.TxTs, t.FiledTs, t.AmendsDay)
 	return err
 }
 
@@ -202,7 +204,7 @@ func (s *Store) InsiderTrades(ctx context.Context, symbolID int64, code string, 
 	q := `SELECT t.accession, t.symbol_id, y.symbol, t.insider, t.title, t.code,
 	             t.shares, t.price, t.value, t.tx_ts, t.filed_ts
 	      FROM insider_trades t JOIN symbols y ON y.id = t.symbol_id
-	      WHERE t.code != ''`
+	      WHERE t.code != '' AND t.superseded_by = ''`
 	args := []any{}
 	if symbolID != 0 {
 		q += ` AND t.symbol_id = ?`

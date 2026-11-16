@@ -290,6 +290,16 @@ func (s *Store) StockLastBars(ctx context.Context) ([]StockLastBar, error) {
 	return out, rows.Err()
 }
 
+// FirstDailyBarAfter returns the first tf='1d' bar timestamp strictly after
+// ts for a symbol (0 when there is none).
+func (s *Store) FirstDailyBarAfter(ctx context.Context, symbolID, ts int64) (int64, error) {
+	var first int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MIN(ts), 0) FROM bars WHERE symbol_id=? AND tf='1d' AND ts>?`,
+		symbolID, ts).Scan(&first)
+	return first, err
+}
+
 // ClearDelisted removes a delisting marker. A symbol that prints a bar again was
 // never delisted — it was halted, or our fetch was failing — and a permanent
 // marker would silently shrink every point-in-time universe built afterwards.

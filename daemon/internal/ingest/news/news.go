@@ -77,19 +77,51 @@ type restArticle struct {
 }
 
 // newsPage is one page of the /news response; next_page_token is null on the
-// final page (we only fetch the first page).
+// final page.
 type newsPage struct {
 	News          []restArticle `json:"news"`
 	NextPageToken *string       `json:"next_page_token"`
 }
 
-// Fetch retrieves the latest headlines for one symbol and maps them to
+// maxPages bounds one symbol's catch-up: 5 pages of fetchLimit headlines.
+const maxPages = 5
+
+// Fetch retrieves the latest page of headlines for one symbol and maps them to
 // store.NewsItem values. SymbolID and Sentiment are left zero/empty for the
 // caller to set (Ingest fills SymbolID; the LLM worker fills sentiment).
 func (c *Client) Fetch(ctx context.Context, symbol string) ([]store.NewsItem, error) {
+	return c.FetchSince(ctx, symbol, 0)
+}
+
+// FetchSince pages back through a symbol's headlines until it reaches one at
+// or before since (unix seconds), the feed ends, or maxPages is hit. One page
+// of 20 per poll silently dropped the rest of a busy day (audit 11-10).
+// since == 0 means no stored history: the first page only.
+func (c *Client) FetchSince(ctx context.Context, symbol string, since int64) ([]store.NewsItem, error) {
+	var out []store.NewsItem
+	token := ""
+	for page := 0; page < maxPages; page++ {
+		items, next, err := c.fetchPage(ctx, symbol, token)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if since == 0 || next == "" || len(items) == 0 || items[len(items)-1].Ts <= since {
+			break
+		}
+		token = next
+	}
+	return out, nil
+}
+
+// fetchPage reads one page of the /news response (newest first).
+func (c *Client) fetchPage(ctx context.Context, symbol, token string) ([]store.NewsItem, string, error) {
 	q := url.Values{}
 	q.Set("symbols", symbol)
 	q.Set("limit", fmt.Sprint(fetchLimit))
+	if token != "" {
+		q.Set("page_token", token)
+	}
 	u := fmt.Sprintf("%s/news?%s", c.base(), q.Encode())
 
 	resp, err := httpretry.Do(ctx, c.httpClient(), func() (*http.Request, error) {
@@ -100,24 +132,24 @@ func (c *Client) Fetch(ctx context.Context, symbol string) ([]store.NewsItem, er
 		return req, err
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("news: fetch %s: status %d: %s", symbol, resp.StatusCode, body)
+		return nil, "", fmt.Errorf("news: fetch %s: status %d: %s", symbol, resp.StatusCode, body)
 	}
 
 	var page newsPage
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, fmt.Errorf("news: decode %s: %w", symbol, err)
+		return nil, "", fmt.Errorf("news: decode %s: %w", symbol, err)
 	}
 
 	out := make([]store.NewsItem, 0, len(page.News))
 	for _, a := range page.News {
 		t, err := time.Parse(time.RFC3339, a.CreatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("news: bad created_at %q for %s: %w", a.CreatedAt, symbol, err)
+			return nil, "", fmt.Errorf("news: bad created_at %q for %s: %w", a.CreatedAt, symbol, err)
 		}
 		out = append(out, store.NewsItem{
 			ID:       fmt.Sprint(a.ID),
@@ -127,7 +159,11 @@ func (c *Client) Fetch(ctx context.Context, symbol string) ([]store.NewsItem, er
 			Source:   a.Source,
 		})
 	}
-	return out, nil
+	next := ""
+	if page.NextPageToken != nil {
+		next = *page.NextPageToken
+	}
+	return out, next, nil
 }
 
 // Ingest fetches the latest headlines for symbol, stamps symbolID on each, and
@@ -136,7 +172,11 @@ func (c *Client) Fetch(ctx context.Context, symbol string) ([]store.NewsItem, er
 // the number of headlines fetched-and-seen (not only newly inserted), which is
 // the coverage figure the caller records for the run.
 func (c *Client) Ingest(ctx context.Context, st *store.Store, symbolID int64, symbol string) (int, error) {
-	items, err := c.Fetch(ctx, symbol)
+	var since int64
+	if latest, lerr := st.SymbolNews(ctx, symbolID, 1); lerr == nil && len(latest) > 0 {
+		since = latest[0].Ts
+	}
+	items, err := c.FetchSince(ctx, symbol, since)
 	if err != nil {
 		return 0, err
 	}

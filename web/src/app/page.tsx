@@ -14,6 +14,7 @@ import Withheld from "@/components/Withheld";
 import { CRYPTO_PAUSED_LABEL, isCryptoPredictor } from "@/lib/cryptoPause";
 import { parseWithheld } from "@/lib/withheld";
 import { getPriceSource, IEX_SOURCE } from "@/lib/instance";
+import { fmtETIso } from "@/lib/format";
 import PublicLanding from "@/components/PublicLanding";
 import "@/components/landing/landing.css";
 
@@ -196,6 +197,19 @@ const CONDEMNED = new Set(["FAILED", "RETIRED"]);
 
 const statusTone = (s: string) =>
   CONDEMNED.has(s) ? "var(--bad)" : s === "OK" ? "var(--ok)" : "var(--warn)";
+
+// The skill sentence is computed from the rows above it. It was fixed text
+// ("on this record nothing has"), true on the day it was written and on no
+// evidence after (audit 2026-11-10).
+function skillLine(rows: Row[]): string {
+  const above = rows.filter((r) => (r.skill ?? 0) > 0);
+  const counted = above.filter((r) => r.publication_status === "OK");
+  if (counted.length > 0)
+    return `${counted.length} of ${rows.length} rows beat their baseline with enough evidence to count.`;
+  if (above.length > 0)
+    return `${above.length} of ${rows.length} rows score above their baseline, but none yet has the evidence the status column requires.`;
+  return "On this record nothing has.";
+}
 
 const REFUSALS: ReadonlyArray<readonly [string, string]> = [
   [
@@ -540,10 +554,11 @@ function LiveRecord({ live }: { live: Live }) {
       )}
 
       <p className="m-0 max-w-[70ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        &ldquo;Baseline&rdquo; is what you would score by always calling the majority direction.
-        Beating it is the only thing that counts as skill, and on this record nothing has. Status
-        is the daemon&rsquo;s publication verdict for the grade of{" "}
-        <span className="tnum">{live.gradedAt || "unknown"}</span>: what the record supports, not
+        &ldquo;Baseline&rdquo; is each row&rsquo;s null: always calling the majority direction for a
+        directional predictor, and naive persistence (tomorrow&rsquo;s regime is today&rsquo;s) for a
+        structural one. Beating it is the only thing that counts as skill.{" "}
+        {skillLine(rows)} Status is the daemon&rsquo;s publication verdict for the grade of{" "}
+        <span className="tnum">{fmtETIso(live.gradedAt) || "unknown"}</span>: what the record supports, not
         a stored sentence. Full methodology and every row:{" "}
         <Link href="/accuracy" style={{ color: "var(--accent)" }}>
           /accuracy

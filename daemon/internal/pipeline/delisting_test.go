@@ -467,7 +467,9 @@ func TestImportedDelistedNamesDoNotTripFleetGuard(t *testing.T) {
 			t.Fatalf("MarkDelisted %s: %v", sym, err)
 		}
 	}
-	if err := st.MarkDelisted(ctx, ids["RESUMED"], deadTs); err != nil {
+	// A halt-length silence (40 days): a long one is held as a possible
+	// reused ticker instead (TestDelistingHoldsLongGapAndSkipsInactive).
+	if err := st.MarkDelisted(ctx, ids["RESUMED"], now.AddDate(0, 0, -40).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	// 61 of 162 rows now print recently — 38%, which tripped the old

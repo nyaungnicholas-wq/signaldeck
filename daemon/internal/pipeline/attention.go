@@ -163,6 +163,13 @@ func (w *StocktwitsFetcher) Run(ctx context.Context) (string, error) {
 
 // ── wiki-attention ────────────────────────────────────────────────────────
 
+const (
+	// wikiCursorKey persists where the next wiki-attention pass starts.
+	wikiCursorKey = "wiki_attention_cursor"
+	// wikiRetryAfter is how long a failed article resolution stays cached.
+	wikiRetryAfter = 30 * 86400
+)
+
 // WikiAttention is the wiki-attention worker.
 type WikiAttention struct {
 	St     *store.Store
@@ -203,8 +210,15 @@ func (w *WikiAttention) Run(ctx context.Context) (string, error) {
 	if max <= 0 {
 		max = 30
 	}
-	if len(scope) > max {
-		scope = scope[:max]
+	// Rotate through the whole scope with a persisted cursor; only symbols
+	// that cost a request count against max. Slicing scope[:max] visited the
+	// same 30 names forever, 21 of them cached failures (audit 11-10).
+	start := 0
+	if v, _ := w.St.GetMeta(ctx, wikiCursorKey); v != "" {
+		fmt.Sscanf(v, "%d", &start) //nolint:errcheck
+	}
+	if start < 0 || start >= len(scope) {
+		start = 0
 	}
 	fetchDays := w.FetchDays
 	if fetchDays <= 0 {
@@ -226,7 +240,9 @@ func (w *WikiAttention) Run(ctx context.Context) (string, error) {
 	}
 
 	fetched, daysStored, resolvedNow, unresolved, unnamed, failed := 0, 0, 0, 0, 0, 0
-	for _, s := range scope {
+	spent, visited := 0, 0
+	for ; visited < len(scope) && spent < max; visited++ {
+		s := scope[(start+visited)%len(scope)]
 		wa, found, gerr := w.St.GetWikiArticle(ctx, s.ID)
 		if gerr != nil {
 			return "", gerr
@@ -235,8 +251,10 @@ func (w *WikiAttention) Run(ctx context.Context) (string, error) {
 		switch {
 		case found && wa.OK:
 			article = wa.Article
-		case found && !wa.OK:
-			// Cached resolution failure — never re-hammered.
+			spent++
+		case found && !wa.OK && now.Unix()-wa.ResolvedAt < wikiRetryAfter:
+			// Cached resolution failure: not re-hammered, but retried once it is
+			// wikiRetryAfter old (the candidate list improves; titles get created).
 			unresolved++
 			continue
 		default:
@@ -247,6 +265,7 @@ func (w *WikiAttention) Run(ctx context.Context) (string, error) {
 				unnamed++
 				continue
 			}
+			spent++
 			a, views, rerr := w.resolve(ctx, name, from, to)
 			if rerr != nil {
 				failed++
@@ -302,8 +321,9 @@ func (w *WikiAttention) Run(ctx context.Context) (string, error) {
 		fetched++
 		daysStored += len(views)
 	}
-	detail := fmt.Sprintf("fetched views for %d symbol(s) (%d day rows) of %d in scope",
-		fetched, daysStored, len(scope))
+	_ = w.St.SetMeta(ctx, wikiCursorKey, fmt.Sprint((start+visited)%len(scope)))
+	detail := fmt.Sprintf("fetched views for %d symbol(s) (%d day rows); visited %d of %d in scope",
+		fetched, daysStored, visited, len(scope))
 	if resolvedNow > 0 {
 		detail += fmt.Sprintf("; %d newly resolved", resolvedNow)
 	}

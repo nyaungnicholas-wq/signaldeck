@@ -349,11 +349,15 @@ type Form4 struct {
 	Insider      string
 	Title        string // officer title / "Director" / "10% owner"
 	Transactions []Form4Tx
+	// AmendsDay is the original filing's date (YYYY-MM-DD) on a Form 4/A,
+	// from <dateOfOriginalSubmission>; "" on an original Form 4.
+	AmendsDay string
 }
 
 // form4XML mirrors the ownershipDocument XML (fields we consume).
 type form4XML struct {
-	Issuer struct {
+	OriginalSubmission string `xml:"dateOfOriginalSubmission"`
+	Issuer             struct {
 		CIK string `xml:"issuerCik"`
 	} `xml:"issuer"`
 	Owners []struct {
@@ -403,6 +407,7 @@ func ParseForm4(data []byte) (Form4, error) {
 		return Form4{}, fmt.Errorf("edgar: parse form 4: %w", err)
 	}
 	var out Form4
+	out.AmendsDay = strings.TrimSpace(doc.OriginalSubmission)
 	if n, err := strconv.ParseInt(strings.TrimLeft(strings.TrimSpace(doc.Issuer.CIK), "0"), 10, 64); err == nil && n > 0 {
 		out.IssuerCIK = n
 	}

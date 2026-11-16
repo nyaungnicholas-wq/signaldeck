@@ -28,9 +28,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 )
@@ -206,7 +208,31 @@ func ArticleCandidates(name string) []string {
 		return nil
 	}
 	article := strings.ReplaceAll(base, " ", "_")
-	return []string{article, article + "_(company)"}
+	out := []string{article, article + "_(company)"}
+	// SEC's directory writes names in capitals ("APPLE INC"), and article
+	// titles are case-sensitive past the first letter, so "APPLE" never
+	// matches "Apple". Try the title-cased name, with and without its suffix.
+	if name == strings.ToUpper(name) && name != strings.ToLower(name) {
+		tc := strings.ReplaceAll(titleCase(base), " ", "_")
+		full := strings.ReplaceAll(titleCase(strings.TrimRight(strings.Join(strings.Fields(name), " "), " ,")), " ", "_")
+		for _, c := range []string{tc, tc + "_(company)", full} {
+			if c != article && !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// titleCase capitalises the first letter of each word and lowers the rest.
+func titleCase(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		r := []rune(strings.ToLower(w))
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
 }
 
 // StripCorpSuffixes removes trailing corporate designators ("Inc.", "Corp",

@@ -1,7 +1,9 @@
 "use client";
 
-// FRESHNESS BADGE (freshness wave): tiny "updated Xs ago" chip driven by the
-// app-wide freshness bus (lib/freshness). Turns amber past 90s without a
+// FRESHNESS BADGE (freshness wave): tiny "fetched Xs ago" chip driven by the
+// app-wide freshness bus (lib/freshness). It measures the last SUCCESSFUL
+// FETCH, not the age of the data: "updated" read as data age, which it never
+// was (audit 2026-11-10). Data age is stated where the data is shown. Turns amber past 90s without a
 // successful fetch — or while offline — and says "stale" in plain words.
 // Renders nothing before the first success (no fabricated age).
 
@@ -43,7 +45,7 @@ export default function FreshnessBadge({ className = "" }: { className?: string 
         />
       </svg>
       <span className="tnum">
-        updated {ageLabel(staleSeconds)} ago
+        fetched {ageLabel(staleSeconds)} ago
         {stale && " — stale"}
       </span>
       {/* The visible chip re-renders every second. Making THAT a live region

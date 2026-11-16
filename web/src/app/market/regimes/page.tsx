@@ -9,7 +9,7 @@ import {
   type StructRegimeForecast,
   type StructRegimesWithEarnings,
 } from "@/lib/api";
-import { ago } from "@/lib/format";
+import { ago, fmtET } from "@/lib/format";
 import { visibleInterval } from "@/lib/visibleInterval";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -160,7 +160,7 @@ function FragmentRow({
               <span>
                 as of{" "}
                 <span className="tnum text-white/80">
-                  {new Date(f.ts * 1000).toLocaleString()}
+                  {fmtET(f.ts)}
                 </span>
               </span>
               <Link className="text-amber-300 hover:underline" href={reportHref}>

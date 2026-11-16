@@ -194,7 +194,7 @@ func (s *Store) InsiderNetActivity(ctx context.Context, symbolID, sinceTs int64)
 		       COALESCE(SUM(CASE WHEN code='P' THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(CASE WHEN code='S' THEN 1 ELSE 0 END), 0)
 		FROM insider_trades
-		WHERE symbol_id=? AND tx_ts>=? AND code IN ('P','S')`, symbolID, sinceTs).
+		WHERE symbol_id=? AND tx_ts>=? AND code IN ('P','S') AND superseded_by=''`, symbolID, sinceTs).
 		Scan(&buys, &sells, &nBuys, &nSells)
 	return buys, sells, nBuys, nSells, err
 }

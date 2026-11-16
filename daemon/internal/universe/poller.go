@@ -36,6 +36,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -113,6 +114,36 @@ func (p *Poller) Interval() time.Duration {
 		return p.Ival
 	}
 	return DefaultInterval
+}
+
+// postCloseDelay is how long after a session close the guaranteed refresh runs.
+const postCloseDelay = 20 * time.Minute
+
+// NextFire implements workers.ScheduledWorker: the usual interval, but never
+// later than postCloseDelay after the next session close. The settled-bar rule
+// (marketdata.DailyBarSettled) treats a daily bar as final 22h after its
+// timestamp, 22:00 ET; that is only true if a poll refetched the bar after the
+// close. With a free-running 6h interval none did on 2026-11-12, so a bar last
+// written mid-session could be read as settled (audit 11-10).
+func (p *Poller) NextFire(last, now time.Time) time.Time {
+	if last.IsZero() {
+		return now // never run (or pruned): run now, as the periodic loop did at boot
+	}
+	next := last.Add(p.Interval())
+	day := marketcal.SessionDate(last)
+	for d := 0; d < 10; d++ {
+		c, ok := marketcal.SessionClose(day.AddDate(0, 0, d).Add(12 * time.Hour))
+		if !ok {
+			continue
+		}
+		if fire := c.Add(postCloseDelay); fire.After(last) {
+			if fire.Before(next) {
+				next = fire
+			}
+			break
+		}
+	}
+	return next
 }
 
 // Run refreshes daily bars for the entire registered daily universe. On the

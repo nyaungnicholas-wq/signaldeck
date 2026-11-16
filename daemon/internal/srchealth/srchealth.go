@@ -125,6 +125,26 @@ var registry = []spec{
 			"Kadoa's (the fallback from 7 Sep 2026; the Stock Watcher mirrors answer 403), whose terms " +
 			"(s.4, s.8) bar automated access and sharing its rows without written permission",
 		note: "STOCK Act congressional trade disclosures (congress-poller, retired)"},
+	// Core stores the audit found unwatched (11-10). Each query is an index
+	// lookup or a small table: source-audit must not add a long read hold.
+	{source: "bars_1d_hot", query: `SELECT MAX(ts) FROM bars WHERE tf='1d' AND symbol_id IN (SELECT id FROM symbols WHERE stream=1)`,
+		// A Friday bar read on a holiday Tuesday is ~4.5 days old.
+		budget: 5 * 24 * time.Hour, gated: false,
+		note: "hot-set daily bars (universe poller, one per session)"},
+	{source: "filings", query: `SELECT MAX(filed_ts) FROM filings`,
+		budget: 4 * 24 * time.Hour, gated: false,
+		note: "SEC EDGAR filings (filings poller, 2h; the fleet files every business day)"},
+	{source: "insider_trades", query: `SELECT MAX(filed_ts) FROM insider_trades`,
+		budget: 5 * 24 * time.Hour, gated: false,
+		note: "parsed Form 4 / 4/A insider trades (filings poller)"},
+	{source: "inst_holdings", query: `SELECT CAST(strftime('%s', MAX(period)) AS INTEGER) FROM inst_holdings`,
+		// Quarter-dated: a quarter's 13Fs are due 45 days after it ends, so the
+		// newest period is honestly up to ~92 + 45 days old.
+		budget: 150 * 24 * time.Hour, gated: false,
+		note: "13F institutional holdings (quarterly, 45-day filing lag)"},
+	{source: "fundamentals", query: `SELECT MAX(fetched_at) FROM fundamentals`,
+		budget: 3 * 24 * time.Hour, gated: false,
+		note: "SEC companyfacts fundamentals sweep (daily)"},
 	{source: "tv_signals", query: `SELECT MAX(ts) FROM tv_signals`,
 		budget: 6 * time.Hour, gated: true, webhook: true,
 		note: "TradingView inbound webhook alerts (only judged when a secret is set + market open — catches a silent tunnel failure)"},

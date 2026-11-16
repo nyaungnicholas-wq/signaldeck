@@ -178,7 +178,7 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			if maxF4 <= 0 {
 				maxF4 = 25
 			}
-			if isNew && f.Form == "4" && form4Fetched < maxF4 {
+			if isNew && (f.Form == "4" || f.Form == "4/A") && form4Fetched < maxF4 {
 				form4Fetched++
 				if perr := w.parseForm4(ctx, cik, s.ID, f); perr != nil {
 					id := s.ID
@@ -293,18 +293,44 @@ func (w *FilingsPoller) parseForm4(ctx context.Context, cik, symbolID int64, f e
 		symbolID = issuerID
 	}
 	code, shares, price, value, txTs, ok := edgar.AggregateForm4(parsed)
+	amends := parsed.AmendsDay
 	if !ok {
 		// Derivative-only Form 4 (options/RSUs, no non-derivative table):
 		// a legitimate, fully-parsed filing with nothing to show in the
-		// insider-trades feed. SUCCESS-EMPTY, not an error.
-		return w.insertForm4Sentinel(ctx, symbolID, f, parsed.Insider, parsed.Title)
+		// insider-trades feed. SUCCESS-EMPTY, not an error. A derivative-only
+		// 4/A amends only the derivative table (checked against EDGAR
+		// 2026-11-16: one such 4/A's original carried 7 open-market lines it
+		// did not repeat), so it must not replace its original.
+		code, shares, price, value, txTs, amends = "", 0, 0, 0, 0, ""
 	}
-	return w.St.InsertInsiderTrade(ctx, store.InsiderTradeRow{
+	if err := w.St.InsertInsiderTrade(ctx, store.InsiderTradeRow{
 		Accession: f.Accession, SymbolID: symbolID,
 		Insider: parsed.Insider, Title: parsed.Title,
 		Code: code, Shares: shares, Price: price, Value: value,
-		TxTs: txTs, FiledTs: f.FiledTs,
-	})
+		TxTs: txTs, FiledTs: f.FiledTs, AmendsDay: amends,
+	}); err != nil {
+		return err
+	}
+	return w.supersedeAmended(ctx, symbolID, f.Accession)
+}
+
+// supersedeAmended marks Form 4s restated by a stored 4/A, so a trade is not
+// counted twice (audit 11-10: 4/As were never parsed). It runs after every
+// insert for the symbol, so the order the original and its 4/A arrive in does
+// not matter. A 4/A that matches several same-day filings by one insider
+// changes nothing and is recorded once, when that 4/A is stored.
+func (w *FilingsPoller) supersedeAmended(ctx context.Context, symbolID int64, accession string) error {
+	_, ambiguous, err := w.St.SupersedeAmendedForm4s(ctx, symbolID)
+	for _, a := range ambiguous {
+		if a == accession {
+			id := symbolID
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				SymbolID: &id, Ts: w.now().Unix(), Kind: "form4a_ambiguous",
+				Detail: a + ": several same-day Form 4s by this insider; none superseded",
+			})
+		}
+	}
+	return err
 }
 
 // insertForm4Sentinel records the parsed-empty marker row: code=” shares=0
@@ -575,74 +601,113 @@ func (w *ThirteenFPoller) Run(ctx context.Context) (string, error) {
 			})
 			continue
 		}
-		// Latest 13F-HR (subs are newest-first).
-		var latest *edgar.SubFiling
+		// Report periods to (re)build: the newest one filed, plus any stored
+		// period never rebuilt from its full filing set (one-time re-ingest of
+		// quarters written before amendments and duplicate CUSIPs were handled).
+		// The newest PERIOD, not the newest filing: a late 13F-HR/A for an
+		// older quarter can be the most recent thing filed.
+		latest := ""
 		for j := range subs {
-			if strings.TrimSuffix(subs[j].Form, "/A") == "13F-HR" {
-				latest = &subs[j]
-				break
+			if strings.TrimSuffix(subs[j].Form, "/A") == "13F-HR" && subs[j].ReportDate > latest {
+				latest = subs[j].ReportDate
 			}
 		}
-		if latest == nil {
+		if latest == "" {
 			skipped++
 			continue
 		}
-		period := latest.ReportDate
-		if period == "" {
-			skipped++
-			continue
-		}
-		if has, herr := w.St.HasInstPeriod(ctx, fmt.Sprint(m.CIK), period); herr != nil {
-			return "", herr
-		} else if has {
-			skipped++ // this quarter already stored — steady state
-			continue
-		}
-		holdings, ferr := w.Client.Fetch13FHoldings(ctx, m.CIK, latest.Accession)
-		if ferr != nil {
-			_ = w.St.InsertDQ(ctx, md.DQEvent{
-				Ts: time.Now().Unix(), Kind: "13f_parse_error",
-				Detail: fmt.Sprintf("%s %s: %v", m.Name, latest.Accession, ferr),
-			})
-			continue
-		}
-		// Several lines can share a CUSIP (one per sub-manager or voting
-		// split). The store keys on (cik, period, cusip), so sum them here;
-		// upserting each line let the last one overwrite the rest (audit 11-10).
-		agg := map[string]*edgar.Holding13F{}
-		var order []string
-		for _, h := range holdings {
-			if h.PutCall != "" {
-				continue // an option line is not shares held
+		cik := fmt.Sprint(m.CIK)
+		periods := []string{latest}
+		if have, perr := w.St.InstPeriods(ctx, cik); perr != nil {
+			return "", perr
+		} else {
+			for _, p := range have {
+				if p != latest {
+					periods = append(periods, p)
+				}
 			}
-			if a, ok := agg[h.CUSIP]; ok {
-				a.Value += h.Value
-				a.Shares += h.Shares
+		}
+		for _, period := range periods {
+			n, nm, built, berr := w.buildPeriod(ctx, m, cik, period, subs, stocks)
+			if berr != nil {
+				return "", berr
+			}
+			if !built {
+				if period == latest {
+					skipped++ // this quarter already current — steady state
+				}
 				continue
 			}
-			hc := h
-			agg[h.CUSIP] = &hc
-			order = append(order, h.CUSIP)
-		}
-		for _, cusip := range order {
-			h := agg[cusip]
-			row := store.InstHoldingRow{
-				CIK: fmt.Sprint(m.CIK), Manager: m.Name, Period: period,
-				CUSIP: h.CUSIP, Name: h.Issuer, Value: h.Value, Shares: h.Shares,
-			}
-			if sid, ok := MatchSymbolByName(h.Issuer, stocks); ok {
-				row.SymbolID = &sid
-				matched++
-			}
-			if uerr := w.St.UpsertInstHolding(ctx, row); uerr != nil {
-				return "", uerr
-			}
-			stored++
+			stored += n
+			matched += nm
 		}
 	}
 	_ = w.St.SetMeta(ctx, thirteenFCursorKey, fmt.Sprint((start+perRun)%len(managers)))
 	return fmt.Sprintf("13F: %d positions stored (%d symbol-matched), %d manager(s) already current/absent",
 		stored, matched, skipped), nil
+}
+
+// thirteenFBuiltKey records the newest accession a manager's period was
+// rebuilt from; a new 13F-HR/A for the period changes it and forces a rebuild.
+func thirteenFBuiltKey(cik, period string) string { return "13f_built:" + cik + ":" + period }
+
+// buildPeriod rebuilds one manager's report period from every 13F-HR and
+// 13F-HR/A filed for it, oldest first: an original or RESTATEMENT replaces the
+// set, a NEW HOLDINGS amendment adds to it (edgar.Fold13F). Reading only the
+// newest filing stored a partial amendment as the whole quarter (audit 11-10).
+// built=false when the period is already current or no filing for it is in
+// the submissions feed (the stored rows are then left as they are). A fetch
+// error records a dq event and leaves the stored rows untouched.
+func (w *ThirteenFPoller) buildPeriod(ctx context.Context, m edgar.Manager, cik, period string,
+	subs []edgar.SubFiling, stocks []md.Symbol) (stored, matched int, built bool, err error) {
+	var filings []edgar.SubFiling // newest-first, as the feed lists them
+	for _, f := range subs {
+		if strings.TrimSuffix(f.Form, "/A") == "13F-HR" && f.ReportDate == period {
+			filings = append(filings, f)
+		}
+	}
+	if len(filings) == 0 {
+		return 0, 0, false, nil
+	}
+	key := thirteenFBuiltKey(cik, period)
+	if v, _ := w.St.GetMeta(ctx, key); v == filings[0].Accession {
+		return 0, 0, false, nil
+	}
+	parts := make([]edgar.Part13F, 0, len(filings))
+	for i := len(filings) - 1; i >= 0; i-- {
+		f := filings[i]
+		holdings, ferr := w.Client.Fetch13FHoldings(ctx, m.CIK, f.Accession)
+		p := edgar.Part13F{Amendment: strings.HasSuffix(f.Form, "/A"), Holdings: holdings}
+		if ferr == nil && p.Amendment {
+			p.Type, ferr = w.Client.Fetch13FAmendmentType(ctx, m.CIK, f.Accession, f.PrimaryDoc)
+		}
+		if ferr != nil {
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				Ts: time.Now().Unix(), Kind: "13f_parse_error",
+				Detail: fmt.Sprintf("%s %s: %v", m.Name, f.Accession, ferr),
+			})
+			return 0, 0, false, nil
+		}
+		parts = append(parts, p)
+	}
+	folded := edgar.Fold13F(parts)
+	rows := make([]store.InstHoldingRow, 0, len(folded))
+	for _, h := range folded {
+		row := store.InstHoldingRow{
+			CIK: cik, Manager: m.Name, Period: period,
+			CUSIP: h.CUSIP, Name: h.Issuer, Value: h.Value, Shares: h.Shares,
+		}
+		if sid, ok := MatchSymbolByName(h.Issuer, stocks); ok {
+			row.SymbolID = &sid
+			matched++
+		}
+		rows = append(rows, row)
+	}
+	if err := w.St.ReplaceInstPeriod(ctx, cik, period, rows); err != nil {
+		return 0, 0, false, err
+	}
+	_ = w.St.SetMeta(ctx, key, filings[0].Accession)
+	return len(rows), matched, true, nil
 }
 
 // MatchSymbolByName best-effort matches a 13F issuer name to a tracked stock.

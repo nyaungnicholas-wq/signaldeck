@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { summarizeRefusal } from "@/lib/refusal";
+import { fmtETIso } from "@/lib/format";
 
 // Re-exported for existing importers; the implementation moved to src/lib so
 // node --test can reach it without a JSX compiler.
@@ -45,7 +46,7 @@ export default function RefusalNotice(props: {
 			</p>
 			{(gradedAt || refusedSince) && (
 				<div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
-					{[refusedSince && `Refused since ${refusedSince}`, gradedAt && `Withheld grade computed at ${gradedAt}`]
+					{[refusedSince && `Refused since ${refusedSince}`, gradedAt && `Withheld grade computed at ${fmtETIso(gradedAt)}`]
 						.filter(Boolean)
 						.join(" · ")}
 				</div>

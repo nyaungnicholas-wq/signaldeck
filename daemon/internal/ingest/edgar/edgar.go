@@ -51,15 +51,15 @@ const (
 // The mutex + last serialize the min-interval limiter across goroutines (the
 // worker calls sequentially, but this keeps it correct if ever parallelized).
 type Client struct {
-	UA          string
-	TickersURL  string
-	FactsBase   string
+	UA         string
+	TickersURL string
+	FactsBase  string
 	// ExchangeURL overrides the company_tickers_exchange.json endpoint (the
 	// companies-directory map; see companies.go). Zero value = production.
 	ExchangeURL string
 	// BulkURL overrides the nightly bulk submissions.zip endpoint (the SIC
 	// bulk sync; see bulk.go). Zero value = production.
-	BulkURL string
+	BulkURL     string
 	MinInterval time.Duration
 	HTTP        *http.Client
 
@@ -265,9 +265,14 @@ func (c *Client) CIKMap(ctx context.Context) (map[string]int64, error) {
 
 // Fundamentals is the extracted headline company-facts for one symbol.
 type Fundamentals struct {
-	CIK               int64
-	Revenues          *Fact // latest annual/quarterly revenue
-	EPS               *Fact // latest diluted EPS
+	CIK      int64
+	Revenues *Fact // latest trailing-twelve-month revenue
+	EPS      *Fact // latest trailing-twelve-month diluted EPS
+	// RevenuesTTM and EPSTTM are the full trailing-twelve-month series,
+	// ascending. Stored rows were a mix of quarterly, year-to-date and annual
+	// figures (audit 11-10: AAPL 255B/364B/479B was a running YTD total).
+	RevenuesTTM       []Fact
+	EPSTTM            []Fact
 	SharesOutstanding *Fact // latest common shares outstanding
 	EntityPublicFloat *Fact // latest public float (USD, dei cover-page fact)
 	LatestFilingDate  int64 // most recent "filed" date across facts (epoch)
@@ -328,6 +333,7 @@ type conceptUnits struct {
 }
 
 type unitPoint struct {
+	Start string  `json:"start"` // period start YYYY-MM-DD (duration facts only)
 	End   string  `json:"end"`   // period end YYYY-MM-DD
 	Val   float64 `json:"val"`   // reported value
 	Form  string  `json:"form"`  // 10-K / 10-Q / …
@@ -367,11 +373,14 @@ func (c *Client) CompanyFacts(ctx context.Context, cik int64) (Fundamentals, err
 		"SalesRevenueNet",
 		"RevenueFromContractWithCustomerIncludingAssessedTax",
 	}
-	out.Revenues = latestFact(resp.Facts.USGAAP, revConcepts, "USD")
+	out.RevenuesTTM = ttmFacts(resp.Facts.USGAAP, revConcepts, "USD")
+	out.Revenues = latestOf(out.RevenuesTTM)
 
-	// EPS: prefer diluted, fall back to basic.
+	// EPS: prefer diluted, fall back to basic. TTM EPS = sum of the period's
+	// pieces, the usual convention (share counts shift slightly between them).
 	epsConcepts := []string{"EarningsPerShareDiluted", "EarningsPerShareBasic"}
-	out.EPS = latestFact(resp.Facts.USGAAP, epsConcepts, "USD/shares")
+	out.EPSTTM = ttmFacts(resp.Facts.USGAAP, epsConcepts, "USD/shares")
+	out.EPS = latestOf(out.EPSTTM)
 
 	// Shares outstanding: dei carries the entity-level cover-page count; us-gaap
 	// carries the balance-sheet count. Try dei first (usually freshest).
@@ -470,6 +479,17 @@ func (c *Client) Ingest(ctx context.Context, st *store.Store, syms []md.Symbol) 
 			})
 			continue
 		}
+		// Revenues and EPS: the whole TTM series replaces what is stored, so a
+		// symbol's history never mixes period lengths and restatements land.
+		for _, m := range []struct {
+			name   string
+			series []Fact
+		}{{"Revenues", facts.RevenuesTTM}, {"EPS", facts.EPSTTM}} {
+			if rerr := st.ReplaceFundamentalSeries(ctx, s.ID, m.name, ttmRows(s.ID, m.series, now)); rerr != nil {
+				return written, missing, fmt.Errorf("edgar: replace %s %s: %w", s.Symbol, m.name, rerr)
+			}
+			written += len(m.series)
+		}
 		rows := factRows(s.ID, cik, facts, now)
 		for _, r := range rows {
 			if uerr := st.UpsertFundamental(ctx, r); uerr != nil {
@@ -511,6 +531,15 @@ func (c *Client) cachedCIKMap(ctx context.Context, st *store.Store) (map[string]
 	return m, nil
 }
 
+// ttmRows maps a TTM series to store rows.
+func ttmRows(symbolID int64, series []Fact, fetchedAt int64) []store.FundamentalRow {
+	out := make([]store.FundamentalRow, 0, len(series))
+	for _, f := range series {
+		out = append(out, store.FundamentalRow{SymbolID: symbolID, Value: f.Value, AsOf: f.AsOf, FetchedAt: fetchedAt})
+	}
+	return out
+}
+
 // factRows maps extracted Fundamentals to store rows. Present-only: a nil fact
 // produces no row (honest — we never fabricate a zero).
 func factRows(symbolID, cik int64, f Fundamentals, fetchedAt int64) []store.FundamentalRow {
@@ -524,8 +553,6 @@ func factRows(symbolID, cik int64, f Fundamentals, fetchedAt int64) []store.Fund
 			AsOf: fact.AsOf, FetchedAt: fetchedAt,
 		})
 	}
-	add("Revenues", f.Revenues)
-	add("EPS", f.EPS)
 	add("SharesOutstanding", f.SharesOutstanding)
 	add("EntityPublicFloat", f.EntityPublicFloat)
 	// CIK + latest filing date are recorded with as_of = the fact date so they
