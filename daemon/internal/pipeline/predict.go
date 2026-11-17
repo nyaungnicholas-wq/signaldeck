@@ -458,13 +458,17 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, re
 	// STAGE 6 gated model legs: recorded ONLY when they cleared their OOS gate
 	// (LegProbabilities semantics), so the labeled training set (and the adaptive
 	// attribution reading it back) sees exactly the leg the live blend used.
-	if c.GBMProb != nil && c.GBMLift != nil && *c.GBMLift > 0 {
+	// Decided by the blend's own admission (ensemble.LegProbabilities), not a
+	// re-statement of it: a lift-only test here drifted from the live gate
+	// once admission moved to the ranking lower bound.
+	admitted := ensemble.LegProbabilities(c)
+	if _, ok := admitted[ensemble.LegGBM]; ok && c.GBMProb != nil {
 		vec["gbm_prob"] = *c.GBMProb
 	}
-	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
+	if _, ok := admitted[ensemble.LegMeanRev]; ok && c.MeanRevProb != nil {
 		vec["meanrev_prob"] = *c.MeanRevProb
 	}
-	if c.AlphaXProb != nil && c.AlphaXLift != nil && *c.AlphaXLift > 0 {
+	if _, ok := admitted[ensemble.LegAlphaX]; ok && c.AlphaXProb != nil {
 		vec["alphax_prob"] = *c.AlphaXProb
 	}
 	if regimeLbl != "" {

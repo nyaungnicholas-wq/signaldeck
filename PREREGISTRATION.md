@@ -607,3 +607,19 @@ state at filing; the grader edit re-hashes the `grading-protocol` record and
 this document re-hashes `prereg-document`, appending visible AMENDMENT entries
 on the next registrar pass. Until that pass runs the grader refuses to grade,
 exactly as section 12 describes.
+
+## 16. AMENDMENT 2026-11-16 — structural blocks counted in sessions; superseded calls leave the null
+
+**What changed.** Filed under chain kind `structural-session-blocks` with `cmd/prereg-amend`. Cut-over 2026-11-23T00:00 New York (`SESSION_BLOCKS_EPOCH_TS = 1795410000`). Forward-only: the record refuses to file if any structural call at or after the cut-over exists. Defect 1: `regime_outcomes.day` is an epoch-day number (`md.TradingDay`), so consecutive call days jump by 3 over a weekend. `horizon_blocks()` closed a 21-day block at `day >= anchor + 21`: 21 calendar days, about 15 NYSE sessions. Adjacent blocks' forward windows overlapped, so the clustered interval counted more independent blocks than existed (about 1.4x). Found by the 2026-11-10 audit, reproduced against the database 2026-11-15. Fix 1: for the stock structural kinds, a block whose anchor day (`regime_outcomes.day`, the settle bar's trading day) is on or after 2026-11-23 closes after `hd` NYSE sessions (`nyse_sessions_after`), on a full-holiday calendar ported from `daemon/internal/marketcal`. Earlier blocks keep the calendar-day rule. So do the crypto structural kinds, which trade every day, and every directional horizon, whose spans are calendar days. Defect 2: the model's per-day tally excluded superseded rows (`superseded_by`); the naive-persistence null's tally did not, so a superseded call counted toward the null but not the model. Fix 2: from the cut-over the null tally also excludes superseded rows.
+
+**Deliberately not changed.** The audit also noted that the null drops rows with no frozen `naive_label` while the model keeps them. Those rows are left as they are. The null-coverage gate (section 8) already discloses them and refuses a skill verdict on partial coverage; dropping them from the model would show 100% coverage and hide the self-selection.
+
+**Why this is not outcome shopping.** Both fixes follow from the mechanism of the defect. The cut-over was chosen by the calendar (the first Monday after the owner's 2026-11-16 instruction to finish the audit's items), not by any figure. Filed before any governed call existed.
+
+**What cannot change.** Every claim and band table. Horizons, kinds and baseline definitions. minIndependentN, minDistinctDays, minDistinctBlocks, maxAlpha and the verdict rules. Any row or block anchored before the cut-over.
+
+**Expected consequences.** Post-cut-over structural blocks are about 1.4x wider, so fewer distinct blocks accrue per month and structural verdicts take longer to clear minDistinctBlocks. A superseded call no longer moves the null.
+
+**Verification promised.** The grader tests `tools/test_nyse_sessions.py` (calendar, a block anchored 2026-11-23 spans 21 sessions to 2026-12-23, a pre-cut-over block keeps the calendar rule, a superseded post-cut-over row leaves the null accuracy unchanged). After 2026-12-23, compare post-cut-over block anchors: consecutive anchors at least 21 sessions apart.
+
+**Chaining.** The grader edit re-hashes the `grading-protocol` record and this document re-hashes `prereg-document`. The registrar appends both AMENDMENT entries on its next pass, and until then the grader refuses to grade (section 12). No off-schedule grade is run.

@@ -173,7 +173,7 @@ func TestRegimeOutcomeResolveTrend(t *testing.T) {
 	price := func(i int) (float64, float64) {
 		p := 100.0 * math.Pow(1.002, float64(i))
 		if i >= crashAt {
-			p = 100.0 * math.Pow(1.002, float64(crashAt)) * 0.5
+			p = 100.0 * math.Pow(1.002, float64(crashAt)) * 0.45 // a crash, not a split ratio (0.5 reads as an unadjusted 2:1 split)
 		}
 		return p, 1e6
 	}
@@ -233,7 +233,7 @@ func TestRegimePostmortemOnlyHighConvictionMisses(t *testing.T) {
 	price := func(i int) (float64, float64) {
 		p := 100.0 * math.Pow(1.002, float64(i))
 		if i >= crashAt {
-			p = 100.0 * math.Pow(1.002, float64(crashAt)) * 0.5
+			p = 100.0 * math.Pow(1.002, float64(crashAt)) * 0.45 // a crash, not a split ratio (0.5 reads as an unadjusted 2:1 split)
 		}
 		return p, 1e6
 	}

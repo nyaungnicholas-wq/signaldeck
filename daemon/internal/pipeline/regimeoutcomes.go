@@ -35,6 +35,7 @@ import (
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/splitfix"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
@@ -299,6 +300,13 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			abandon(o, "insufficient forward bars past the grace window (symbol likely left the universe)")
 			continue // still unresolved this pass either way
 		}
+		// SPLIT GUARD (audit 2026-11-10): a split-shaped move in the forward
+		// window waits for the split-repair worker's verdict before the raw
+		// closes are graded. Crypto has no splits.
+		if sr.market == md.Stocks && splitHeld(ctx, w.St, o.SymbolID, sr.ts, closes, vols, t, t+o.HorizonDays, nowUnix) {
+			stuck++
+			continue
+		}
 		var res structregime.Resolution
 		var rok bool
 		switch o.Kind {
@@ -481,6 +489,33 @@ func regimeBaseRateSentence(acc float64) string {
 
 // barReturns2 is barReturns over an already-filtered positive-close series:
 // simple returns, ret[i] = closes[i+1]/closes[i]-1 (resolves at bar i+1).
+// splitHeld reports whether bars [from, to] carry a split-shaped move the
+// split-repair worker has not yet examined (splitfix.HeldForReview).
+func splitHeld(ctx context.Context, st *store.Store, symbolID int64, ts []int64, closes, vols []float64, from, to int, now int64) bool {
+	if to >= len(closes) {
+		to = len(closes) - 1
+	}
+	if from < 0 || from >= to {
+		return false
+	}
+	if now > ts[to]+splitfix.MaxHoldSecs {
+		return false // waited long enough: grade on the bars held (no review is coming)
+	}
+	win := make([]splitfix.Bar, 0, to-from+1)
+	for i := from; i <= to; i++ {
+		v := 0.0
+		if i < len(vols) {
+			v = vols[i]
+		}
+		win = append(win, splitfix.Bar{Ts: ts[i], Close: closes[i], Volume: v})
+	}
+	last, has, err := st.LastSplitRepair(ctx, symbolID)
+	if err != nil {
+		return false // never block grading on a failed lookup
+	}
+	return splitfix.HeldForReview(win, last, has)
+}
+
 func barReturns2(closes []float64) []float64 {
 	if len(closes) < 2 {
 		return nil

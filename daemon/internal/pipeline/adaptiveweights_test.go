@@ -187,10 +187,10 @@ func TestPredictionRunner_UsesLearnedWeightsForRegimeCell(t *testing.T) {
 		if err := st.InsertScore(ctx, md.Score{SymbolID: sym.ID, Horizon: h, Ts: now - 60, Score: 0.3}); err != nil {
 			t.Fatal(err)
 		}
-		// A forecast WITH edge: without learned weights it would join the
+		// A forecast with a SIGNIFICANT ranking edge: without learned weights it would join the
 		// blend at equal weight.
 		if err := st.UpsertForecast(ctx, store.Forecast{
-			SymbolID: sym.ID, Horizon: h, Ts: now, Prob: 0.9, Lift: 0.1, NTrain: 100, NEval: 50,
+			SymbolID: sym.ID, Horizon: h, Ts: now, Prob: 0.9, Lift: 0.1, AUC: 0.65, NTrain: 400, NEval: 200,
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -1162,10 +1162,12 @@ class TestNaivePersistenceNull(unittest.TestCase):
         return con
 
     @staticmethod
-    def _seed(con, days=15, per_day=4, model_hits=4, naive=lambda i, j: "up", stride=21):
+    def _seed(con, days=15, per_day=4, model_hits=4, naive=lambda i, j: "up", stride=35):
         """Seed `days` call-days of resolved outcomes with a frozen baseline.
 
-        stride spaces the call days by a full 21-day horizon by default, so each
+        stride spaces the call days 35 calendar days apart by default: at least
+        21 NYSE sessions, so blocks stay non-overlapping under the §16 session
+        rule as well as the calendar rule it replaced, and each
         one is its own NON-OVERLAPPING forward block — the unit structural
         grading now clusters on. Pass stride=1 to seed the overlapping case.
         """

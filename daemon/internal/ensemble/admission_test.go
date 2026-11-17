@@ -21,11 +21,19 @@ func TestRequireMeasuredLegsBenchesUnmeasuredPressure(t *testing.T) {
 		t.Errorf("strict mode kept an unmeasured leg: %v", legs)
 	}
 
-	// A MEASURED positive leg survives strict mode.
-	proven := strict
-	proven.PressureLift = f64(0.02)
+	// A positive lift alone is a point estimate with no interval: strict mode
+	// refuses it (audit 2026-11-10).
+	liftOnly := strict
+	liftOnly.PressureLift = f64(0.02)
+	if legs := LegProbabilities(liftOnly); len(legs) != 0 {
+		t.Errorf("strict mode admitted a leg on a bare lift point estimate: %v", legs)
+	}
+
+	// A leg whose ranking lower confidence bound clears chance survives.
+	proven := liftOnly
+	proven.RankEdge = map[string]float64{LegPressure: 0.02}
 	if legs := LegProbabilities(proven); len(legs) != 1 {
-		t.Errorf("strict mode dropped a measured positive leg: %v", legs)
+		t.Errorf("strict mode dropped a significant leg: %v", legs)
 	}
 
 	// A MEASURED negative leg is dropped in both modes.
@@ -50,7 +58,8 @@ func TestAdmittedProbabilityRefusesInsteadOfInventing(t *testing.T) {
 	}
 
 	// With one admitted leg it agrees with WeightedProbability exactly.
-	live := Components{PressureScore: 0.5, PressureLift: f64(0.03), RequireMeasuredLegs: true}
+	live := Components{PressureScore: 0.5, PressureLift: f64(0.03), RequireMeasuredLegs: true,
+		RankEdge: map[string]float64{LegPressure: 0.03}}
 	gotP, gotN, gotOK := AdmittedProbability(live, nil)
 	if !gotOK {
 		t.Fatal("AdmittedProbability refused a legitimate single-leg blend")
@@ -68,9 +77,10 @@ func TestStrictModeAppliesToEveryLeg(t *testing.T) {
 		PressureScore:       0.4,
 		PressureLift:        f64(0.01),
 		RequireMeasuredLegs: true,
-		GBMProb:             f64(0.7), // no GBMLift -> unproven
+		GBMProb:             f64(0.7),                           // no GBMLift -> unproven
 		MeanRevProb:         f64(0.3), MeanRevLift: f64(-0.001), // measured negative
 		AlphaXProb: f64(0.6), AlphaXLift: f64(0.02), // proven
+		RankEdge: map[string]float64{LegAlphaX: 0.02, LegPressure: 0.01},
 	}
 	legs := LegProbabilities(c)
 	if _, ok := legs[LegGBM]; ok {
@@ -107,6 +117,10 @@ func TestExpectancyAndSentimentGatedInStrictMode(t *testing.T) {
 	withLift := c
 	withLift.ExpectancyLift = f64(0.02)
 	withLift.SentimentLift = f64(0.015)
+	if legs = LegProbabilities(withLift); len(legs) != 0 {
+		t.Errorf("strict mode admitted legs on bare lift point estimates: %v", legs)
+	}
+	withLift.RankEdge = map[string]float64{LegExpectancy: 0.02, LegSentiment: 0.015}
 	legs = LegProbabilities(withLift)
 	if _, ok := legs[LegExpectancy]; !ok {
 		t.Error("measured expectancy leg dropped")
@@ -125,5 +139,25 @@ func TestExpectancyAndSentimentGatedInStrictMode(t *testing.T) {
 	}
 	if _, ok := legs[LegSentiment]; !ok {
 		t.Error("default mode dropped sentiment")
+	}
+}
+
+// In production a model leg with a positive lift but NO ranking grade stays
+// out of the blend: lift is a point estimate, and admission needs the ranking
+// lower bound (audit 2026-11-10). Fails on the old admitsOptIn.
+func TestStrictModeRefusesLiftOnlyModelLegs(t *testing.T) {
+	c := Components{
+		RequireMeasuredLegs: true,
+		ForecastProb:        f64(0.6), ForecastLift: f64(0.05),
+		GBMProb: f64(0.6), GBMLift: f64(0.05),
+		MeanRevProb: f64(0.6), MeanRevLift: f64(0.05),
+		AlphaXProb: f64(0.6), AlphaXLift: f64(0.05),
+	}
+	if legs := LegProbabilities(c); len(legs) != 0 {
+		t.Fatalf("lift-only model legs admitted in strict mode: %v", legs)
+	}
+	c.RequireMeasuredLegs = false
+	if legs := LegProbabilities(c); len(legs) < 4 {
+		t.Fatalf("cold-start mode must keep the lift gate: %v", legs)
 	}
 }

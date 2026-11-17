@@ -82,10 +82,10 @@ export default function VolRegimeLead({
     .slice(0, 6);
 
   return (
-    <section className="panel" aria-label="volatility regime — the backtest-validated forecast">
+    <section className="panel" aria-label="volatility regime — the backtested forecast">
       <div className="panel-h flex-wrap gap-2">
         <span>VOLATILITY REGIME</span>
-        <span className="chip px-2 py-[1px] text-[0.75rem]">the backtest-validated forecast</span>
+        <span className="chip px-2 py-[1px] text-[0.75rem]">the backtested forecast</span>
         <HelpTip label="Why this one leads">
           {data.whyHonest || data.what}
           {data.what && data.whyHonest ? ` ${data.what}` : ""}

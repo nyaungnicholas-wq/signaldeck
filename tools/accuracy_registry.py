@@ -65,6 +65,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import functools
 import hashlib
 import json
 import math
@@ -1190,7 +1191,7 @@ def wilson_eff(p: float, eff_n: float, z: float | None = None) -> tuple[float, f
 
 
 def horizon_blocks(day_rows: list[tuple[int, int, int]],
-                   horizon_days: int) -> list[tuple[int, int, int]]:
+                   horizon_days: int, sessions: bool = False) -> list[tuple[int, int, int]]:
     """Fold per-CALL-DAY tallies into non-overlapping forward-horizon blocks.
 
     day_rows are (day, n, hits) with day the trading-day index the daemon
@@ -1215,7 +1216,7 @@ def horizon_blocks(day_rows: list[tuple[int, int, int]],
     anchor: int | None = None
     for day in sorted(agg):
         n, h = agg[day]
-        if anchor is None or day >= anchor + hd:
+        if anchor is None or block_closed(anchor, day, hd, sessions):
             anchor = day
             blocks.append((anchor, n, h))
         else:
@@ -1225,7 +1226,7 @@ def horizon_blocks(day_rows: list[tuple[int, int, int]],
 
 
 def clustered_ci_blocks(day_rows: list[tuple[int, int, int]],
-                        horizon_days: int) -> dict:
+                        horizon_days: int, sessions: bool = False) -> dict:
     """clustered_ci with the cluster unit set to a non-overlapping horizon block.
 
     Same estimator, honest unit: the design effect and effective n are measured
@@ -1233,7 +1234,7 @@ def clustered_ci_blocks(day_rows: list[tuple[int, int, int]],
     Publishes distinct_blocks and block_span beside distinct_days, and withholds
     the interval below MIN_DISTINCT_BLOCKS.
     """
-    blocks = horizon_blocks(day_rows, horizon_days)
+    blocks = horizon_blocks(day_rows, horizon_days, sessions)
     out = clustered_ci([(n, h) for _b, n, h in blocks],
                        min_clusters=MIN_DISTINCT_BLOCKS,
                        unit="non-overlapping horizon blocks",
@@ -1397,6 +1398,120 @@ def trading_day(ts: int) -> int:
     return (ts - TRADING_DAY_OFFSET_SECS) // SECONDS_PER_DAY
 
 
+# --------------------------------------------------------------------------- #
+# AMENDMENT 2026-11-16 (PREREGISTRATION.md §16, chain kind
+# structural-session-blocks): structural blocks counted in NYSE sessions.
+# --------------------------------------------------------------------------- #
+#
+# trading_day() is an epoch-day number, so consecutive call days jump by 3 over
+# a weekend, and horizon_blocks() closed a 21-day block after 21 CALENDAR days,
+# about 15 sessions: adjacent blocks' forward windows overlapped. From the
+# cut-over, a block anchored at or after it closes after `hd` NYSE sessions.
+# Blocks anchored earlier keep the calendar-day rule they were frozen under.
+# The calendar below mirrors daemon/internal/marketcal computeFull.
+SESSION_BLOCKS_EPOCH_TS = 1795410000  # 2026-11-23T00:00:00-05:00
+SESSION_BLOCKS_EPOCH_DAY = trading_day(SESSION_BLOCKS_EPOCH_TS)
+
+def _nyse_easter(year: int) -> dt.date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return dt.date(year, month, day)
+
+def _nyse_observed(date: dt.date) -> dt.date | None:
+    wd = date.weekday()
+    if wd == 5:  # Saturday
+        return date - dt.timedelta(days=1)
+    if wd == 6:  # Sunday
+        return date + dt.timedelta(days=1)
+    return date
+
+def _nyse_nth_weekday(year: int, month: int, weekday: int, n: int) -> dt.date:
+    first = dt.date(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    return first + dt.timedelta(days=offset + 7 * (n - 1))
+
+def _nyse_last_weekday(year: int, month: int, weekday: int) -> dt.date:
+    if month == 12:
+        last = dt.date(year + 1, 1, 1) - dt.timedelta(days=1)
+    else:
+        last = dt.date(year, month + 1, 1) - dt.timedelta(days=1)
+    offset = (last.weekday() - weekday) % 7
+    return last - dt.timedelta(days=offset)
+
+@functools.lru_cache(maxsize=None)
+def nyse_full_holidays(year: int) -> frozenset:
+    holidays = []
+    # New Year's Day
+    nyd = dt.date(year, 1, 1)
+    if nyd.weekday() == 6:  # Sunday
+        holidays.append(dt.date(year, 1, 2))
+    elif nyd.weekday() != 5:  # not Saturday
+        holidays.append(nyd)
+    # MLK Day (3rd Monday Jan)
+    holidays.append(_nyse_nth_weekday(year, 1, 0, 3))
+    # Washington's Birthday (3rd Monday Feb)
+    holidays.append(_nyse_nth_weekday(year, 2, 0, 3))
+    # Good Friday
+    easter = _nyse_easter(year)
+    holidays.append(easter - dt.timedelta(days=2))
+    # Memorial Day (last Monday May)
+    holidays.append(_nyse_last_weekday(year, 5, 0))
+    # Juneteenth (from 2022)
+    if year >= 2022:
+        jt = _nyse_observed(dt.date(year, 6, 19))
+        if jt:
+            holidays.append(jt)
+    # Independence Day
+    iday = _nyse_observed(dt.date(year, 7, 4))
+    if iday:
+        holidays.append(iday)
+    # Labor Day (1st Monday Sep)
+    holidays.append(_nyse_nth_weekday(year, 9, 0, 1))
+    # Thanksgiving (4th Thursday Nov)
+    holidays.append(_nyse_nth_weekday(year, 11, 3, 4))
+    # Christmas
+    xmas = _nyse_observed(dt.date(year, 12, 25))
+    if xmas:
+        holidays.append(xmas)
+    return frozenset(holidays)
+
+def is_nyse_session(d: dt.date) -> bool:
+    return d.weekday() < 5 and d not in nyse_full_holidays(d.year)
+
+def nyse_sessions_after(day_a: int, day_b: int) -> int:
+    if day_b <= day_a:
+        return 0
+    base = dt.date(1970, 1, 1)
+    count = 0
+    for n in range(day_a + 1, day_b + 1):
+        if is_nyse_session(base + dt.timedelta(days=n)):
+            count += 1
+    return count
+
+
+def block_closed(anchor: int, day: int, hd: int, sessions: bool = False) -> bool:
+    """Whether call day `day` falls outside the block anchored at `anchor`.
+
+    sessions=True only for the STRUCTURAL stock kinds (§16): their horizon is a
+    count of NYSE sessions. Directional horizons and the crypto structural
+    kinds are calendar spans and keep the calendar rule."""
+    if sessions and anchor >= SESSION_BLOCKS_EPOCH_DAY:
+        return nyse_sessions_after(anchor, day) >= hd
+    return day >= anchor + hd
+
+
 def settle_day(settle_ts: int | None, ts: int) -> int | None:
     """Fold a RESOLVED row to its unit of independent evidence.
 
@@ -1454,6 +1569,18 @@ def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
     con.create_function("trading_day", 1, trading_day)
     con.create_function("settle_day", 2, settle_day)
     return con
+
+
+def null_superseded_clause(con: sqlite3.Connection) -> str:
+    """§16: from the cut-over the NULL tally excludes superseded rows, as the
+    model tally always has. Rows with no frozen naive_label are NOT dropped from
+    the model side: the null-coverage gate already discloses them and refuses a
+    skill verdict on partial coverage, and matching the row sets would hide that
+    self-selection behind a 100% coverage figure."""
+    cols = [r[0] for r in con.execute("SELECT name FROM pragma_table_info('regime_outcomes')")]
+    if "superseded_by" not in cols:
+        return ""
+    return f" AND (ts < {SESSION_BLOCKS_EPOCH_TS} OR superseded_by IS NULL)"
 
 
 def superseded_clause(con: sqlite3.Connection) -> str:
@@ -2351,9 +2478,9 @@ def fetch_structural(con: sqlite3.Connection):
     SELECT kind, horizon_days, day, COUNT(*),
            SUM(CASE WHEN naive_label = actual THEN 1 ELSE 0 END)
     FROM regime_outcomes
-    WHERE resolved_at IS NOT NULL AND ts >= ? AND naive_label IS NOT NULL
+    WHERE resolved_at IS NOT NULL AND ts >= ? AND naive_label IS NOT NULL{sup}
     GROUP BY kind, horizon_days, day ORDER BY kind, day
-    """
+    """.format(sup=null_superseded_clause(con))
     naive_per_day: dict[tuple, list[tuple[int, int, int]]] = {}
     try:
         for kind, hd, day, n, hits in con.execute(qn, (SURVIVORSHIP_EPOCH_TS,)):
@@ -2401,12 +2528,14 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
         # Cluster on non-overlapping horizon blocks, not on call days: at
         # horizon_days=21 twenty-one consecutive call days are one forward
         # window, and grading them as 21 clusters is pseudo-replication.
-        g = clustered_ci_blocks(per_day.get((kind, hd), []), hd)
+        # §16: stock structural horizons are NYSE sessions; crypto trades daily.
+        in_sessions = "crypto" not in kind
+        g = clustered_ci_blocks(per_day.get((kind, hd), []), hd, in_sessions)
         resolved = g["n"]
         lo = hi = None
         acc = None
         extra = {}
-        ng = clustered_ci_blocks(naive_per_day.get((kind, hd), []), hd)
+        ng = clustered_ci_blocks(naive_per_day.get((kind, hd), []), hd, in_sessions)
         null_acc = ng["acc"] if ng["n"] >= MIN_INDEPENDENT_N else None
         # Coverage of the matched null: what fraction of the graded rows the
         # model is scored on actually carry a frozen baseline. Anything below

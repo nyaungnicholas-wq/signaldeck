@@ -34,6 +34,7 @@ func seedGradedPressureLeg(t *testing.T, st *store.Store, symbolID, ts int64) {
 			Accuracy: 0.55,
 			BaseRate: 0.5,
 			Lift:     0.05,
+			AUC:      0.62, // ranks: the lower bound clears 0.5, so the leg is admitted on evidence
 			NTrain:   500,
 			NEval:    200,
 		}); err != nil {

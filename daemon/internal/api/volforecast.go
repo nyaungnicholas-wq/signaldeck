@@ -13,6 +13,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/rvgrade"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/splitfix"
 )
 
 // RVMinDistinctDays is the minimum number of distinct trading days required
@@ -370,12 +371,38 @@ func (d Deps) gradeRVHorizon(ctx context.Context, h int, start rvStart) (rvgrade
 		if err != nil {
 			return rvgrade.Grade{}, err
 		}
+		// Split guard (audit 2026-11-10): a window with a split-shaped move
+		// the split-repair worker has not examined is not graded yet.
+		last, has, _ := d.St.LastSplitRepair(ctx, rows[i].SymbolID)
 		for k := i; k < j; k++ {
 			in[k].CC = rvgrade.CCTarget(bars, rows[k].Ts, h)
+			if !math.IsNaN(in[k].CC) && rvWindowHeld(bars, rows[k].Ts, h, last, has) {
+				in[k].CC = math.NaN()
+			}
 		}
 		i = j
 	}
 	return rvgrade.GradeHorizon(in, h), nil
+}
+
+// rvWindowHeld applies splitfix.HeldForReview to the call bar and the h bars
+// after it, the window CCTarget reads.
+func rvWindowHeld(bars []md.Bar, callTs int64, h int, lastRepair int64, hasRepair bool) bool {
+	for i, b := range bars {
+		if b.Ts != callTs {
+			continue
+		}
+		end := i + h
+		if end >= len(bars) {
+			end = len(bars) - 1
+		}
+		win := make([]splitfix.Bar, 0, end-i+1)
+		for _, w := range bars[i : end+1] {
+			win = append(win, splitfix.Bar{Ts: w.Ts, Close: w.Close, Volume: w.Volume})
+		}
+		return splitfix.HeldForReview(win, lastRepair, hasRepair)
+	}
+	return false
 }
 
 // volForecastLatest is GET /api/vol-forecast/latest, the member read of the

@@ -46,7 +46,7 @@ func main() {
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
 				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
 				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+", "+GradingWindow2Kind+", "+
-				LabelWindowKind+" or "+StructSettledKind)
+				LabelWindowKind+", "+StructSettledKind+" or "+SessionBlocksKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
@@ -55,12 +55,12 @@ func main() {
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
 		*kind != BookExtremeKind && *kind != RVForecastKind &&
 		*kind != GradingWindowKind && *kind != GradingWindow2Kind &&
-		*kind != LabelWindowKind && *kind != StructSettledKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != LabelWindowKind && *kind != StructSettledKind && *kind != SessionBlocksKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
 			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind, GradingWindow2Kind,
-			LabelWindowKind, StructSettledKind)
+			LabelWindowKind, StructSettledKind, SessionBlocksKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -211,6 +211,20 @@ func main() {
 				"cut-over to a time with none.", m.CallsFromEpoch)
 		}
 		spec, note = structSettledSpec(m), structSettledNote
+
+	case SessionBlocksKind:
+		m, err := measureSessionBlocks(ctx, db)
+		if err != nil {
+			die("measure structural session-block state: %v", err)
+		}
+		// Forward-only, like the settled-bar record: refuse once any call the
+		// rule governs exists, so it cannot be chosen with its calls readable.
+		if m.CallsFromEpoch != 0 {
+			die("REFUSING to file: %d structural call(s) already exist at or after the cut-over. "+
+				"A rule registered after the calls it governs is not forward-only; move the "+
+				"cut-over to a time with none.", m.CallsFromEpoch)
+		}
+		spec, note = sessionBlocksSpec(m), sessionBlocksNote
 
 	case RVForecastKind:
 		m, err := measureRVForecast(ctx, db)

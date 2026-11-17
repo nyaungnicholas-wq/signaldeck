@@ -54,9 +54,10 @@ const RankEdgeMinEval = 80
 //
 // ok=false means there is NO usable ranking grade here — an unscored row, a
 // degenerate AUC, or too few evaluations to bound anything. That is different
-// from a measured "does not rank", and callers must treat it as such: leave the
-// leg on its historical lift gate rather than benching it on a grade that was
-// never taken. Absence of evidence is not evidence of no edge.
+// from a measured "does not rank". In cold-start mode the leg falls back to its
+// historical lift gate; in production (ensemble RequireMeasuredLegs) a leg with
+// no usable ranking grade is not admitted, because a lift point estimate is not
+// evidence of edge (audit 2026-11-10).
 func RankEdge(auc float64, nEval int) (float64, bool) {
 	// EXACTLY 0 or 1 is refused as degenerate, and that is a deliberate,
 	// measured choice rather than sloppy range-checking. A real AUC of 1.0 over

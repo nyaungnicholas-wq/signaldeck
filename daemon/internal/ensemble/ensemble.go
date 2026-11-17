@@ -370,7 +370,10 @@ func admitsLeg(c Components, leg string, lift *float64) bool {
 	if e, ok := c.RankEdge[leg]; ok {
 		return e > 0
 	}
-	return admits(lift, c.RequireMeasuredLegs)
+	if c.RequireMeasuredLegs {
+		return false // see admitsOptIn: a lift point estimate is not evidence
+	}
+	return admits(lift, false)
 }
 
 // admitsOptIn is admitsLeg for the legs that were ALWAYS opt-in (forecast, gbm,
@@ -380,6 +383,14 @@ func admitsLeg(c Components, leg string, lift *float64) bool {
 func admitsOptIn(c Components, leg string, lift *float64) bool {
 	if e, ok := c.RankEdge[leg]; ok {
 		return e > 0
+	}
+	// SIGNIFICANCE (audit 2026-11-10). RankEdge is a one-sided lower confidence
+	// bound (Wilson on AUC, minus 0.5), so e > 0 is a significance test. Lift is
+	// a bare point estimate with no interval: admitting on lift > 0 let a leg
+	// into the blend on noise. In production a leg with no ranking grade stays
+	// out; cold-start mode keeps the historical lift gate.
+	if c.RequireMeasuredLegs {
+		return false
 	}
 	return lift != nil && *lift > 0
 }
