@@ -322,6 +322,39 @@ def write_snapshot(con: sqlite3.Connection, out_dir: str) -> dict:
     return manifest
 
 
+def repin_protocol(con: sqlite3.Connection, out_dir: str) -> int:
+    """Re-pin grading_protocol.csv to the newest registered grader; touch no data file.
+    Since 2026-10-23 the day tallies are Alpaca-derived and are not re-published
+    without Alpaca's written permission (DATA_SOURCES.md), so they stay frozen at
+    their last public cut. A grader amendment still re-hashes the grader, and
+    --verify-complete then refuses the snapshot. `looks` keeps its committed
+    value: it counts looks over the frozen rows."""
+    path = os.path.join(out_dir, "grading_protocol.csv")
+    mpath = os.path.join(out_dir, "MANIFEST.json")
+    with open(path, newline="", encoding="utf-8") as f:
+        old = list(csv.reader(f))[1:]
+    new = grading_protocol_records(con)
+    if not new or len(old) != 1:
+        print("cannot re-pin: no registered grading protocol, or no committed row to keep `looks` from")
+        return 1
+    new[0][-1] = old[0][-1]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(HEADERS["grading_protocol.csv"])
+        w.writerows(new)
+    with open(mpath, encoding="utf-8") as f:
+        manifest = json.load(f)
+    for entry in manifest["files"]:
+        if entry["file"] == "grading_protocol.csv":
+            entry["sha256"] = hash_records(entry["file"], FILES[entry["file"]], new)
+            break
+    manifest["protocol_repinned"] = {"seq": int(new[0][0]), "grader_sha256": new[0][1]}
+    with open(mpath, "w", encoding="utf-8") as f:
+        f.write(json.dumps(manifest, indent=1) + "\n")
+    print(f"re-pinned grading_protocol.csv: seq {old[0][0]} -> {new[0][0]}, looks kept at {old[0][-1]}; data files untouched")
+    return 0
+
+
 def verify_snapshot(con: sqlite3.Connection, out_dir: str) -> int:
     """Compare the committed snapshot against what the DB produces right now."""
     man_path = os.path.join(out_dir, "MANIFEST.json")
@@ -450,12 +483,17 @@ def main() -> int:
     ap.add_argument("--verify-complete", action="store_true",
                     help="database-free: assert the shipped snapshot is complete, "
                          "correctly hashed, and git-tracked (CI gate)")
+    ap.add_argument("--repin-protocol", action="store_true",
+                    help="rewrite only grading_protocol.csv from the chain (data files stay "
+                         "frozen while Alpaca-derived statistics are withheld)")
     args = ap.parse_args()
 
     if args.verify_complete:
         return verify_complete(args.out)
 
     con = reg.connect(args.db)
+    if args.repin_protocol:
+        return repin_protocol(con, args.out)
     if args.verify:
         return verify_snapshot(con, args.out)
     manifest = write_snapshot(con, args.out)

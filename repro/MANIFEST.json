@@ -22,7 +22,7 @@
    "file": "grading_protocol.csv",
    "kind": "prereg-grading-protocol",
    "rows": 1,
-   "sha256": "b35d0baa0ab8df952af55125d0e53258ffe400bfc759621f72676a95ea078afa"
+   "sha256": "9975f2d9874a77f56c291544a26aa5c3ed0aa3c951175f49d203c52cefa313a4"
   },
   {
    "file": "structural_days.csv",
@@ -54,5 +54,9 @@
    "rows": 2939,
    "sha256": "b03d9d6499e9f95e1a969ce1fca771dfcabe6087325ebfac93a4e1764c613ba5"
   }
- ]
+ ],
+ "protocol_repinned": {
+  "seq": 188,
+  "grader_sha256": "7072ecd2f28690001016e9b0176e742c72ad2bad679db7df0df834df2b5c10cb"
+ }
 }
