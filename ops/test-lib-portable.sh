@@ -213,11 +213,13 @@ FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/pgrep" <<'FAKE'
 #!/bin/sh
 # Windows-shaped process table: only "<name>.exe" exists.
-[ "$2" = "signaldeckd.exe" ] && exit 0
+[ "$2" = "fakedaemon.exe" ] && exit 0
 exit 1
 FAKE
 chmod +x "$FAKEBIN/pgrep"
-PGREP_RC="$(PATH="$FAKEBIN:$PATH"; sd_is_running signaldeckd >/dev/null 2>&1; echo $?)"
+# A neutral name: on Windows `signaldeckd` is answered per checkout by
+# sd_daemon_pids before pgrep is consulted (see the two-daemon checks below).
+PGREP_RC="$(PATH="$FAKEBIN:$PATH"; sd_is_running fakedaemon >/dev/null 2>&1; echo $?)"
 check "sd_is_running finds a Windows .exe process when pgrep IS installed" \
   "$([ "$PGREP_RC" = "0" ] && echo 1 || echo 0)"
 PGREP_ABSENT_RC="$(PATH="$FAKEBIN:$PATH"; sd_is_running definitelynotaprocess >/dev/null 2>&1; echo $?)"
@@ -274,6 +276,39 @@ OUT="$(
 check "sd_svc_stop writes the daemon stop file before falling back to /End" \
   "$(printf '%s' "$OUT" | grep -q 'END-AFTER-STOPFILE=1' && printf '%s' "$OUT" | grep -q 'rc=0' && echo 1 || echo 0)"
 rm -rf "$STOPTMP"
+
+# TWO DAEMONS, ONE IMAGE NAME.
+#
+# The public instance (signaldeck-public/bin/signaldeckd.exe) shares the image
+# name with this checkout's daemon. sd_is_running/sd_kill_hard used the name:
+# after the main daemon exited the public one kept "signaldeckd" alive, and the
+# escalation `taskkill /F /IM signaldeckd.exe` killed it (25 public outages
+# 2026-11-11..18). The daemon must be selected by PID, and a listing that could
+# not run must fail SAFE (assume up; refuse the kill).
+PSFAKE="$(mktemp -d)"
+printf '#!/bin/sh\nprintf "4242\r\nSD_PIDS_OK\r\n"\n' >"$PSFAKE/powershell.exe"; chmod +x "$PSFAKE/powershell.exe"
+OUT="$(PATH="$PSFAKE:$PATH"; taskkill() { echo "$*" >>"$PSFAKE/killed"; }; sd_kill_hard signaldeckd; echo "rc=$?")"
+check "sd_kill_hard signaldeckd kills by PID, never by image name" \
+  "$([ "$OUT" = "rc=0" ] && grep -q '//PID 4242' "$PSFAKE/killed" && ! grep -q '//IM' "$PSFAKE/killed" && echo 1 || echo 0)"
+printf '#!/bin/sh\nexit 1\n' >"$PSFAKE/powershell.exe"; rm -f "$PSFAKE/killed"
+OUT="$(PATH="$PSFAKE:$PATH"; taskkill() { echo "$*" >>"$PSFAKE/killed"; }; sd_is_running signaldeckd; r1=$?; sd_kill_hard signaldeckd; echo "run=$r1 kill=$? reason=$SD_KILL_HARD_REASON")"
+check "a daemon listing that could not run reads as RUNNING and refuses the kill" \
+  "$(case "$OUT" in "run=0 kill=1 reason=could not list"*) [ ! -e "$PSFAKE/killed" ] && echo 1 || echo 0 ;; *) echo 0 ;; esac)"
+rm -rf "$PSFAKE"
+if command -v powershell.exe >/dev/null 2>&1 && [ -f /c/Windows/System32/PING.EXE ]; then
+  TWO="$(mktemp -d)"; mkdir -p "$TWO/a" "$TWO/b"
+  cp /c/Windows/System32/PING.EXE "$TWO/a/signaldeckd.exe"; cp /c/Windows/System32/PING.EXE "$TWO/b/signaldeckd.exe"
+  "$TWO/a/signaldeckd.exe" -n 40 127.0.0.1 >/dev/null 2>&1 &
+  "$TWO/b/signaldeckd.exe" -n 40 127.0.0.1 >/dev/null 2>&1 &
+  sleep 2
+  winpid() { powershell.exe -NoProfile -NonInteractive -Command "Get-Process signaldeckd -ErrorAction SilentlyContinue | Where-Object { \$_.Path -ieq '$(sd_winpath "$1")' } | ForEach-Object { \$_.Id }" 2>/dev/null | tr -d '\r' | head -1; }
+  PA="$(winpid "$TWO/a/signaldeckd.exe")"; PB="$(winpid "$TWO/b/signaldeckd.exe")"
+  MINE="$(SD_DAEMON_EXE="$TWO/a/signaldeckd.exe" sd_daemon_pids)"
+  check "sd_daemon_pids selects this checkout's daemon (pid $PA) and not another instance's (pid $PB)" \
+    "$([ -n "$PA" ] && [ -n "$PB" ] && printf '%s\n' "$MINE" | grep -qx "$PA" && ! printf '%s\n' "$MINE" | grep -qx "$PB" && echo 1 || echo 0)"
+  for p in $PA $PB; do taskkill //F //PID "$p" >/dev/null 2>&1; done
+  rm -rf "$TWO" 2>/dev/null
+fi
 
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

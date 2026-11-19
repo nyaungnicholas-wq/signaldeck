@@ -210,6 +210,40 @@ sd_port_listening() {
   return 1
 }
 
+# sd_daemon_pids — PIDs of THIS checkout's signaldeckd, one per line.
+#
+# The image name is not an identity. Since 2026-11-11 a second daemon (the
+# public instance, signaldeck-public/bin/signaldeckd.exe, port 8422) runs on
+# this host under the same image name. Every "is the daemon gone?" check
+# therefore stayed true after the main daemon had exited, and the escalation
+# that followed (taskkill /F /IM signaldeckd.exe) killed the PUBLIC daemon:
+# 25 unplanned public outages 2026-11-11..18, each at a main-instance stop
+# (11-18: 16:50:51 market-close, 17:11:49 refresh), each lasting until the
+# public keepalive looked again (up to 20 min), plus a false "daemon ignored
+# TERM for 3m — SIGKILL" line and a wasted 150 s grace on every stop.
+#
+# Same rule as ops/daemon-guard.ps1: a process whose path is readable and is
+# NOT this checkout's binary belongs to another instance. An unreadable path
+# (the daemon task runs under another principal) is assumed to be ours, which
+# is what every caller assumed before. SD_DAEMON_EXE overrides the binary for
+# tests.
+#
+# Returns 0 only when the listing provably ran (it prints a sentinel that is
+# stripped here). Any other outcome returns 2 so callers can fail SAFE: an
+# empty answer from a query that never ran must not read as "daemon gone".
+sd_daemon_pids() {
+  command -v powershell.exe >/dev/null 2>&1 || return 2
+  local mine out
+  mine="$(sd_winpath "${SD_DAEMON_EXE:-$SD_LIB_DIR/../bin/signaldeckd.exe}")"
+  out="$(powershell.exe -NoProfile -NonInteractive -Command \
+    "\$m=[IO.Path]::GetFullPath('$mine'); Get-Process signaldeckd -ErrorAction SilentlyContinue | Where-Object { -not \$_.Path -or [IO.Path]::GetFullPath(\$_.Path) -ieq \$m } | ForEach-Object { \$_.Id }; 'SD_PIDS_OK'" \
+    2>/dev/null | tr -d '\r')"
+  case "$out" in
+    *SD_PIDS_OK*) printf '%s\n' "$out" | grep -v '^SD_PIDS_OK$' | grep -E '^[0-9]+$'; return 0 ;;
+  esac
+  return 2
+}
+
 # sd_is_running NAME — true when a process by that name is alive.
 #
 # `pgrep` is absent under Git Bash, so `pgrep -x signaldeckd >/dev/null 2>&1`
@@ -219,6 +253,14 @@ sd_port_listening() {
 # for a safety check.
 sd_is_running() {
   local name="$1"
+  if [ "$name" = signaldeckd ] && command -v powershell.exe >/dev/null 2>&1; then
+    # Windows: ask about THIS checkout's daemon, not the image name (see
+    # sd_daemon_pids). A listing that could not run fails safe: assume UP.
+    local pids
+    pids="$(sd_daemon_pids)" || return 0
+    [ -n "$pids" ] && return 0
+    return 1
+  fi
   if command -v pgrep >/dev/null 2>&1; then
     # Try "$name.exe" too. pgrep is absent under Git Bash today, so this branch
     # is dormant on Windows — and a dormant branch that an unrelated install
@@ -361,6 +403,23 @@ sd_svc_restart() { sd_svc_stop "$1"; sleep 2; sd_svc_start "$1"; }
 sd_kill_hard() {
   SD_KILL_HARD_REASON=""
   local found=0 err=""
+  if [ "$1" = signaldeckd ] && command -v powershell.exe >/dev/null 2>&1 && command -v taskkill >/dev/null 2>&1; then
+    # Windows: kill THIS checkout's daemon by PID. An image-name kill also
+    # ends the public daemon (see sd_daemon_pids), so there is no fallback to
+    # one: if the PIDs cannot be listed, refuse and say why.
+    local pid pids
+    if ! pids="$(sd_daemon_pids)"; then
+      SD_KILL_HARD_REASON="could not list this checkout's signaldeckd processes; refusing an image-name kill that would also end the public daemon"
+      return 1
+    fi
+    for pid in $pids; do
+      if ! err=$(taskkill //F //PID "$pid" 2>&1); then
+        SD_KILL_HARD_REASON="taskkill /PID $pid failed: $(printf '%s' "$err" | tr '\r\n' '  ' | sed 's/  */ /g')"
+        return 1
+      fi
+    done
+    return 0
+  fi
   if command -v pkill >/dev/null 2>&1; then
     found=1
     err=$(pkill -9 -x "$1" 2>&1) && return 0
