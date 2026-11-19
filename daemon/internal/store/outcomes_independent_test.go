@@ -24,7 +24,7 @@ func seedOutcomes(t *testing.T, st *Store, symbols int, days []int, perDay int) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stmt.Close()
+	defer stmt.Close() //nolint:errcheck
 
 	for sym := 1; sym <= symbols; sym++ {
 		for _, d := range days {
@@ -74,7 +74,7 @@ func TestResolvedOutcomesIndependent_BoundedPathMatchesFullScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	since := maxTs.Int64 - independentWindowSecs
-	out, rawRows, err := st.resolvedOutcomesIndependentSince(ctx, md.H1d, 100, since)
+	out, _, err := st.resolvedOutcomesIndependentSince(ctx, md.H1d, 100, since)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestResolvedOutcomesIndependent_BoundedPathMatchesFullScan(t *testing.T) {
 		t.Fatalf("precondition: oldest row %d not >= slack %d", out[99].Ts-since, independentSlackSecs)
 	}
 
-	out, rawRows = assertSameAsFullScan(t, st, 100)
+	out, rawRows := assertSameAsFullScan(t, st, 100)
 	if len(out) != 100 || rawRows != 300 {
 		t.Fatalf("expected 100 rows and 300 raw, got %d and %d", len(out), rawRows)
 	}
@@ -129,7 +129,7 @@ func TestResolvedOutcomesIndependent_OnBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck
 	st := &Store{db: db}
 	ctx := context.Background()
 
