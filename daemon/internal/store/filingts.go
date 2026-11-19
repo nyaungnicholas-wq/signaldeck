@@ -73,7 +73,6 @@ func (s *Store) CorrectFilingTs(ctx context.Context, symbolID int64, feed map[st
 		newTs     int64
 	}
 	var corrections []correction
-	correctedAccessions := make(map[string]bool)
 
 	for _, r := range rows {
 		feedTs, ok := feed[r.accession]
@@ -93,7 +92,6 @@ func (s *Store) CorrectFilingTs(ctx context.Context, symbolID int64, feed map[st
 			oldTs:     r.storedTs,
 			newTs:     feedTs,
 		})
-		correctedAccessions[r.accession] = true
 	}
 
 	if len(corrections) == 0 {
@@ -106,27 +104,34 @@ func (s *Store) CorrectFilingTs(ctx context.Context, symbolID int64, feed map[st
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// Update first and archive only what the update changed: a row that
+	// retention deleted since the read must not leave a correction on record.
+	done := make(map[string]bool)
 	for _, c := range corrections {
+		q := `UPDATE insider_trades SET filed_ts=? WHERE accession=? AND filed_ts=?`
+		if c.tbl == "filings" {
+			q = `UPDATE filings SET filed_ts=? WHERE id=? AND filed_ts=?`
+		}
+		res, err := tx.ExecContext(ctx, q, c.newTs, c.accession, c.oldTs)
+		if err != nil {
+			return 0, err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return 0, err
+		} else if n == 0 {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO filing_ts_corrections (accession, tbl, old_filed_ts, new_filed_ts, corrected_ts)
 			VALUES (?,?,?,?,?)`, c.accession, c.tbl, c.oldTs, c.newTs, nowTs); err != nil {
 			return 0, err
 		}
-
-		var q string
-		if c.tbl == "filings" {
-			q = `UPDATE filings SET filed_ts=? WHERE id=? AND filed_ts=?`
-		} else {
-			q = `UPDATE insider_trades SET filed_ts=? WHERE accession=? AND filed_ts=?`
-		}
-		if _, err := tx.ExecContext(ctx, q, c.newTs, c.accession, c.oldTs); err != nil {
-			return 0, err
-		}
+		done[c.accession] = true
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 
-	return len(correctedAccessions), nil
+	return len(done), nil
 }

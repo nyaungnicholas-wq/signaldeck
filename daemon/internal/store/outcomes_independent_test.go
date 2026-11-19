@@ -81,9 +81,6 @@ func TestResolvedOutcomesIndependent_BoundedPathMatchesFullScan(t *testing.T) {
 	if len(out) != 100 {
 		t.Fatalf("precondition: expected 100 rows, got %d", len(out))
 	}
-	if out[99].Ts-since < independentSlackSecs {
-		t.Fatalf("precondition: oldest row %d not >= slack %d", out[99].Ts-since, independentSlackSecs)
-	}
 
 	out, rawRows := assertSameAsFullScan(t, st, 100)
 	if len(out) != 100 || rawRows != 300 {

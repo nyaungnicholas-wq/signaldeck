@@ -201,12 +201,13 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 		if cerr != nil {
 			return "", cerr
 		}
-		if fixed > 0 {
-			tsFixed += fixed
-			// A 4/A is matched to its original by filing day, so re-run it.
-			if _, _, aerr := w.St.SupersedeAmendedForm4s(ctx, s.ID); aerr != nil {
-				return "", aerr
-			}
+		tsFixed += fixed
+		// A 4/A is matched to its original by filing day, so the match is
+		// re-run. Every sweep, not only after a correction: the correction
+		// commits on its own, and a re-match that failed once would otherwise
+		// never be retried. It is idempotent and reads one symbol's rows.
+		if _, _, aerr := w.St.SupersedeAmendedForm4s(ctx, s.ID); aerr != nil {
+			return "", aerr
 		}
 		// Re-derive this symbol's dilution flag from the fresh filing set +
 		// stored shares-outstanding history.

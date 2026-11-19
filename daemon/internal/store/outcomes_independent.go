@@ -8,8 +8,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
-const independentWindowSecs = 35 * 86400
-const independentSlackSecs = 10 * 86400 // every row of one (symbol, settle day) group was scored within one market closure of the others, so a group whose newest row is at least this far above the cut-off cannot have rows below it; `ponytail:` a closure longer than 10 days would undercount grp_n for boundary groups, fall back to the full scan if that ever matters.
+const independentWindowSecs = 35 * 86400 // 35-day window for bounded scan
 
 // ResolvedOutcomesIndependent returns the most recent resolved outcome per
 // symbol/horizon/settle-day group, along with the total number of raw rows
@@ -41,28 +40,38 @@ func (s *Store) ResolvedOutcomesIndependent(ctx context.Context, h md.Horizon, l
 		return nil, 0, fmt.Errorf("limit must be positive, got %d", limit)
 	}
 
-	// A bounded result with `limit` rows contains exactly the newest `limit`
-	// groups, because any group it misses has its newest row below the cut-off;
-	// the slack check is what keeps grp_n exact; measured 2026-11-18, the
-	// unbounded query held a read snapshot 60 to 90 seconds, 16 times that day.
+	// A bounded result with `limit` rows holds exactly the newest `limit` groups:
+	// a group it misses has its newest row below the cut-off. Its counts can still
+	// be short, because a group may have older rows below the cut-off (a symbol
+	// whose bars stop keeps adding rows to one settle day). addRowsBelow adds
+	// those rows back, scanning only the symbols where an overlap is possible.
+	// Measured 2026-11-18: the unbounded query held a read snapshot 60 to 163
+	// seconds, 16 times that day.
 	var maxTs sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, `SELECT MAX(ts) FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=?`, string(h)).Scan(&maxTs); err != nil {
 		return nil, 0, err
 	}
 	if maxTs.Valid {
 		since := maxTs.Int64 - independentWindowSecs
-		out, rawRows, err = s.resolvedOutcomesIndependentSince(ctx, h, limit, since)
+		out, counts, err := s.resolvedOutcomesIndependentCounts(ctx, h, limit, since)
 		if err != nil {
 			return nil, 0, err
 		}
-		if len(out) == limit && out[len(out)-1].Ts-since >= independentSlackSecs {
-			return out, rawRows, nil
+		if len(out) == limit {
+			if err := s.addRowsBelow(ctx, h, since, out, counts); err != nil {
+				return nil, 0, err
+			}
+			sum := 0
+			for _, c := range counts {
+				sum += c
+			}
+			return out, sum, nil
 		}
 	}
 	return s.resolvedOutcomesIndependentSince(ctx, h, limit, 0)
 }
 
-func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horizon, limit int, since int64) (out []md.ScoreOutcome, rawRows int, err error) {
+func (s *Store) resolvedOutcomesIndependentCounts(ctx context.Context, h md.Horizon, limit int, since int64) (out []md.ScoreOutcome, counts []int, err error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at, settle_ts, grp_n FROM (
             SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at, settle_ts,
@@ -71,7 +80,7 @@ func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horiz
             FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=? AND ts>=?
         ) WHERE rn=1 ORDER BY ts DESC LIMIT ?`, string(h), since, limit)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
@@ -82,7 +91,7 @@ func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horiz
 		var settle sql.NullInt64
 		var grpN int
 		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score, &fwd, &res, &settle, &grpN); err != nil {
-			return nil, 0, err
+			return nil, nil, err
 		}
 		o.SettleTs = settle.Int64
 		o.Horizon = md.Horizon(hz)
@@ -93,7 +102,82 @@ func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horiz
 			o.ResolvedAt = &res.Int64
 		}
 		out = append(out, o)
-		rawRows += grpN
+		counts = append(counts, grpN)
 	}
-	return out, rawRows, rows.Err()
+	return out, counts, rows.Err()
+}
+
+func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horizon, limit int, since int64) (out []md.ScoreOutcome, rawRows int, err error) {
+	out, counts, err := s.resolvedOutcomesIndependentCounts(ctx, h, limit, since)
+	if err != nil {
+		return nil, 0, err
+	}
+	sum := 0
+	for _, c := range counts {
+		sum += c
+	}
+	return out, sum, nil
+}
+
+func (s *Store) addRowsBelow(ctx context.Context, h md.Horizon, since int64, out []md.ScoreOutcome, counts []int) error {
+	idx := make(map[int64]map[int64]int)
+	minDay := make(map[int64]int64)
+	for i, o := range out {
+		day := md.SettleDay(o.SettleTs, o.Ts)
+		if idx[o.SymbolID] == nil {
+			idx[o.SymbolID] = make(map[int64]int)
+		}
+		idx[o.SymbolID][day] = i
+		if d, ok := minDay[o.SymbolID]; !ok || day < d {
+			minDay[o.SymbolID] = day
+		}
+	}
+
+	maxStmt, err := s.db.PrepareContext(ctx, `SELECT MAX(CASE WHEN settle_ts > 0 THEN settle_ts ELSE ts END) FROM score_outcomes WHERE symbol_id=? AND horizon=? AND ts<? AND resolved_at IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	defer maxStmt.Close() //nolint:errcheck
+
+	groupStmt, err := s.db.PrepareContext(ctx, `SELECT settle_day(settle_ts, ts), COUNT(*) FROM score_outcomes WHERE symbol_id=? AND horizon=? AND ts<? AND resolved_at IS NOT NULL GROUP BY 1`)
+	if err != nil {
+		return err
+	}
+	defer groupStmt.Close() //nolint:errcheck
+
+	hStr := string(h)
+	for symbol, days := range idx {
+		var maxTs sql.NullInt64
+		if err := maxStmt.QueryRowContext(ctx, symbol, hStr, since).Scan(&maxTs); err != nil {
+			return err
+		}
+		if !maxTs.Valid {
+			continue
+		}
+		if md.TradingDay(maxTs.Int64) < minDay[symbol] {
+			continue
+		}
+		rows, err := groupStmt.QueryContext(ctx, symbol, hStr, since)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var day int64
+			var n int
+			if err := rows.Scan(&day, &n); err != nil {
+				rows.Close() //nolint:errcheck
+				return err
+			}
+			if i, ok := days[day]; ok {
+				counts[i] += n
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
