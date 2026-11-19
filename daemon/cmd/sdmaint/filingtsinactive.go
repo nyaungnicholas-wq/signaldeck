@@ -127,7 +127,11 @@ func repairFilingTsInactive(args []string, out io.Writer) error {
 		}
 		n, err := st.CorrectFilingTs(ctx, t.id, feed, time.Now().Unix())
 		if err != nil {
-			return fmt.Errorf("%s: %w", t.symbol, err)
+			// Usually SQLITE_BUSY from the running daemon. The repair is
+			// idempotent, so report it and let a rerun pick the symbol up.
+			errs++
+			fmt.Fprintf(out, "ERR %s write: %v\n", t.symbol, err) //nolint:errcheck
+			continue
 		}
 		if n > 0 {
 			total += n
