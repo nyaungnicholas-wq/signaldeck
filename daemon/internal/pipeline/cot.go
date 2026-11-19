@@ -86,7 +86,18 @@ func (w *COTPoller) Interval() time.Duration { return 24 * time.Hour }
 func (w *COTPoller) NextFire(last, now time.Time) time.Time {
 	// A missed Saturday slot (the host is off at 06:00 PT: measured 2026-09-06,
 	// no run until the 9-day rule) fires at the next tick, not 9 days later.
-	return workers.WeeklyAtETCatchUp(last, now, time.Saturday, 9, 0)
+	sat := workers.WeeklyAtETCatchUp(last, now, time.Saturday, 9, 0)
+	// A federal holiday in the report week moves the release from Friday to
+	// Monday 15:30 ET. Saturday's poll then finds nothing new, and on the weekly
+	// slot alone the report sat unread until the next Saturday (measured
+	// 2026-11-18: Veterans Day week, the 11-10 report was published 11-16 while
+	// the stored latest stayed 11-03 and source-audit ran degraded all week).
+	// A second slot on Tuesday morning picks up a Monday release; in an
+	// ordinary week it is one idempotent re-fetch of the trailing window.
+	if tue := workers.WeeklyAtETCatchUp(last, now, time.Tuesday, 9, 0); tue.Before(sat) {
+		return tue
+	}
+	return sat
 }
 
 func (w *COTPoller) now() time.Time {

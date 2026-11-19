@@ -531,3 +531,29 @@ func TestCOTPollerFetchErrorIsDegraded(t *testing.T) {
 		t.Fatalf("Run err = %v; want ErrDegraded", err)
 	}
 }
+
+// A holiday-delayed COT release lands Monday 15:30 ET. With the Saturday slot
+// alone the poller that ran Saturday 2026-11-14 would not look again until
+// Saturday 2026-11-21 (measured live: stored latest 11-03 while the CFTC served
+// 11-10 from 11-16). The Tuesday slot must come first, then Saturday again.
+func TestCOTPollerNextFireCatchesHolidayDelayedRelease(t *testing.T) {
+	et, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &COTPoller{}
+	sat := time.Date(2026, 11, 14, 9, 0, 5, 0, et) // ran in its Saturday slot
+	if got, want := w.NextFire(sat, sat.Add(time.Minute)), time.Date(2026, 11, 17, 9, 0, 0, 0, et); !got.Equal(want) {
+		t.Fatalf("after a Saturday run NextFire = %s, want Tuesday %s", got, want)
+	}
+	tue := time.Date(2026, 11, 17, 9, 0, 5, 0, et)
+	if got, want := w.NextFire(tue, tue.Add(time.Minute)), time.Date(2026, 11, 21, 9, 0, 0, 0, et); !got.Equal(want) {
+		t.Fatalf("after a Tuesday run NextFire = %s, want Saturday %s", got, want)
+	}
+	// The live state at deploy: last run Saturday 11-14, now Wednesday 11-18.
+	// The Tuesday slot was missed, so the catch-up fires on the next tick.
+	now := time.Date(2026, 11, 18, 20, 0, 0, 0, et)
+	if got := w.NextFire(sat, now); !got.Equal(now) {
+		t.Fatalf("a missed Tuesday slot must fire now (%s), got %s", now, got)
+	}
+}
