@@ -179,6 +179,12 @@ func main() {
 			return
 		}
 	}
+	if len(os.Args) > 1 && os.Args[1] == "repair-filing-ts-inactive" {
+		if err := repairFilingTsInactive(os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("repair-filing-ts-inactive: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "waitlist-remove" {
 		if err := waitlistRemove(os.Args[2:], os.Stdout); err != nil {
 			log.Fatalf("waitlist-remove: %v", err)
