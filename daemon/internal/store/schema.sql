@@ -764,6 +764,20 @@ CREATE TABLE IF NOT EXISTS filing_ts_corrections (
   PRIMARY KEY (accession, tbl, old_filed_ts)
 );
 
+-- earnings_events: every 8-K / 8-K/A carrying Item 2.02 that the filings sweep
+-- sees in a subscribed company's submissions feed, at any age (the filings
+-- table keeps only the retention horizon). Research input for T-PEAD; no
+-- extra SEC requests. Retention never touches it. First value seen is kept.
+CREATE TABLE IF NOT EXISTS earnings_events (
+  accession     TEXT PRIMARY KEY,
+  symbol_id     INTEGER NOT NULL,
+  form          TEXT NOT NULL,
+  filed_ts      INTEGER NOT NULL,  -- EDGAR acceptance time, unix UTC
+  items         TEXT NOT NULL,
+  first_seen_ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_earnings_events_sym ON earnings_events(symbol_id, filed_ts);
+
 -- inst_holdings: parsed 13F-HR information tables for a curated list of
 -- notable managers (hardcoded CIKs in internal/ingest/edgar). Quarterly data
 -- with up to a 45-day legal lag. symbol_id is a BEST-EFFORT name match from

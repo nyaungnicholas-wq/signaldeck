@@ -261,6 +261,9 @@ func TestSubmissions_ParsesRows(t *testing.T) {
 	if subs[2].FiledTs != day {
 		t.Errorf("row2 filedTs = %d, want %d (filing date fallback)", subs[2].FiledTs, day)
 	}
+	if !f0.Precise || subs[2].Precise {
+		t.Errorf("Precise: row0=%v (want true), row2=%v (want false: date-only fallback)", f0.Precise, subs[2].Precise)
+	}
 	if subs[1].Items != "2.02,9.01" {
 		t.Errorf("row1 items = %q", subs[1].Items)
 	}

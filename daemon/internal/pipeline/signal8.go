@@ -128,7 +128,7 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 	// the writer, re-archived duplicates, and spent the Form 4 budget
 	// re-parsing old documents while recent ones sat in the backlog.
 	cutoff := now.Add(-maintain.FilingsRetention()).Unix()
-	inserted, form4Fetched, swept, tsFixed := 0, 0, 0, 0
+	inserted, form4Fetched, swept, tsFixed, earnings := 0, 0, 0, 0, 0
 	for _, s := range window {
 		cik, ok := cikMap[strings.ToUpper(s.Symbol)]
 		if !ok {
@@ -202,6 +202,26 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			return "", cerr
 		}
 		tsFixed += fixed
+		// Keep every earnings 8-K (Item 2.02) in the feed, at any age, for
+		// T-PEAD research. Same feed, no extra request. Only rows with a real
+		// acceptance time: the date-only fallback is midnight UTC, the evening
+		// BEFORE the filing in New York, and the first value is never revised.
+		var evs []store.EarningsEvent
+		for _, f := range subs {
+			if f.Precise && (f.Form == "8-K" || f.Form == "8-K/A") && hasItem(f.Items, "2.02") {
+				evs = append(evs, store.EarningsEvent{Accession: f.Accession, Form: f.Form, FiledTs: f.FiledTs, Items: f.Items})
+			}
+		}
+		// Research-only table: a failure is recorded, never fatal to the sweep.
+		if n, eerr := w.St.RecordEarningsEvents(ctx, s.ID, evs, now.Unix()); eerr != nil {
+			id := s.ID
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				SymbolID: &id, Ts: now.Unix(), Kind: "earnings_events_error",
+				Detail: fmt.Sprintf("%s: %v", s.Symbol, eerr),
+			})
+		} else {
+			earnings += n
+		}
 		// A 4/A is matched to its original by filing day, so the match is
 		// re-run. Every sweep, not only after a correction: the correction
 		// commits on its own, and a re-match that failed once would otherwise
@@ -243,8 +263,18 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("filings: %d new rows across %d/%d symbols (form4 parsed %d, filed_ts corrected %d)",
-		inserted, swept, len(window), form4Fetched, tsFixed), nil
+	return fmt.Sprintf("filings: %d new rows across %d/%d symbols (form4 parsed %d, filed_ts corrected %d, earnings events %d)",
+		inserted, swept, len(window), form4Fetched, tsFixed, earnings), nil
+}
+
+// hasItem reports whether a comma-separated 8-K item list contains item.
+func hasItem(items, item string) bool {
+	for _, it := range strings.Split(items, ",") {
+		if strings.TrimSpace(it) == item {
+			return true
+		}
+	}
+	return false
 }
 
 // parsePublicFilingURL recovers (cik, primaryDoc) from a stored EDGAR archive

@@ -73,6 +73,7 @@ type SubFiling struct {
 	Accession   string // e.g. 0000320193-26-000005
 	Form        string // raw form type ("4", "8-K", "S-3", …)
 	FiledTs     int64  // acceptance time when parseable, else filing date (unix s)
+	Precise     bool   // FiledTs is EDGAR's acceptance time, not the date-only fallback
 	ReportDate  string // period of report (YYYY-MM-DD; 13F quarter end)
 	Items       string // 8-K item codes ("2.02,9.01")
 	PrimaryDoc  string // primary document path within the filing folder
@@ -161,6 +162,7 @@ func (c *FilingsClient) SubmissionsWithProfile(ctx context.Context, cik int64) (
 		// fall back to the (date-only) filing date.
 		if ts, ok := parseAcceptance(at(rec.AcceptanceDateTime, i)); ok {
 			f.FiledTs = ts
+			f.Precise = true
 		} else if ts, ok := parseDay(at(rec.FilingDate, i)); ok {
 			f.FiledTs = ts
 		}
