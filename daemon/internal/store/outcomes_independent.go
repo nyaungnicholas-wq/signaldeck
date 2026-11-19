@@ -8,6 +8,9 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
+const independentWindowSecs = 35 * 86400
+const independentSlackSecs = 10 * 86400 // every row of one (symbol, settle day) group was scored within one market closure of the others, so a group whose newest row is at least this far above the cut-off cannot have rows below it; `ponytail:` a closure longer than 10 days would undercount grp_n for boundary groups, fall back to the full scan if that ever matters.
+
 // ResolvedOutcomesIndependent returns the most recent resolved outcome per
 // symbol/horizon/settle-day group, along with the total number of raw rows
 // those observations represent. The caller reports both counts; the difference
@@ -37,13 +40,36 @@ func (s *Store) ResolvedOutcomesIndependent(ctx context.Context, h md.Horizon, l
 	if limit <= 0 {
 		return nil, 0, fmt.Errorf("limit must be positive, got %d", limit)
 	}
+
+	// A bounded result with `limit` rows contains exactly the newest `limit`
+	// groups, because any group it misses has its newest row below the cut-off;
+	// the slack check is what keeps grp_n exact; measured 2026-11-18, the
+	// unbounded query held a read snapshot 60 to 90 seconds, 16 times that day.
+	var maxTs sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(ts) FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=?`, string(h)).Scan(&maxTs); err != nil {
+		return nil, 0, err
+	}
+	if maxTs.Valid {
+		since := maxTs.Int64 - independentWindowSecs
+		out, rawRows, err = s.resolvedOutcomesIndependentSince(ctx, h, limit, since)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(out) == limit && out[len(out)-1].Ts-since >= independentSlackSecs {
+			return out, rawRows, nil
+		}
+	}
+	return s.resolvedOutcomesIndependentSince(ctx, h, limit, 0)
+}
+
+func (s *Store) resolvedOutcomesIndependentSince(ctx context.Context, h md.Horizon, limit int, since int64) (out []md.ScoreOutcome, rawRows int, err error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at, settle_ts, grp_n FROM (
             SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at, settle_ts,
                    COUNT(*) OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts)) AS grp_n,
                    ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) AS rn
-            FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=?
-        ) WHERE rn=1 ORDER BY ts DESC LIMIT ?`, string(h), limit)
+            FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=? AND ts>=?
+        ) WHERE rn=1 ORDER BY ts DESC LIMIT ?`, string(h), since, limit)
 	if err != nil {
 		return nil, 0, err
 	}
