@@ -819,8 +819,14 @@ func (c *swrBodyCache) renderCold(bg *http.Request, cancel context.CancelFunc, e
 // honesty/calibration ~22.7s, datastats >30s (timed out), macro ~5.9s. TTLs
 // match the underlying worker cadences (outcomes resolve on 10m cadence;
 // datastats counts whole tables — 5m is plenty fresh for an ops page).
+//
+// Honesty is 10m, the resolver's own cadence (O-003, measured on the
+// 2026-11-18 backup: resolved_at moved in 62, 26 and 5 of the day's 144
+// ten-minute buckets for 1h, 1d and 1w, median gap 600s). At 2m the warmer
+// re-ran the three window scans 2,160 times a day against 93 input changes,
+// and each scan is the long read that pins the WAL when the host is busy.
 var (
-	sharedHonestySWR     = newSWRBodyCache(2 * time.Minute)
+	sharedHonestySWR     = newSWRBodyCache(10 * time.Minute)
 	sharedCompositeSWR   = newSWRBodyCache(2 * time.Minute)
 	sharedCalibrationSWR = newSWRBodyCache(2 * time.Minute)
 	sharedDatastatsSWR   = newSWRBodyCache(5 * time.Minute)
