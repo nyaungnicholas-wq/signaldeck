@@ -624,3 +624,43 @@ func TestThirteenFPoller_SumsDuplicateCUSIP(t *testing.T) {
 		t.Fatalf("duplicate CUSIP lines not summed: %+v", rows[0])
 	}
 }
+
+// A filing stored with the Eastern wall-clock time as UTC (4h early) must be
+// repaired by the next sweep from the feed it already fetches, and the sweep
+// summary must say so. Measured 2026-11-18: two of three sampled rows were early.
+func TestFilingsPoller_CorrectsEarlyFiledTs(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+
+	// Store A learns what the feed says for one filing.
+	_, clientA := newFilingsServer(t)
+	stA := openS8Store(t)
+	a, _ := stA.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple Inc.")
+	if _, err := (&FilingsPoller{St: stA, Client: clientA, Now: func() time.Time { return now }}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want, err := stA.Filings(ctx, a.ID, "", 1)
+	if err != nil || len(want) != 1 {
+		t.Fatalf("fixture has no filing: %+v err=%v", want, err)
+	}
+
+	// Store B already holds that filing, stamped 4 hours early.
+	_, clientB := newFilingsServer(t)
+	stB := openS8Store(t)
+	b, _ := stB.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple Inc.")
+	early := want[0]
+	early.SymbolID, early.FiledTs = b.ID, want[0].FiledTs-14400
+	if _, err := stB.InsertFiling(ctx, early); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := (&FilingsPoller{St: stB, Client: clientB, Now: func() time.Time { return now }}).Run(ctx)
+	if err != nil || !strings.Contains(detail, "filed_ts corrected 1") {
+		t.Fatalf("detail = %q err=%v, want one correction", detail, err)
+	}
+	got, _ := stB.Filings(ctx, b.ID, "", 50)
+	for _, f := range got {
+		if f.ID == want[0].ID && f.FiledTs != want[0].FiledTs {
+			t.Fatalf("filed_ts = %d, want the feed's %d", f.FiledTs, want[0].FiledTs)
+		}
+	}
+}

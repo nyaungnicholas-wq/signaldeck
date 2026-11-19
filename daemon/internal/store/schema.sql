@@ -751,6 +751,19 @@ CREATE TABLE IF NOT EXISTS insider_trades (
 CREATE INDEX IF NOT EXISTS idx_insider_sym_ts ON insider_trades (symbol_id, filed_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_insider_ts ON insider_trades (filed_ts DESC);
 
+-- Original filed_ts values that the filings sweep replaced (filingts.go). Until
+-- late October 2026 the SEC submissions feed returned some acceptance times in
+-- Eastern wall-clock time labelled as UTC, so those rows were stored 4 or 5
+-- hours early. The replaced value stays here; nothing is deleted.
+CREATE TABLE IF NOT EXISTS filing_ts_corrections (
+  accession    TEXT NOT NULL,
+  tbl          TEXT NOT NULL,     -- 'filings' | 'insider_trades'
+  old_filed_ts INTEGER NOT NULL,
+  new_filed_ts INTEGER NOT NULL,
+  corrected_ts INTEGER NOT NULL,
+  PRIMARY KEY (accession, tbl, old_filed_ts)
+);
+
 -- inst_holdings: parsed 13F-HR information tables for a curated list of
 -- notable managers (hardcoded CIKs in internal/ingest/edgar). Quarterly data
 -- with up to a 45-day legal lag. symbol_id is a BEST-EFFORT name match from

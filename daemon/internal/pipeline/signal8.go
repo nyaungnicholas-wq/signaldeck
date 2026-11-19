@@ -128,7 +128,7 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 	// the writer, re-archived duplicates, and spent the Form 4 budget
 	// re-parsing old documents while recent ones sat in the backlog.
 	cutoff := now.Add(-maintain.FilingsRetention()).Unix()
-	inserted, form4Fetched, swept := 0, 0, 0
+	inserted, form4Fetched, swept, tsFixed := 0, 0, 0, 0
 	for _, s := range window {
 		cik, ok := cikMap[strings.ToUpper(s.Symbol)]
 		if !ok {
@@ -189,6 +189,25 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 				}
 			}
 		}
+		// Acceptance-time repair. Rows stored before late October 2026 are a mix:
+		// some carry the Eastern wall-clock time as if it were UTC, 4 or 5 hours
+		// early (checked against EDGAR 2026-11-18). The feed just fetched is the
+		// authority, so this costs no extra request. Originals are archived.
+		feedTs := make(map[string]int64, len(subs))
+		for _, f := range subs {
+			feedTs[f.Accession] = f.FiledTs
+		}
+		fixed, cerr := w.St.CorrectFilingTs(ctx, s.ID, feedTs, now.Unix())
+		if cerr != nil {
+			return "", cerr
+		}
+		if fixed > 0 {
+			tsFixed += fixed
+			// A 4/A is matched to its original by filing day, so re-run it.
+			if _, _, aerr := w.St.SupersedeAmendedForm4s(ctx, s.ID); aerr != nil {
+				return "", aerr
+			}
+		}
 		// Re-derive this symbol's dilution flag from the fresh filing set +
 		// stored shares-outstanding history.
 		if derr := w.deriveDilution(ctx, s.ID, now); derr != nil {
@@ -223,8 +242,8 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("filings: %d new rows across %d/%d symbols (form4 parsed %d)",
-		inserted, swept, len(window), form4Fetched), nil
+	return fmt.Sprintf("filings: %d new rows across %d/%d symbols (form4 parsed %d, filed_ts corrected %d)",
+		inserted, swept, len(window), form4Fetched, tsFixed), nil
 }
 
 // parsePublicFilingURL recovers (cik, primaryDoc) from a stored EDGAR archive
